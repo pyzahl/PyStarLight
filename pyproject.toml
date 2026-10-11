@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+# Distribution name on PyPI ('pystarlight' is taken by an unrelated project).
+# The import name is 'pystarlight'.
+name = "starlight-photometry"
+dynamic = ["version"]
+description = "Movie readers, star tracking and aperture photometry for occultation light curves"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE", "LICENSES/*"]
+authors = [{ name = "Percy Zahl", email = "pyzahl@ymail.com" }]
+keywords = ["astronomy", "occultation", "photometry", "light curve", "video", "SER", "ADV", "FITS"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Typing :: Typed",
+]
+dependencies = [
+    "numpy>=1.23",
+    "scipy>=1.8",
+    "opencv-python-headless>=4.6",
+    "scikit-image>=0.19",
+    "astropy>=5.1",
+    "tomli>=2; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+adv = ["Adv2>=1.2"]
+ravf = ["ravf>=1.0.1"]
+catalog = ["astroquery>=0.4.6"]
+plot = ["matplotlib>=3.5"]
+all = ["starlight-photometry[adv,ravf,catalog,plot]"]
+
+[project.scripts]
+pystarlight-view = "pystarlight.viewer:main"
+pystarlight-config = "pystarlight.config:main"
+
+[dependency-groups]
+test = ["pytest>=8", "pytest-cov>=5", "matplotlib>=3.5"]
+dev = [{ include-group = "test" }, "ruff>=0.6", "pre-commit>=3"]
+
+[project.urls]
+Homepage = "https://github.com/pyzahl/PyStarLight"
+Source = "https://github.com/pyzahl/PyStarLight"
+Issues = "https://github.com/pyzahl/PyStarLight/issues"
+Changelog = "https://github.com/pyzahl/PyStarLight/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "src/pystarlight/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pystarlight"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "LICENSES", "CHANGELOG.md", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E731", "B008", "B905"]
+
+[tool.ruff.lint.per-file-ignores]
+# Copied verbatim from PyMovie; kept unformatted so they diff cleanly against upstream.
+"src/pystarlight/timestamps/ocr.py" = ["ALL"]
+"src/pystarlight/wcs/manual.py" = ["ALL"]
+"src/pystarlight/wcs/astrometry_client.py" = ["ALL"]

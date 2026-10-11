@@ -1,0 +1,113 @@
+# PyStarLight configuration
+#
+# Create your private copy with:   pystarlight-config init
+# It is written to ~/.config/pystarlight/config.toml (only you can read it) and is never
+# part of the git repository. Edit that copy, not this template.
+#
+# Lookup order: $PYSTARLIGHT_CONFIG, ./pystarlight.toml (project-local, git-ignored),
+# ~/.config/pystarlight/config.toml. Anything left out falls back to this template.
+
+# Observing sites, same keys as PyOccult's sites.py. Either point to that file, or add
+# [sites.<id>] tables below (they override/extend the PyOccult ones).
+pyoccult_sites = ""        # e.g. "~/SVN/PyOccult/sites.py"
+default_site = ""          # site id; $PYOCCULT_SITE also works (as in PyOccult)
+
+[observer]
+name = ""
+email = ""
+# Site, used for reports (decimal degrees, metres)
+latitude = 0.0
+longitude = 0.0
+altitude = 0.0
+telescope = ""
+camera = ""
+
+[astrometry]
+# Personal API key from https://nova.astrometry.net (My Profile). Keep it private.
+api_key = ""
+url = "https://nova.astrometry.net/api/"
+timeout_s = 900
+auto_solve = true          # plate-solve when a movie is opened (result cached as <movie>.wcs.fit)
+stack_frames = 16          # frames median-stacked for the solve (more stars, no cosmic rays)
+scale_err_pct = 20         # tolerance on the plate scale computed from the site's optics
+public = false             # let astrometry.net show the image publicly
+
+# Example site table (PyOccult layout + optional binning/camera):
+# [sites.home]
+# name = "Home"
+# lat = 40.95497
+# lon = -72.92809
+# ele = 61.0
+# aperture_cm = 10.7
+# focal_mm = 360.0
+# sensor_mm = [5.02, 3.75]   # width, height of the active area used
+# binning = 1
+# camera = "ASTRID IMX296"
+
+[paths]
+# Where recordings live; the viewer starts here.
+data_dir = ""
+# Default calibration (.npz from Calibration.save), "" for none
+calibration = ""
+
+[apertures]
+size = 51                  # box size, px (search window and local background)
+
+# Aperture types. Names are <name><n> (n counts from 1; a role with max = 1 gets just <name>).
+# key: viewer key that gives the aperture under the mouse this role. Avoid f (full screen),
+#      o (zoom), q (quit), and the viewer's own keys (arrows, n a s l p, shift Y R G W).
+# track: the star steers the global tracking.  normalize: used as a reference in normalisation.
+[apertures.roles.target]
+name = "target"
+color = "red"
+key = "t"
+max = 1
+track = true
+normalize = false
+
+[apertures.roles.reference]
+name = "ref"
+color = "yellow"
+key = "r"
+max = 0                    # 0 = no limit
+track = true
+normalize = true
+
+[apertures.roles.check]
+# comparison star measured like the target but kept out of normalisation (validates the references)
+name = "check"
+color = "green"
+key = "c"
+max = 0
+track = true
+normalize = false
+
+[apertures.roles.sky]
+# star-free region; global background when analysis.background = "sky"
+name = "sky"
+color = "cyan"
+key = "k"
+max = 0
+track = false
+normalize = false
+
+[analysis]
+mode = "global"            # "global" (all stars track together, peak fits) or "pymovie" (exact PyMovie)
+radius = 0.0               # photometry radius, px; 0 = 1.5 x median FWHM
+background = "local"       # "local" box per aperture, or "sky" from sky apertures
+search = 15                # px around the predicted position to look for each star
+rotation = true            # fit field rotation as well as shift
+min_snr = 5.0              # minimum peak SNR for a star to steer tracking
+dim_fraction = 0.4         # target left out of tracking when fading below this (relative to others)
+target_drift = true        # follow the target's own slow offset, interpolated across the event
+normalize_window = 31      # rows; smoothing of the reference sum
+
+[pymovie]
+# Used when analysis.mode = "pymovie"
+default_mask_radius = 3.2
+threshold = 99999          # 99999 = always the default circular mask
+
+[plot]
+formats = ["pdf", "png"]
+dpi = 300
+bin_size = 1
