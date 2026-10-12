@@ -28,8 +28,8 @@ uv run pytest
 
 ```bash
 cd PyStarLight
-uv sync --extra plot --extra ravf        # or: pip install -e ".[plot,ravf]"
-uv run pystarlight-config init           # private config: ~/.config/pystarlight/config.toml
+uv sync --extra all                      # or: pip install -e ".[all]"  (plot, RAVF, ADV, SIMBAD)
+uv run pystarlight-config init --here    # private config: ./pystarlight.toml (git-ignored)
 ```
 
 Edit the config: your name, email, your nova.astrometry.net API key, and your observing
@@ -37,8 +37,15 @@ site(s). Sites use the same keys as PyOccult: point `pyoccult_sites` at your PyO
 `sites.py` (read as data, never executed) and/or add `[sites.<id>]` tables with `focal_mm`
 and `sensor_mm`, from which the expected plate scale is computed. The file is only readable
 by you and is never part of the repository. `pystarlight-config show` prints it with secrets
-masked; `pystarlight-config sites` lists the sites. All analysis settings and the aperture
+masked; `pystarlight-config sites` lists the sites; `pystarlight-config path` shows which file
+is used (lookup: `$PYSTARLIGHT_CONFIG`, `./pystarlight.toml`, the project root's
+`pystarlight.toml`, `~/.config/pystarlight/config.toml`). All analysis settings and the aperture
 types (names, colours, keys) live there too.
+
+**Dark / flat ("bright") clips**: set `[calibration] dark` and `flat` (and `flat_dark` if the
+flat's exposure differs) to clip files. Each clip is averaged into a master frame (mean, or
+median), cached in `~/.cache/pystarlight` and re-stacked only when the clip changes, then applied
+to every aperture box. Record them with the same gain and exposure as the observation.
 
 ### 2. Mark the stars
 
@@ -93,6 +100,7 @@ All keys:
 | `f` | full screen (matplotlib) |
 | `o` | zoom rectangle (matplotlib toolbar); click the house icon to reset |
 | `Y` `R` `G` `W` (shift) | PyMovie colours yellow / red / green / white, for `mode = "pymovie"` |
+| sliders **levels** / **gamma**, **Auto**, **per frame** | display only: drag the levels for manual black/white points (kept across frames); **Auto** returns to the automatic (zscale) stretch; **per frame** re-stretches every frame; gamma < 1 brightens faint stars. Defaults in `[display]` of the config |
 
 ### 3. Run
 
@@ -117,6 +125,7 @@ Written next to the movie:
 | `<movie>-summary.pdf/.png` | field with apertures, raw signals, normalised light curve vs UTC, drift |
 | `<movie>.apertures.json` | the apertures, reloaded next time |
 | `<movie>.wcs.fit` | the plate solution |
+| `<movie>-stack.fits/.svg/.png/.pdf` | **stacked field**: all analysed frames registered with the tracked shift + rotation and averaged (`[output] stack_image`); FITS with the plate solution, figure with apertures, names, catalogue IDs, compass and 1′ scale bar. In the SVG the image and the annotation layers (`apertures`, `aperture-labels`, `stars`, `compass`) are separate groups |
 
 ### 4. Open in PyOTE
 
@@ -254,8 +263,8 @@ x, y = wcs.target_pixel(wcs.load_wcs(fits_path), '18h12m01s +22d07m00s')
 - **Not included:** NRE/Naylor extraction, GCE, finder/stacking, `.pymovie` record files.
 - `ocr.py`, `wcs/manual.py` and `wcs/astrometry_client.py` are kept as close to PyMovie's
   files as possible (and excluded from linting) so upstream fixes are easy to carry over.
-- The RAVF reader is tested on real ASTRID recordings; the ADV/AAV reader (wrapping `Adv2`) is
-  not yet tested with real files.
+- The RAVF reader is tested on real ASTRID recordings, the ADV reader on a real DVTI+CAM
+  recording. ADV needs the `adv` extra; `Adv2` 1.2.0 is patched at run time for numpy 2.
 
 ## Licence
 

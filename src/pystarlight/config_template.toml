@@ -47,8 +47,19 @@ public = false             # let astrometry.net show the image publicly
 [paths]
 # Where recordings live; the viewer starts here.
 data_dir = ""
-# Default calibration (.npz from Calibration.save), "" for none
-calibration = ""
+
+[calibration]
+# Optional dark / flat ("bright") clips, any movie format. Relative paths are relative to this
+# file's folder. Each is averaged (stacked) into a
+# master frame, cached in ~/.cache/pystarlight (re-stacked when the clip changes), and applied
+# to the aperture boxes. Record them with the same gain and exposure as the observation.
+use_calibration = true     # false: keep the entries below but do not apply them
+dark = ""                  # telescope covered
+flat = ""                  # evenly lit field (twilight sky / light panel), not saturated
+flat_dark = ""             # dark at the flat's exposure, if that differs ("" = use dark)
+frames = 0                 # frames to stack from each clip; 0 = all
+method = "mean"            # "mean" (as PyMovie) or "median" (ignores cosmic rays / satellites)
+file = ""                  # or a prebuilt .npz from Calibration.save() (used if no clips are set)
 
 [apertures]
 size = 51                  # box size, px (search window and local background)
@@ -106,6 +117,20 @@ normalize_window = 31      # rows; smoothing of the reference sum
 # Used when analysis.mode = "pymovie"
 default_mask_radius = 3.2
 threshold = 99999          # 99999 = always the default circular mask
+
+[display]
+# Viewer image display only (photometry is never affected).
+levels = "auto"            # "auto" (zscale stretch) or [black, white] in counts, e.g. [3700, 4600]
+per_frame = false          # recompute auto levels on every frame (clouds, changing sky)
+gamma = 1.0                # display gamma: < 1 brightens faint stars, > 1 darkens the background
+
+[output]
+# Stacked field image after each run: all analysed frames shifted/rotated back by the tracking
+# solution and averaged. Saved as <movie>-stack.fits (with the plate solution) and annotated
+# figures (apertures, names, catalogue IDs, compass, scale bar) in the formats below.
+stack_image = true
+stack_max_frames = 300     # evenly spaced subset for long runs (0 = all)
+stack_formats = ["svg", "png", "pdf"]
 
 [plot]
 formats = ["pdf", "png"]

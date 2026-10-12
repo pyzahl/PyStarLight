@@ -37,10 +37,22 @@ def user_config_path() -> Path:
     return base / 'pystarlight' / 'config.toml'
 
 
+def project_root() -> Optional[Path]:
+    """The source checkout this package runs from (editable install), if any."""
+    root = Path(__file__).resolve().parents[2]
+    return root if (root / 'pyproject.toml').is_file() else None
+
+
 def find_config() -> Optional[Path]:
-    """$PYSTARLIGHT_CONFIG, ./pystarlight.toml, then the user config file."""
+    """$PYSTARLIGHT_CONFIG, ./pystarlight.toml, <project root>/pystarlight.toml, then the user
+    config file. The project-root file is git-ignored, so it can hold the private settings.
+    PYSTARLIGHT_CONFIG=none ignores all files (template defaults only)."""
     env = os.environ.get('PYSTARLIGHT_CONFIG')
-    for p in (Path(env) if env else None, Path.cwd() / 'pystarlight.toml', user_config_path()):
+    if env == 'none':                      # no config file at all (tests, clean runs)
+        return None
+    root = project_root()
+    for p in (Path(env) if env else None, Path.cwd() / 'pystarlight.toml',
+              root / 'pystarlight.toml' if root else None, user_config_path()):
         if p is not None and p.is_file():
             return p
     return None
@@ -69,6 +81,18 @@ def load(path: Optional[str] = None) -> dict:
     return cfg
 
 
+def resolve_path(cfg: dict, value: str) -> Optional[Path]:
+    """A path from the config: '~' expanded; relative paths are taken relative to the config
+    file's folder (so they work wherever PyStarLight is started). None for ''."""
+    if not value:
+        return None
+    p = Path(value).expanduser()
+    if not p.is_absolute():
+        base = Path(cfg['_path']).parent if cfg.get('_path') else Path.cwd()
+        p = base / p
+    return p
+
+
 SITE_KEYS = ('name', 'lat', 'lon', 'ele', 'aperture_cm', 'focal_mm', 'sensor_mm', 'mpc_code')
 
 
@@ -89,9 +113,9 @@ def sites(cfg: dict) -> tuple[dict, Optional[str]]:
     Returns (sites, default site id). Site keys follow PyOccult: lat, lon, ele (m), name,
     aperture_cm, focal_mm, sensor_mm (width, height); PyStarLight adds binning, camera."""
     out, default = {}, None
-    py = cfg.get('pyoccult_sites') or ''
-    if py and Path(py).expanduser().is_file():
-        out, default = read_pyoccult_sites(str(Path(py).expanduser()))
+    py = resolve_path(cfg, cfg.get('pyoccult_sites') or '')
+    if py is not None and py.is_file():
+        out, default = read_pyoccult_sites(str(py))
         out = {k: dict(v) for k, v in out.items()}
     for k, v in cfg.get('sites', {}).items():
         out[k] = {**out.get(k, {}), **v}
@@ -137,13 +161,19 @@ def main(argv=None):
     sub = ap.add_subparsers(dest='cmd', required=True)
     i = sub.add_parser('init', help='create the private config from the template')
     i.add_argument('--path', help='where to write it (default: user config dir)')
+    i.add_argument('--here', action='store_true',
+                   help='write pystarlight.toml in the project root (git-ignored) instead')
     i.add_argument('--force', action='store_true', help='replace an existing file')
     sub.add_parser('path', help='show which config file is in use')
     sub.add_parser('show', help='print settings (secrets masked)')
     sub.add_parser('sites', help='list observing sites (incl. PyOccult sites.py)')
     a = ap.parse_args(argv)
     if a.cmd == 'init':
-        print(f'wrote {init(a.path, a.force)}  (edit it; it is private to you)')
+        path = a.path
+        if a.here:
+            root = project_root() or Path.cwd()
+            path = str(root / 'pystarlight.toml')
+        print(f'wrote {init(path, a.force)}  (edit it; it is private to you)')
     elif a.cmd == 'path':
         print(find_config() or f'no config file; defaults only. Create one: pystarlight-config init '
                                 f'(-> {user_config_path()})')

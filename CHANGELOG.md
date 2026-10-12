@@ -44,6 +44,16 @@ uses [Semantic Versioning](https://semver.org/).
   drift-corrected to the solved frames; saved in apertures.json and written to the CSVs.
 - Zoom views update live while analysing (throttled, from the worker's latest frame) and show
   signal and peak-fit readings (FWHM, SNR, fitted centre, photometry circle).
+- Dark/flat clips in the config (`[calibration]`), averaged into cached masters.
+- Private config can live in the project root (`pystarlight.toml`, git-ignored; `init --here`);
+  `PYSTARLIGHT_CONFIG=none` ignores all config files.
+- Stacked field image after each run (registered with the tracking solution, hot pixels and
+  cosmic rays removed), as FITS with WCS and annotated SVG/PNG/PDF.
+- Viewer display controls: manual levels (range slider), Auto, per-frame auto levels, display
+  gamma (main image and zoom views); defaults in `[display]`. Calibration on/off switch
+  `use_calibration`; relative config paths resolve against the config file's folder.
+- ADV reader works with numpy 2 (Adv2 1.2.0 patched at run time); frames without a GPS
+  timestamp no longer get Adv2's fake 2010-01-01 date.
 - Reference-star normalisation, relative flux, delta magnitude, SNR.
 - Parity tests against PyMovie 4.2.8, including a real ASTRID RAVF recording
   (all 36,096 CSV values and all timestamps identical).

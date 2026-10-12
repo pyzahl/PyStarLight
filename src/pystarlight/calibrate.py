@@ -54,10 +54,12 @@ class Calibration:
     @classmethod
     def from_frames(cls, dark: Optional[np.ndarray] = None, flat: Optional[np.ndarray] = None,
                     flat_dark: Optional[np.ndarray] = None,
-                    dark_threshold: float = 50.0, gain_threshold: float = 0.5) -> Calibration:
+                    dark_threshold: Optional[float] = None, gain_threshold: float = 0.5) -> Calibration:
         """dark only: offset and hot pixels are corrected, no flat field.
         flat_dark: dark for the flat exposure, if different from `dark`.
-        dark_threshold: counts above the local dark level that make a pixel 'hot'.
+        dark_threshold: counts above the local dark level that make a pixel 'hot'. Default:
+            6 x the dark's robust pixel noise (PyMovie used a fixed 50, meant for 8-bit video;
+            16-bit cameras need far more).
         gain_threshold: gain deviation from the local median that makes a pixel defective."""
         if dark is None and flat is None:
             raise ValueError('need a dark and/or a flat')
@@ -67,6 +69,9 @@ class Calibration:
         defects = np.zeros(shape, dtype=np.uint16)
         if dark is not None:
             local = d - medfilt2d(d, 5) + dark_median
+            if dark_threshold is None:
+                sigma = 1.4826 * float(np.median(np.abs(local - dark_median)))
+                dark_threshold = max(6.0 * sigma, 1.0)
             defects |= (local > dark_median + dark_threshold).astype(np.uint16)
 
         gain = np.ones(shape)
@@ -122,3 +127,58 @@ class Calibration:
 
     def defects_roi(self, x0: int, y0: int, size: int) -> Optional[np.ndarray]:
         return None if self.defects is None else self.defects[y0:y0 + size, x0:x0 + size]
+
+
+def _cache_dir():
+    import os
+    from pathlib import Path
+    base = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache'))
+    return base / 'pystarlight' / 'masters'
+
+
+def cached_master(path: str, count: Optional[int] = None, method: str = 'mean', log=print) -> np.ndarray:
+    """master_frame() of a clip, cached by (path, size, mtime, count, method) in
+    ~/.cache/pystarlight/masters. Nothing is written next to the clip."""
+    import hashlib
+    from pathlib import Path
+    p = Path(path).expanduser().resolve()
+    st = p.stat()
+    key = hashlib.sha1(f'{p}|{st.st_size}|{st.st_mtime_ns}|{count}|{method}'.encode()).hexdigest()[:16]
+    f = _cache_dir() / f'{p.stem}-{key}.npy'
+    if f.exists():
+        log(f'using stacked master {f.name}')
+        return np.load(f)
+    log(f'stacking {p.name} ({method}{", %d frames" % count if count else ", all frames"})')
+    m = master_frame(str(p), count=count, method=method)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    np.save(f, m.astype(np.float32))
+    return m
+
+
+def from_config(cfg: dict, log=print) -> Optional['Calibration']:
+    """Calibration from the [calibration] section: dark / flat / flat_dark clips (stacked and
+    cached), else a prebuilt `file` (.npz). None if nothing is configured or
+    use_calibration = false."""
+    from .config import resolve_path
+    c = cfg.get('calibration', {})
+    if not c.get('use_calibration', True):            # quick off switch, entries kept
+        log('calibration disabled (use_calibration = false)')
+        return None
+    count = int(c.get('frames') or 0) or None
+    method = c.get('method', 'mean')
+    # relative paths are relative to the config file's folder
+    clips = {k: resolve_path(cfg, c.get(k) or '') for k in ('dark', 'flat', 'flat_dark')}
+    for k, v in clips.items():
+        if v is not None and not v.exists():
+            raise FileNotFoundError(f'[calibration] {k} = "{c.get(k)}" not found (looked for {v})')
+    if clips['dark'] is not None and clips['flat'] is not None and clips['dark'] == clips['flat']:
+        raise ValueError('[calibration] dark and flat are the same clip; a flat must be an evenly lit field')
+    if clips['dark'] is not None or clips['flat'] is not None:
+        m = {k: cached_master(str(v), count, method, log) if v is not None else None
+             for k, v in clips.items()}
+        return Calibration.from_frames(m['dark'], m['flat'], m['flat_dark'])
+    f = resolve_path(cfg, c.get('file') or '')
+    if f is not None:
+        return Calibration.load(str(f))
+    legacy = resolve_path(cfg, cfg.get('paths', {}).get('calibration') or '')     # older configs
+    return Calibration.load(str(legacy)) if legacy is not None else None

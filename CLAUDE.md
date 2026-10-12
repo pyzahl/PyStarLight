@@ -11,14 +11,16 @@ PyOTE source: `../py-ote`. PyOccult (sites, local Gaia extracts): `../PyOccult`.
 ## Working rules (from the owner)
 
 - **Do not commit or push** unless asked. When asked, give the command; the owner runs it.
-- **Never write into `OTEVideo/`** (symlink to the owner's recordings on an external drive,
+- **Never write into `OTEVideo/`, `CZ-Data/` or `DarkLight/`** (owner data, git-ignored; OTEVideo is a symlink to the owner's recordings on an external drive,
   git-ignored). Test on a scratch copy: a folder with a symlink to the `.ravf` plus copies of
   `<movie>.wcs.fit/.wcs.json/.stars.json/.apertures.json`. A real `apertures.json` was once
   overwritten by a test run; the viewer saves next to the movie on run and on `s`.
-- **The private config** `~/.config/pystarlight/config.toml` (mode 600) holds the astrometry.net
-  API key and personal data. Never print the key, copy it into the repo, docs, tests or memory.
-  `pystarlight-config show` masks it. Tests isolate themselves from it (`tests/conftest.py` sets
-  `XDG_CONFIG_HOME` to an empty temp dir).
+- **The private config** is `pystarlight.toml` in this repo's root (mode 600, git-ignored; moved
+  there from `~/.config/pystarlight/` at the owner's request). It holds the astrometry.net API key
+  and personal data. Never print the key, copy it into tracked files, docs, tests or memory.
+  `pystarlight-config show` masks it. Tests must not read it: `tests/conftest.py` sets
+  `PYSTARLIGHT_CONFIG=none`. When adding config keys, add them to `config_template.toml` (defaults
+  merge in) and, if useful, to the private file without touching existing values.
 - Uploads to nova.astrometry.net are private (`public = false`); PyMovie's client defaulted to public.
 - Exploring ideas is welcome ("tinkering"); AI/ML denoising or centring is explicitly deferred.
 
@@ -38,6 +40,7 @@ PyOTE source: `../py-ote`. PyOccult (sites, local Gaia extracts): `../PyOccult`.
 | `wcs/` | `solve.py` (astrometry.net, orientation, plate scale, `solve_movie`, `field_stars`), `identify.py` (brightest stars, SIMBAD, `identify_positions`), `manual.py` (two-star, verbatim), `astrometry_client.py` (verbatim-ish) |
 | `config.py` + `config_template.toml` | private config, PyOccult-compatible sites (`pystarlight-config`) |
 | `plot.py` | publication figures (`style`, `summary`, panels) |
+| `stacking.py` | registered field stack (`stack_field`, `attach_wcs`, `save_field_stack` → FITS + annotated SVG/PNG/PDF), `remove_hot_pixels`; `self_dark` is opt-in only (fails for small drift) |
 | `viewer.py` | `pystarlight-view`: matplotlib GUI (keys, zoom views, live updates, plate solve, identification) |
 
 `ocr.py`, `wcs/manual.py`, `wcs/astrometry_client.py` are kept close to PyMovie's files and
@@ -46,7 +49,7 @@ excluded from ruff, so upstream fixes diff cleanly. Don't reformat them.
 ## Commands
 
 ```bash
-uv sync --extra plot --extra ravf --extra catalog    # repo venv (.venv, Python 3.12)
+uv sync --extra all                                  # repo venv (.venv, Python 3.12): plot, ravf, adv, catalog
 uv run --group test pytest -q                        # current libs; PyMovie parity tests skip
 uvx ruff check                                       # lint (line length 110)
 uv run pystarlight-view OTEVideo/<run>/<run>.ravf    # viewer (owner's data)
@@ -87,6 +90,13 @@ GUI tests run headless (Agg): Agg timers never fire, so tests call `poll()`/`_po
 - Mirrored images: PyMovie's two-star solver assumes non-mirrored; `solve_two_stars(mirrored=True)`.
   The plate solve reports parity (`Orientation.mirrored`).
 - PyMovie bug fixed here: the astrometry.net upload was written as int16 (16-bit pixels wrapped).
+- Adv2 1.2.0 calls np.reshape(newshape=...), removed in numpy 2: `movie._patch_adv2_for_numpy2`
+  swaps a thin numpy wrapper into the Adv2 module only. Adv2 also never detects missing
+  timestamps (reports 2010-01-01); AdvReader returns None for a zero mid-exposure time.
+- Calibration clips: `calibrate.from_config` stacks `[calibration]` dark/flat clips; masters are
+  cached in `~/.cache/pystarlight/masters` keyed on path/size/mtime (never next to the clip).
+- The stacked field image shows diagonal streaks on the owner's data: the sensor's fixed pattern
+  smeared along the drift. Only a real dark removes it; the self-dark experiment made it worse.
 
 ## Owner's setup
 

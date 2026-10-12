@@ -141,3 +141,31 @@ def test_live_zoom_during_run(movie):
     # helpers on both modes' values
     assert 'bkg' in readout_text(readings_of({'signal': 5.0, 'bkavg': 1.0, 'bkstd': 0.5, 'mskpx': 9}), 3)
     assert 'faded' in readout_text({'signal': 1.0, 'fwhm': 3.0, 'peak_snr': 4, 'dimmed': 1, 'used': 0}, 3)
+
+
+def test_display_levels_and_gamma(movie):
+    v = Viewer(str(movie))
+    assert v.levels_auto and v.gamma == 1.0
+    a, b = v.levels.valmin, v.levels.valmax
+    lo, hi = round(a + 0.1 * (b - a)), round(a + 0.6 * (b - a))
+    v.levels.set_val((lo, hi))                       # user drags: manual, kept across frames
+    assert not v.levels_auto and (v.im.norm.vmin, v.im.norm.vmax) == (lo, hi)
+    key(v, 'right')
+    assert (v.lo, v.hi) == (lo, hi)
+    v.gamma_slider.set_val(0.5)
+    assert v.im.norm.gamma == 0.5
+    v.set_levels(100, 50000)                         # beyond the slider: range grows
+    assert v.levels.valmax >= 50000
+    v.auto_levels()
+    assert v.levels_auto and v.levels.valmax < 50000
+    v._per_frame_box.set_active(0)
+    key(v, 'right')
+    assert v.per_frame and v.levels_auto
+
+
+def test_display_defaults_from_config(movie, monkeypatch, tmp_path):
+    f = tmp_path / 'c.toml'
+    f.write_text('[display]\nlevels = [320, 700]\ngamma = 0.7\n')
+    monkeypatch.setenv('PYSTARLIGHT_CONFIG', str(f))
+    v = Viewer(str(movie))
+    assert not v.levels_auto and (v.lo, v.hi) == (320, 700) and v.im.norm.gamma == 0.7

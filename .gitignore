@@ -26,3 +26,7 @@ OTEVideo
 
 # Private, active config (template: src/pystarlight/config_template.toml)
 pystarlight.toml
+
+# Local observation data sets
+CZ-Data
+DarkLight

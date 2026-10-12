@@ -212,6 +212,31 @@ class SerReader(MovieReader):
 
 # --------------------------------------------------------------------------- ADV / AAV
 
+class _NumpyNewshapeCompat:
+    """numpy for the Adv2 module only: Adv2 1.2.0 calls np.reshape(a, newshape=...), a keyword
+    numpy 2.x removed. Everything else is plain numpy."""
+
+    def __init__(self, np_module):
+        self._np = np_module
+
+    def __getattr__(self, name):
+        return getattr(self._np, name)
+
+    def reshape(self, a, *args, newshape=None, **kw):
+        if newshape is not None:
+            args = (newshape,) + args
+        return self._np.reshape(a, *args, **kw)
+
+
+def _patch_adv2_for_numpy2():
+    import Adv2.Adv2File as adv_file
+    try:
+        np.reshape(np.zeros(1), newshape=(1,))
+    except TypeError:                       # numpy >= 2.x: give Adv2 the old keyword back
+        if not isinstance(adv_file.np, _NumpyNewshapeCompat):
+            adv_file.np = _NumpyNewshapeCompat(np)
+
+
 class AdvReader(MovieReader):
     """ADV2 (.adv) and AAV (.aav) via the Adv2 package.
 
@@ -224,6 +249,7 @@ class AdvReader(MovieReader):
 
     def __init__(self, path: str):
         from Adv2.Adv2File import Adv2reader
+        _patch_adv2_for_numpy2()
         self.path = str(path)
         self._r = Adv2reader(self.path)
         self.metadata = self._r.getAdvFileMetaData()
@@ -239,10 +265,14 @@ class AdvReader(MovieReader):
     def read(self, index: int) -> Frame:
         err, image, info, status = self._r.getMainImageAndStatusData(index)
         if err:
-            raise IOError(f'ADV frame {index}: {err}')
+            raise IOError(f'ADV frame {index}: {err} for {self.path}')
         status = dict(status)
         if self.is_aav and 'IntegratedFrames' in status:
             status['bad_integration'] = int(status['IntegratedFrames']) != self.integrated_frames
+        # Adv2 never recognises a missing timestamp (it compares `timedelta == 0`) and then
+        # reports 2010-01-01: treat a zero mid-exposure time as "no timestamp"
+        if info.UtcMidExposureTimestampLo == 0 and info.UtcMidExposureTimestampHi == 0:
+            return Frame(index, image.copy(), None, None, status)
         time = info.StartOfExposureTimestampString.strip('[]') or None
         return Frame(index, image.copy(), info.DateString or None, time, status)
 

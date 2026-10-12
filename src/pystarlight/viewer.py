@@ -33,8 +33,9 @@ from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.colors import PowerNorm
 from matplotlib.patches import Rectangle
-from matplotlib.widgets import Button, Slider
+from matplotlib.widgets import Button, CheckButtons, RangeSlider, Slider
 
 from . import config as config_mod
 from . import plot
@@ -162,16 +163,36 @@ class Viewer:
 
         self.fig = plt.figure(figsize=(12, 7.5))
         self.fig.canvas.manager.set_window_title(f'PyStarLight - {self.path.name}')
-        self.ax = self.fig.add_axes([0.04, 0.19, 0.80, 0.75])     # right margin: key cheat sheet
+        self.ax = self.fig.add_axes([0.04, 0.24, 0.80, 0.70])     # right margin: key cheat sheet
         self.info = self.fig.text(0.04, 0.955, '', family='monospace', fontsize=10)
         self.status = self.fig.text(0.04, 0.012, '', fontsize=9, color='0.3')   # own row below the buttons
 
         frame = self.movie.read(0)
         self.jump = self.frames_per(10.0)
-        self.lo, self.hi = plot.zscale(frame.image)
-        self.im = self.ax.imshow(frame.image, cmap='gray', vmin=self.lo, vmax=self.hi,
-                                 interpolation='nearest')
+        # display: levels (auto = zscale, or manual), optional auto per frame, display gamma
+        dc = self.cfg.get('display', {})
+        self.gamma = float(dc.get('gamma', 1.0))
+        self.levels_auto = not isinstance(dc.get('levels', 'auto'), list)
+        self.per_frame = bool(dc.get('per_frame', False))
+        self.lo, self.hi = (plot.zscale(frame.image) if self.levels_auto
+                            else (float(dc['levels'][0]), float(dc['levels'][1])))
+        self.im = self.ax.imshow(frame.image, cmap='gray', interpolation='nearest',
+                                 norm=PowerNorm(self.gamma, self.lo, self.hi, clip=True))
         self.patches = []
+
+        vmin, vmax = self._useful_range(frame.image, self.lo, self.hi)
+        self._setting_levels = False
+        self.levels = RangeSlider(self.fig.add_axes([0.12, 0.185, 0.36, 0.022]), 'levels',
+                                  vmin, vmax, valinit=(self.lo, self.hi), valfmt='%.0f')
+        self.levels.on_changed(self._on_levels)
+        self.gamma_slider = Slider(self.fig.add_axes([0.12, 0.152, 0.36, 0.022]), 'gamma', 0.2, 3.0,
+                                   valinit=self.gamma, valfmt='%.2f')
+        self.gamma_slider.on_changed(self._on_gamma)
+        self._auto_button = Button(self.fig.add_axes([0.61, 0.172, 0.05, 0.036]), 'Auto')
+        self._auto_button.on_clicked(lambda e: self.auto_levels())
+        self._per_frame_box = CheckButtons(self.fig.add_axes([0.665, 0.165, 0.09, 0.05]), ['per frame'],
+                                           [self.per_frame])
+        self._per_frame_box.on_clicked(self._on_per_frame)
 
         self.slider = Slider(self.fig.add_axes([0.2, 0.115, 0.6, 0.025]), 'frame', 0, self.n - 1,
                              valinit=0, valstep=1, valfmt='%d')
@@ -265,16 +286,72 @@ class Viewer:
                 'p plate-solve again\n'
                 'i identify (SIMBAD)\n'
                 'f full screen  o zoom\n'
+                'levels/gamma: sliders\n'
                 'Y R G W PyMovie colours')
 
     def go(self, i):
         self.slider.set_val(int(np.clip(i, 0, self.n - 1)))   # calls show()
+
+    # ---------------------------------------------------------------- display levels / gamma
+
+    @staticmethod
+    def _useful_range(image, lo, hi):
+        """Levels slider range: the useful part of the histogram, not up to saturated stars."""
+        p_lo, p_hi = (float(v) for v in np.percentile(image[::4, ::4], (0.1, 99.9)))
+        span = max(hi - lo, 1.0)
+        return min(p_lo, lo), max(p_hi, hi + 4 * span)
+
+    def _norm(self, lo, hi):
+        return PowerNorm(self.gamma, lo, max(hi, lo + 1e-6), clip=True)
+
+    def set_levels(self, lo, hi, manual=True):
+        """Black / white point of the main image. manual=False: set by auto levels."""
+        self.lo, self.hi = float(lo), float(hi)
+        if manual:
+            self.levels_auto = False
+        self._setting_levels = True
+        try:
+            if hasattr(self, 'levels'):
+                ax_min, ax_max = self.levels.valmin, self.levels.valmax
+                if self.lo < ax_min or self.hi > ax_max:      # grow the slider range if needed
+                    self.levels.valmin, self.levels.valmax = min(ax_min, self.lo), max(ax_max, self.hi)
+                    self.levels.ax.set_xlim(self.levels.valmin, self.levels.valmax)
+                self.levels.set_val((self.lo, self.hi))
+        finally:
+            self._setting_levels = False
+        self.im.set_norm(self._norm(self.lo, self.hi))
+        self.fig.canvas.draw_idle()
+
+    def auto_levels(self):
+        """zscale levels of the current frame; back to automatic mode."""
+        self.levels_auto = True
+        lo, hi = plot.zscale(self.image)
+        if hasattr(self, 'levels'):                          # also reset a grown slider range
+            self.levels.valmin, self.levels.valmax = self._useful_range(self.image, lo, hi)
+            self.levels.ax.set_xlim(self.levels.valmin, self.levels.valmax)
+        self.set_levels(lo, hi, manual=False)
+
+    def _on_levels(self, val):
+        if not self._setting_levels:                          # user dragged: manual levels
+            self.set_levels(*val, manual=True)
+
+    def _on_gamma(self, g):
+        self.gamma = float(g)
+        self.im.set_norm(self._norm(self.lo, self.hi))
+        self.update_zooms()
+
+    def _on_per_frame(self, _label):
+        self.per_frame = not self.per_frame
+        if self.per_frame:
+            self.auto_levels()
 
     def show(self, i):
         self.index = i
         fr = self.movie.read(i)
         self.image = fr.image
         self.im.set_data(fr.image)
+        if self.per_frame and self.levels_auto and hasattr(self, 'levels'):
+            self.set_levels(*plot.zscale(fr.image), manual=False)
         t = f'{fr.date or ""} {fr.time or "(no timestamp)"}'.strip()
         self.info.set_text(f'frame {i:6d} / {self.n - 1}    UTC {t}')
         self.draw_apertures()
@@ -340,7 +417,7 @@ class Viewer:
             hi = max(hi, float(np.percentile(cut, 99.5)))      # keep the star's core visible
             im = self.zoom_ims[k]
             im.set_data(cut)
-            im.set_clim(lo, hi)
+            im.set_norm(PowerNorm(self.gamma, lo, max(hi, lo + 1e-6), clip=True))
             im.set_extent((x0 - 0.5, x0 + a.size - 0.5, y0 + a.size - 0.5, y0 - 0.5))
             zax.set_xlim(x0 - 0.5, x0 + a.size - 0.5)
             zax.set_ylim(y0 + a.size - 0.5, y0 - 0.5)
@@ -718,6 +795,9 @@ class Viewer:
                     except Exception as e:   # names are a bonus
                         print(f'identification failed: {e}')
                 save_apertures(self.aperture_file, self.apertures, self.wcs, self.ap_stars)
+                if self.calibration is None:          # dark/flat clips from the config (cached)
+                    from .calibrate import from_config
+                    self.calibration = from_config(self.cfg, log=lambda m: setattr(self, '_cal_msg', m))
                 self._result = run_analysis(self.path, aps, start, self.n - 1, self.cfg, self.calibration,
                                             progress=self._on_progress)
             except Exception as e:   # shown in the status line; the GUI keeps running
@@ -736,7 +816,8 @@ class Viewer:
     def poll(self):
         i, last = self._progress
         if self._job is not None and self._job.is_alive():
-            self.say(f'analysing ... frame {i} / {last}')
+            cal = getattr(self, '_cal_msg', '')
+            self.say(f'analysing ... frame {i} / {last}' if i else (cal or 'starting ...'))
             live = self._live
             now = time.monotonic()
             if (live is not None and now - self._live_shown >= LIVE_ZOOM_INTERVAL and any(self.zoom_names)
@@ -770,6 +851,55 @@ class Viewer:
             plot.save(fig, str(self.path.with_name(self.path.stem + '-summary')), pc['formats'])
         fig.show()
         self.say(f'wrote {csv.name} and {self.path.stem}-summary ({", ".join(pc["formats"])})')
+        if self.cfg.get('output', {}).get('stack_image'):
+            self.start_stack(lc)
+
+    # ---------------------------------------------------------------- stacked field image
+
+    def start_stack(self, lc):
+        """Registered stack of the analysed frames, annotated, in the background."""
+        from .stacking import attach_wcs, save_field_stack, stack_field
+        from .wcs.solve import solution_path, stack_frames
+        oc = self.cfg['output']
+        self._stack_msg = 'stacking ...'
+        self._stack_done = None
+        apertures = list(self.apertures)
+        stars, ap_stars = self.all_stars(), dict(self.ap_stars)
+
+        def work():
+            try:
+                with open_movie(str(self.path)) as mv:
+                    st = stack_field(mv, lc, max_frames=int(oc.get('stack_max_frames') or 0),
+                                     calibration=self.calibration,
+                                     progress=lambda k, n: setattr(self, '_stack_msg', f'stacking {k}/{n}'))
+                    if self.wcs is not None:
+                        meta_p = solution_path(self.path).with_suffix('.json')
+                        meta = json.loads(meta_p.read_text()) if meta_p.exists() else {}
+                        solved = stack_frames(mv, int(meta.get('stack_start', 0)),
+                                              int(self.cfg['astrometry']['stack_frames']))
+                        attach_wcs(st, self.wcs, solved)
+                stem = str(self.path.with_name(self.path.stem + '-stack'))
+                self._stack_done = save_field_stack(st, stem, apertures, lc, stars=stars, ap_stars=ap_stars,
+                                                    title=self.path.stem,
+                                                    formats=tuple(oc.get('stack_formats', ('svg', 'png'))))
+            except Exception as e:
+                self._stack_msg = f'stacking failed: {e!r}'
+        self._stack_job = threading.Thread(target=work, daemon=True)
+        self._stack_job.start()
+        self._stack_timer = self.fig.canvas.new_timer(interval=500)
+        self._stack_timer.add_callback(self._poll_stack)
+        self._stack_timer.start()
+
+    def _poll_stack(self):
+        if self._stack_job.is_alive():
+            self.say(self._stack_msg)
+            return
+        self._stack_timer.stop()
+        if self._stack_done:
+            names = sorted({Path(p).name for p in self._stack_done})
+            self.say('stacked field: ' + ', '.join(names))
+        else:
+            self.say(self._stack_msg)
 
     def _target_and_refs(self):
         norm = {n for n, r in self.roles.items() if r['normalize']}
@@ -788,11 +918,11 @@ def main(argv=None):
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('movie', help='movie file or FITS folder')
     p.add_argument('--config', help='config file (default: see pystarlight-config path)')
-    p.add_argument('--calibration', help='.npz from Calibration.save() (default: [paths] calibration)')
+    p.add_argument('--calibration', help='.npz from Calibration.save() (default: [calibration] in config)')
     a = p.parse_args(argv)
     cfg = config_mod.load(a.config)
-    cal_path = a.calibration or cfg['paths']['calibration']
-    Viewer(a.movie, cfg, Calibration.load(cal_path) if cal_path else None)
+    # --calibration overrides the config; otherwise [calibration] clips are stacked on the first run
+    Viewer(a.movie, cfg, Calibration.load(a.calibration) if a.calibration else None)
     plt.show()
 
 

@@ -92,3 +92,46 @@ def test_matches_pymovie():
     pm.PyMovie.buildDarkDefectFrame(f)
     dark_only = Calibration.from_frames(dark=dark, dark_threshold=50)
     np.testing.assert_array_equal(dark_only.defects, f.darkDefectFrame)
+
+
+def test_from_config_stacks_and_caches_clips(tmp_path, monkeypatch):
+    from pystarlight.calibrate import from_config
+    from test_pipeline import write_ser
+    monkeypatch.setenv('XDG_CACHE_HOME', str(tmp_path / 'cache'))
+    rng = np.random.default_rng(5)
+    hot = np.zeros((240, 320))
+    hot[100, 100] = 3000
+    write_ser(tmp_path / 'dark.ser', [rng.normal(300, 6, (240, 320)) + hot for _ in range(8)])
+    write_ser(tmp_path / 'flat.ser', [rng.normal(9000, 30, (240, 320)) + hot for _ in range(8)])
+    cfg = {'calibration': {'dark': str(tmp_path / 'dark.ser'), 'flat': str(tmp_path / 'flat.ser'),
+                           'flat_dark': '', 'frames': 0, 'method': 'mean', 'file': ''}}
+    logs = []
+    cal = from_config(cfg, log=logs.append)
+    assert cal.dark[100, 100] == pytest.approx(3300, abs=10)        # averaged clip
+    assert cal.defects[100, 100] == 1
+    assert sum('stacking' in m for m in logs) == 2
+    logs.clear()
+    from_config(cfg, log=logs.append)                               # second time: from the cache
+    assert sum('using stacked master' in m for m in logs) == 2
+    assert from_config({'calibration': {'dark': '', 'flat': '', 'file': ''}}) is None
+    with pytest.raises(FileNotFoundError):
+        from_config({'calibration': {'dark': str(tmp_path / 'missing.ser')}})
+
+
+def test_same_clip_for_dark_and_flat_is_refused(tmp_path):
+    from pystarlight.calibrate import from_config
+    from test_pipeline import write_ser
+    write_ser(tmp_path / 'd.ser', [np.full((240, 320), 300.0)] * 2)
+    cfg = {'_path': str(tmp_path / 'pystarlight.toml'),
+           'calibration': {'dark': 'd.ser', 'flat': 'd.ser', 'flat_dark': '', 'file': ''}}
+    with pytest.raises(ValueError, match='same clip'):
+        from_config(cfg)
+
+
+def test_use_calibration_false_disables_without_touching_entries(tmp_path):
+    from pystarlight.calibrate import from_config
+    cfg = {'_path': str(tmp_path / 'pystarlight.toml'),
+           'calibration': {'use_calibration': False, 'dark': 'missing/dark.ravf', 'flat': '', 'file': ''}}
+    logs = []
+    assert from_config(cfg, log=logs.append) is None          # not even checked for existence
+    assert 'disabled' in logs[0]
