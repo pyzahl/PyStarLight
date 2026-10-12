@@ -109,3 +109,35 @@ def test_viewer_shows_ra_dec(movie, tmp_path):
     v.wcs, v.orient = w, orientation(w, v.image.shape)
     assert '+45:' in v.ax.format_coord(159, 119)
     v.draw_compass()
+
+
+def test_live_zoom_during_run(movie):
+    import time
+
+    from pystarlight.viewer import readings_of, readout_text
+    v = Viewer(str(movie))
+    (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
+    click(v, c0, r0)
+    click(v, c1, r1)
+    key(v, 't', c0, r0)
+    key(v, 'r', c1, r1)
+    key(v, '1', c0, r0)
+    v.run()
+    shown = []
+    while v._job.is_alive() or not shown:
+        v._live_shown = 0.0                        # do not wait 0.5 s in the test
+        v.poll()
+        if v._live_frame is not None and v._live_frame not in shown:
+            shown.append(v._live_frame)
+            text = [m for m in v.zoom_marks[0] if hasattr(m, 'get_text')]
+            assert any('fit FWHM' in t.get_text() or 'fit: no star' in t.get_text() for t in text)
+        time.sleep(0.01)
+        if not v._job.is_alive():
+            break
+    v.poll()
+    assert shown and len(shown) == len(set(shown))   # each live frame drawn once
+    key(v, 'right')                                   # stored readings after the run
+    assert any('S ' in m.get_text() for m in v.zoom_marks[0] if hasattr(m, 'get_text'))
+    # helpers on both modes' values
+    assert 'bkg' in readout_text(readings_of({'signal': 5.0, 'bkavg': 1.0, 'bkstd': 0.5, 'mskpx': 9}), 3)
+    assert 'faded' in readout_text({'signal': 1.0, 'fwhm': 3.0, 'peak_snr': 4, 'dimmed': 1, 'used': 0}, 3)

@@ -80,7 +80,7 @@ All keys:
 |---|---|
 | click / right-click | add (snaps onto the star) / remove aperture |
 | `t` `r` `c` `k` | role of the aperture under the mouse (see above; changeable in the config) |
-| `1` / `2` | show the aperture under the mouse in zoom view 1 / 2 (right side, ~4-5×, own contrast, follows the tracked position after a run) |
+| `1` / `2` | show the aperture under the mouse in zoom view 1 / 2 (right side, ~4-5×, own contrast). While analysing they update live (~2×/s) with the frame being processed; afterwards they follow the tracked position. Each shows the signal and, in global mode, the peak fit (FWHM, SNR, `+` = fitted centre, circle = photometry aperture) |
 | `n` | rename the aperture under the mouse (typed in the terminal) |
 | ← / → | previous / next frame |
 | PgUp / PgDn | −/+ 25 frames |

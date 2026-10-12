@@ -42,6 +42,8 @@ uses [Semantic Versioning](https://semver.org/).
   and aperture RA/Dec in both CSV headers and in apertures.json.
 - Catalogue identification of every target/reference/check aperture (key `i`, also automatic),
   drift-corrected to the solved frames; saved in apertures.json and written to the CSVs.
+- Zoom views update live while analysing (throttled, from the worker's latest frame) and show
+  signal and peak-fit readings (FWHM, SNR, fitted centre, photometry circle).
 - Reference-star normalisation, relative flux, delta magnitude, SNR.
 - Parity tests against PyMovie 4.2.8, including a real ASTRID RAVF recording
   (all 36,096 CSV values and all timestamps identical).

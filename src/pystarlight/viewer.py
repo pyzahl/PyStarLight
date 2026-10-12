@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -86,6 +87,40 @@ def load_aperture_stars(path) -> dict:
 
 
 STAR_APERTURE_ROLES = ('target', 'reference', 'check')
+LIVE_ZOOM_INTERVAL = 0.5        # s between zoom-view updates while analysing
+
+
+def readings_of(value) -> dict:
+    """One aperture's measurement as a dict, from either analysis mode's progress values."""
+    from .globaltrack import SKY_COLUMNS, STAR_COLUMNS
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, tuple):
+        cols = STAR_COLUMNS if len(value) == len(STAR_COLUMNS) else SKY_COLUMNS
+        return dict(zip(cols, value))
+    return {k: getattr(value, k) for k in ('signal', 'bkavg', 'bkstd', 'mskpx', 'xc', 'yc')}
+
+
+def readout_text(r: dict, frame=None) -> str:
+    """Two short lines for a zoom view: frame and signal; fit (global) or background (PyMovie)."""
+    def ok(v):
+        return v is not None and np.isfinite(v)
+    head = f'fr {frame:.0f}  ' if ok(frame) else ''
+    if 'signal' not in r:                                   # sky aperture
+        return head + f'sky {r.get("bkavg", np.nan):.0f} ± {r.get("bkstd", np.nan):.1f}'
+    line1 = head + f'S {r["signal"]:,.0f}'
+    if 'fwhm' in r:                                         # global mode: peak fit
+        if ok(r.get('fwhm')):
+            line2 = f'fit FWHM {r["fwhm"]:.1f}px  SNR {r["peak_snr"]:.0f}'
+            if r.get('dimmed'):
+                line2 += '  faded'
+            elif not r.get('used'):
+                line2 += '  not tracking'
+        else:
+            line2 = 'fit: no star (faded / lost)'
+    else:                                                   # PyMovie mode
+        line2 = f'bkg {r["bkavg"]:.0f} ± {r["bkstd"]:.1f}  px {r["mskpx"]:.0f}'
+    return line1 + '\n' + line2
 
 
 def run_analysis(movie_path, apertures, start, stop, cfg, calibration=None, progress=None):
@@ -118,6 +153,10 @@ class Viewer:
         self.index = 0
         self._job: Optional[threading.Thread] = None
         self._progress = (0, 0)
+        self._live = None             # (frame, {name: values}) latest result while analysing
+        self._live_shown = 0.0
+        self._live_frame = None
+        self._lc = None               # last analysis result
         self._result = None
         self._error = None
 
@@ -250,10 +289,32 @@ class Viewer:
                 return float(xc[j]), float(yc[j])
         return a.x0 + a.size / 2 - 0.5, a.y0 + a.size / 2 - 0.5
 
-    def update_zooms(self):
+    def _lc_readings(self, frame) -> dict:
+        """{name: readings} of the last analysis at `frame` (empty if not analysed)."""
+        lc = self._lc
+        if lc is None:
+            return {}
+        out = {}
+        for n in lc.names:
+            fr = lc[n]['frame']
+            j = int(np.searchsorted(fr, frame))
+            if j < len(fr) and fr[j] == frame:
+                out[n] = {c: float(v[j]) for c, v in lc[n].items()}
+        return out
+
+    def update_zooms(self, image=None, readings=None, frame=None):
+        """Redraw the zoom views. image/readings/frame: a frame being analysed (live view);
+        default: the displayed frame and, after a run, its stored readings."""
         if not hasattr(self, 'zoom_axes'):
             return
-        h, w = self.image.shape
+        live = image is not None
+        image = self.image if image is None else image
+        frame = self.index if frame is None else frame
+        readings = self._lc_readings(frame) if readings is None else readings
+        radius = None
+        if self._lc is not None and 'radius' in self._lc.frame_info and len(self._lc.frame_info['radius']):
+            radius = float(self._lc.frame_info['radius'][0])
+        h, w = image.shape
         by_name = {a.name: a for a in self.apertures}
         for k, zax in enumerate(self.zoom_axes):
             for m in self.zoom_marks[k]:
@@ -266,11 +327,15 @@ class Viewer:
                 zax.set_title(f'{k + 1}: (press {k + 1} over an aperture)', fontsize=8, loc='left',
                               color='0.3')
                 continue
-            cx, cy = self.centre_of(a)
+            r = readings.get(a.name, {})
+            if np.isfinite(r.get('xc', np.nan)) and np.isfinite(r.get('yc', np.nan)):
+                cx, cy = r['xc'], r['yc']
+            else:
+                cx, cy = self.centre_of(a)
             half = a.size // 2
             x0 = int(np.clip(round(cx) - half, 0, w - a.size))
             y0 = int(np.clip(round(cy) - half, 0, h - a.size))
-            cut = self.image[y0:y0 + a.size, x0:x0 + a.size]
+            cut = image[y0:y0 + a.size, x0:x0 + a.size]
             lo, hi = plot.zscale(cut)
             hi = max(hi, float(np.percentile(cut, 99.5)))      # keep the star's core visible
             im = self.zoom_ims[k]
@@ -282,6 +347,20 @@ class Viewer:
             col = self.color_of(a)
             self.zoom_marks[k] += [zax.axhline(cy, color=col, lw=0.5, alpha=0.7),
                                    zax.axvline(cx, color=col, lw=0.5, alpha=0.7)]
+            if radius and a.role != 'sky':
+                from matplotlib.patches import Circle
+                self.zoom_marks[k].append(zax.add_patch(Circle((cx, cy), radius, fill=False, ec=col,
+                                                               lw=0.6, alpha=0.8)))
+            if np.isfinite(r.get('x_fit', np.nan)):             # where the peak fit found the star
+                self.zoom_marks[k] += zax.plot([r['x_fit']], [r['y_fit']], '+', color='cyan', ms=7, mew=1)
+            if r:
+                self.zoom_marks[k].append(zax.text(
+                    0.02, 0.02, readout_text(r, frame), transform=zax.transAxes, fontsize=7,
+                    color='white', va='bottom', family='monospace',
+                    bbox=dict(boxstyle='square,pad=0.2', fc='black', ec='none', alpha=0.6)))
+            if live:
+                self.zoom_marks[k].append(zax.text(0.98, 0.98, 'live', transform=zax.transAxes, fontsize=7,
+                                                   color='orange', ha='right', va='top'))
             if self.wcs is None:
                 title = f'{k + 1}: {a.name}  ({cx:.1f}, {cy:.1f})'
             else:       # name (+ star id) / RA Dec; the pixel position is in the cursor readout
@@ -290,7 +369,9 @@ class Viewer:
                 title = f'{k + 1}: {a.name}'
                 if st is not None:
                     title += (f'  V={st.vmag:.2f}' if st.vmag is not None else '') + f'\n{st.name or "?"}'
-                title += '\n' + self.sky_of(cx, cy)
+                # the solution belongs to the solved (first) frames: for an identified star show its
+                # fixed position; otherwise the aperture centre is only right before the field drifts
+                title += '\n' + (st.radec if st is not None and np.isfinite(st.ra) else self.sky_of(cx, cy))
             zax.set_title(title, fontsize=7.5, loc='left', color=col)
         self.fig.canvas.draw_idle()
 
@@ -638,17 +719,33 @@ class Viewer:
                         print(f'identification failed: {e}')
                 save_apertures(self.aperture_file, self.apertures, self.wcs, self.ap_stars)
                 self._result = run_analysis(self.path, aps, start, self.n - 1, self.cfg, self.calibration,
-                                            progress=lambda i, r: setattr(self, '_progress', (i, self.n - 1)))
+                                            progress=self._on_progress)
             except Exception as e:   # shown in the status line; the GUI keeps running
                 self._error = e
+        self._live = None
+        self._live_frame = None
         self._job = threading.Thread(target=work, daemon=True)
         self._job.start()
         self.timer.start()
+
+    def _on_progress(self, frame, values):
+        """Called by the worker for every frame: only remember the latest (cheap)."""
+        self._progress = (frame, self.n - 1)
+        self._live = (frame, values)
 
     def poll(self):
         i, last = self._progress
         if self._job is not None and self._job.is_alive():
             self.say(f'analysing ... frame {i} / {last}')
+            live = self._live
+            now = time.monotonic()
+            if (live is not None and now - self._live_shown >= LIVE_ZOOM_INTERVAL and any(self.zoom_names)
+                    and live[0] != self._live_frame):
+                self._live_shown = now
+                fr, values = live
+                self._live_frame = fr
+                self.update_zooms(image=self.movie.read(fr).image,
+                                  readings={n: readings_of(v) for n, v in values.items()}, frame=fr)
             return
         self.timer.stop()
         self._job = None
@@ -662,6 +759,7 @@ class Viewer:
         lc.to_csv(str(self.path.with_suffix('.pystarlight.csv')), wcs=self.wcs, stars=stars)
         self._track = {n: (lc[n]['frame'], lc[n]['xc'], lc[n]['yc']) for n in lc.names
                        if 'xc' in lc[n]}
+        self._lc = lc
         self.update_zooms()
         target, refs = self._target_and_refs()
         pc = self.cfg['plot']
