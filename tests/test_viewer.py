@@ -280,6 +280,39 @@ def test_auto_center_individual_and_all_apertures(movie):
     assert sky.center == sky_before
 
 
+def test_playback_advances_one_frame_and_toggles(movie):
+    v = Viewer(str(movie))
+    labels = [button.label.get_text() for button in v._buttons]
+    assert labels[2:5] == ['<', 'Play', '>']
+    left = min(button.ax.get_position().x0 for button in v._buttons)
+    right = max(button.ax.get_position().x1 for button in v._buttons)
+    image_center = v.ax.get_position().x0 + v.ax.get_position().width / 2
+    assert (left + right) / 2 == pytest.approx(image_center)
+    center_box = v._center_all_button.ax.get_position()
+    assert center_box.x0 >= v.zoom_axes[0].get_position().x0
+    assert center_box.x1 <= v.zoom_axes[0].get_position().x1
+    assert center_box.y0 > v.zoom_axes[0].get_position().y1 + 0.035
+    assert center_box.y1 < v._size_plus.ax.get_position().y0
+    assert v._play_timer.interval > 0
+    assert v._play_button.label.get_text() == 'Play'
+
+    v.toggle_playback()
+    assert v._playing
+    assert v._play_button.label.get_text() == 'Pause'
+    v.playback_step()
+    assert v.index == 1
+
+    v.toggle_playback()
+    assert not v._playing
+    assert v._play_button.label.get_text() == 'Play'
+
+    v.go(v.n - 1)
+    v.toggle_playback()
+    assert v.index == 0
+    v.playback_step()
+    assert v.index == 1
+
+
 def test_display_defaults_from_config(movie, monkeypatch, tmp_path):
     f = tmp_path / 'c.toml'
     f.write_text('[display]\nlevels = [320, 700]\ngamma = 0.7\n')

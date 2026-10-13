@@ -194,11 +194,13 @@ class Viewer:
         self.gamma_slider = Slider(self.fig.add_axes([0.12, 0.152, 0.36, 0.022]), 'gamma', 0.2, 3.0,
                                    valinit=self.gamma, valfmt='%.2f')
         self.gamma_slider.on_changed(self._on_gamma)
-        self.aperture_size_text = self.fig.text(0.49, 0.184, f'box {self.size}px', va='center', fontsize=8)
-        self._size_minus = Button(self.fig.add_axes([0.535, 0.165, 0.03, 0.04]), '-')
+        self.aperture_size_text = self.fig.text(0.855, 0.56, f'box {self.size}px', va='center', fontsize=8)
+        self._size_minus = Button(self.fig.add_axes([0.912, 0.5425, 0.029, 0.035]), '-')
         self._size_minus.on_clicked(lambda e: self.adjust_aperture_size(-2))
-        self._size_plus = Button(self.fig.add_axes([0.57, 0.165, 0.03, 0.04]), '+')
+        self._size_plus = Button(self.fig.add_axes([0.947, 0.5425, 0.029, 0.035]), '+')
         self._size_plus.on_clicked(lambda e: self.adjust_aperture_size(2))
+        self._center_all_button = Button(self.fig.add_axes([0.87, 0.505, 0.10, 0.03]), 'Center all')
+        self._center_all_button.on_clicked(lambda e: self.center_all_apertures())
         self._auto_button = Button(self.fig.add_axes([0.61, 0.172, 0.05, 0.036]), 'Auto')
         self._auto_button.on_clicked(lambda e: self.auto_levels())
         self._per_frame_box = CheckButtons(self.fig.add_axes([0.665, 0.165, 0.09, 0.05]), ['per frame'],
@@ -208,26 +210,34 @@ class Viewer:
         self.slider = Slider(self.fig.add_axes([0.2, 0.115, 0.6, 0.025]), 'frame', 0, self.n - 1,
                              valinit=0, valstep=1, valfmt='%d')
         self.slider.on_changed(lambda v: self.show(int(v)))
-        buttons = [('|<', lambda e: self.go(0)),
-                   ('-10 s', lambda e: self.go(self.index - self.jump)),
-                   ('<', lambda e: self.go(self.index - 1)),
-                   ('>', lambda e: self.go(self.index + 1)),
-                   ('+10 s', lambda e: self.go(self.index + self.jump)),
-                   ('>|', lambda e: self.go(self.n - 1)),
-                   ('Run', lambda e: self.run())]
+        self._playing = False
+        self._play_timer = self.fig.canvas.new_timer(interval=max(1, round(10000 / self.jump)))
+        self._play_timer.add_callback(self.playback_step)
+        buttons = [('|<', lambda e: self.go(0), 0.065),
+                   ('-10 s', lambda e: self.go(self.index - self.jump), 0.065),
+                   ('<', lambda e: self.go(self.index - 1), 0.065),
+                   ('Play', lambda e: self.toggle_playback(), 0.075),
+                   ('>', lambda e: self.go(self.index + 1), 0.065),
+                   ('+10 s', lambda e: self.go(self.index + self.jump), 0.065),
+                   ('>|', lambda e: self.go(self.n - 1), 0.065),
+                   ('Run', lambda e: self.run(), 0.065)]
+        gap = 0.01
+        row_width = sum(width for _, _, width in buttons) + gap * (len(buttons) - 1)
+        x = self.ax.get_position().x0 + (self.ax.get_position().width - row_width) / 2
         self._buttons = []
-        for i, (label, cb) in enumerate(buttons):
-            b = Button(self.fig.add_axes([0.14 + i * 0.075, 0.055, 0.065, 0.035]), label)
+        for label, cb, width in buttons:
+            b = Button(self.fig.add_axes([x, 0.055, width, 0.035]), label)
             b.on_clicked(cb)
             self._buttons.append(b)
-        self._center_all_button = Button(self.fig.add_axes([0.665, 0.055, 0.09, 0.035]), 'Center all')
-        self._center_all_button.on_clicked(lambda e: self.center_all_apertures())
+            if label == 'Play':
+                self._play_button = b
+            x += width + gap
         self.fig.add_artist(self.cheat_sheet())
 
         # two zoomed aperture views (keys 1 / 2 over an aperture), ~4-5x the main image
         self.zoom_names: list[Optional[str]] = ['target', 'ref1']
         self.zoom_axes, self.zoom_ims, self.zoom_marks = [], [], []
-        for k, y in enumerate((0.30, 0.025)):
+        for k, y in enumerate((0.26, 0.025)):
             zax = self.fig.add_axes([0.855, y, 0.13, 0.20])
             zax.set_xticks([])
             zax.set_yticks([])
@@ -327,6 +337,28 @@ class Viewer:
 
     def go(self, i):
         self.slider.set_val(int(np.clip(i, 0, self.n - 1)))   # calls show()
+
+    def toggle_playback(self):
+        self._playing = not self._playing
+        if self._playing:
+            if self.index >= self.n - 1:
+                self.go(0)
+            self._play_button.label.set_text('Pause')
+            self._play_timer.start()
+        else:
+            self._play_timer.stop()
+            self._play_button.label.set_text('Play')
+        self.fig.canvas.draw_idle()
+
+    def playback_step(self):
+        if not self._playing:
+            return
+        if self.index >= self.n - 1:
+            self.toggle_playback()
+            return
+        self.go(self.index + 1)
+        if self.index >= self.n - 1:
+            self.toggle_playback()
 
     # ---------------------------------------------------------------- display levels / gamma
 
