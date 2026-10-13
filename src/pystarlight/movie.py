@@ -20,6 +20,7 @@ from __future__ import annotations
 import glob
 import os
 import re
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -207,7 +208,7 @@ class SerReader(MovieReader):
         return Frame(index, img, date, time)
 
     def close(self):
-        del self._data
+        self.__dict__.pop('_data', None)        # safe to call twice
 
 
 # --------------------------------------------------------------------------- ADV / AAV
@@ -237,33 +238,55 @@ def _patch_adv2_for_numpy2():
             adv_file.np = _NumpyNewshapeCompat(np)
 
 
+# Adv2 wraps a native library with ONE open file for the whole process: opening a second file
+# replaces it, and closeFile() closes it for everyone. All Adv2 calls go through this lock, and a
+# reader that is not the current owner re-opens its file before reading.
+_ADV_LOCK = threading.RLock()
+_ADV_OWNER = None
+
+
 class AdvReader(MovieReader):
     """ADV2 (.adv) and AAV (.aav) via the Adv2 package.
 
-    Note: Adv2 wraps a native library with one global open file, so only one
-    AdvReader can be open at a time.
+    Adv2 has one global open file per process. Several AdvReaders (also in different threads)
+    still work: access is serialised, and a reader re-opens its file when another one took the
+    global slot (about 30 ms). close() only closes the file if this reader holds it, and is safe
+    to call more than once; a later read() re-opens.
 
     For AAV files ``integrated_frames`` is native/effective frame rate. Frames whose
     status 'IntegratedFrames' differs are flagged with ``status['bad_integration']``
     (PyMovie's aav_bad_frames list)."""
 
     def __init__(self, path: str):
-        from Adv2.Adv2File import Adv2reader
         _patch_adv2_for_numpy2()
         self.path = str(path)
-        self._r = Adv2reader(self.path)
-        self.metadata = self._r.getAdvFileMetaData()
+        with _ADV_LOCK:
+            self._open()
+            self.metadata = self._r.getAdvFileMetaData()
         self.is_aav = Path(self.path).suffix.lower() == '.aav'
         self.integrated_frames = None
         if self.is_aav:
             self.integrated_frames = (float(self.metadata['NATIVE-FRAME-RATE']) /
                                       float(self.metadata['EFFECTIVE-FRAME-RATE']))
 
+    def _open(self):
+        """(Re)open this file in Adv2's global slot. Call with _ADV_LOCK held."""
+        global _ADV_OWNER
+        from Adv2.Adv2File import Adv2reader
+        self._r = Adv2reader(self.path)
+        _ADV_OWNER = self
+
     def __len__(self):
         return self._r.CountMainFrames
 
     def read(self, index: int) -> Frame:
-        err, image, info, status = self._r.getMainImageAndStatusData(index)
+        with _ADV_LOCK:
+            if _ADV_OWNER is not self:          # another reader (or a close) took the slot
+                self._open()
+            err, image, info, status = self._r.getMainImageAndStatusData(index)
+            image = image.copy()                # Adv2 reuses its buffer
+            lo, hi = info.UtcMidExposureTimestampLo, info.UtcMidExposureTimestampHi
+            date, start = info.DateString, info.StartOfExposureTimestampString
         if err:
             raise IOError(f'ADV frame {index}: {err} for {self.path}')
         status = dict(status)
@@ -271,13 +294,17 @@ class AdvReader(MovieReader):
             status['bad_integration'] = int(status['IntegratedFrames']) != self.integrated_frames
         # Adv2 never recognises a missing timestamp (it compares `timedelta == 0`) and then
         # reports 2010-01-01: treat a zero mid-exposure time as "no timestamp"
-        if info.UtcMidExposureTimestampLo == 0 and info.UtcMidExposureTimestampHi == 0:
-            return Frame(index, image.copy(), None, None, status)
-        time = info.StartOfExposureTimestampString.strip('[]') or None
-        return Frame(index, image.copy(), info.DateString or None, time, status)
+        if lo == 0 and hi == 0:
+            return Frame(index, image, None, None, status)
+        time = start.strip('[]') or None
+        return Frame(index, image, date or None, time, status)
 
     def close(self):
-        self._r.closeFile()
+        global _ADV_OWNER
+        with _ADV_LOCK:
+            if _ADV_OWNER is self:
+                self._r.closeFile()
+                _ADV_OWNER = None
 
 
 # --------------------------------------------------------------------------- RAVF

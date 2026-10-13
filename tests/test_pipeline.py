@@ -164,3 +164,28 @@ def test_adv2_numpy2_compat_shim():
     from pystarlight.movie import _patch_adv2_for_numpy2
     _patch_adv2_for_numpy2()
     assert adv.np.reshape(a, newshape=(2, 3)).shape == (2, 3)
+
+
+def test_close_is_idempotent_for_all_readers(ser_file, tmp_path):
+    import cv2
+    from astropy.io import fits
+    paths = [ser_file]
+    p = str(tmp_path / 'a.avi')
+    vw = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*'FFV1'), 25, (32, 24), isColor=False)
+    if vw.isOpened():
+        for _ in range(3):
+            vw.write(np.zeros((24, 32), np.uint8))
+        vw.release()
+        paths.append(p)
+    d = tmp_path / 'fits'
+    d.mkdir()
+    fits.PrimaryHDU(np.zeros((4, 4), np.uint16)).writeto(d / 'f_0.fits')
+    paths.append(str(d))
+    for path in paths:
+        mv = open_movie(path)
+        mv.read(0)
+        mv.close()
+        mv.close()                                    # second close must not raise
+        with open_movie(path) as m2:
+            m2.read(0)
+            m2.close()                                # close inside `with`, then __exit__ closes again

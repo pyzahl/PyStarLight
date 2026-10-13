@@ -130,13 +130,17 @@ def run_analysis(movie_path, apertures, start, stop, cfg, calibration=None, prog
     with open_movie(str(movie_path)) as mv:
         if a['mode'] == 'global' and any(ap.role in ('target', 'reference', 'check') for ap in apertures):
             from .globaltrack import analyze_global
-            return analyze_global(mv, apertures, start, stop, radius=a['radius'] or None,
+            ret = analyze_global(mv, apertures, start, stop, radius=a['radius'] or None,
                                   background=a['background'], search=a['search'],
                                   rotation=a['rotation'], min_snr=a['min_snr'],
                                   dim_fraction=a['dim_fraction'], target_drift=a['target_drift'],
                                   calibration=calibration, progress=progress)
-        return analyze(mv, apertures, start, stop, cfg=PhotometryConfig(), calibration=calibration,
+            mv.close ()
+            return ret
+        ret = analyze(mv, apertures, start, stop, cfg=PhotometryConfig(), calibration=calibration,
                        progress=progress)
+        mv.close()
+        return ret
 
 
 class Viewer:
@@ -168,6 +172,7 @@ class Viewer:
         self.status = self.fig.text(0.04, 0.012, '', fontsize=9, color='0.3')   # own row below the buttons
 
         frame = self.movie.read(0)
+        self.movie.close()
         self.jump = self.frames_per(10.0)
         # display: levels (auto = zscale, or manual), optional auto per frame, display gamma
         dc = self.cfg.get('display', {})
@@ -266,11 +271,14 @@ class Viewer:
         typical of the 4-10 fps occultation cameras)."""
         from .timestamps import parse_time
         k = min(10, self.n - 1)
+        self.movie = open_movie(str(self.path))
         if k > 0:
             t0, t1 = parse_time(self.movie.read(0).time), parse_time(self.movie.read(k).time)
             if np.isfinite(t0) and np.isfinite(t1) and t1 > t0:
+                self.movie.close()
                 return max(1, round(seconds * k / (t1 - t0)))
         fps = getattr(self.movie, 'fps', None) or 6.0
+        self.movie.close()
         return max(1, round(seconds * fps))
 
     def cheat_sheet(self) -> str:
@@ -347,8 +355,10 @@ class Viewer:
 
     def show(self, i):
         self.index = i
+        self.movie = open_movie(str(self.path))
         fr = self.movie.read(i)
         self.image = fr.image
+        self.movie.close()
         self.im.set_data(fr.image)
         if self.per_frame and self.levels_auto and hasattr(self, 'levels'):
             self.set_levels(*plot.zscale(fr.image), manual=False)
@@ -546,6 +556,7 @@ class Viewer:
             stack = stack_frames(mv, int(meta.get('stack_start', 0)),
                                  int(self.cfg['astrometry']['stack_frames']))
             cur = mv.read(frame).image.astype(np.float32)
+            mv.close()
         (dy, dx), _, _ = phase_cross_correlation(stack, cur, upsample_factor=10, normalization=None)
         log(f'field shift to the solved frames: dx={dx:+.1f} dy={dy:+.1f} px')
         pos = {}
@@ -825,8 +836,10 @@ class Viewer:
                 self._live_shown = now
                 fr, values = live
                 self._live_frame = fr
+                self.movie = open_movie(str(self.path))
                 self.update_zooms(image=self.movie.read(fr).image,
                                   readings={n: readings_of(v) for n, v in values.items()}, frame=fr)
+                self.movie.close()
             return
         self.timer.stop()
         self._job = None
@@ -878,6 +891,7 @@ class Viewer:
                         solved = stack_frames(mv, int(meta.get('stack_start', 0)),
                                               int(self.cfg['astrometry']['stack_frames']))
                         attach_wcs(st, self.wcs, solved)
+                    mv.close()
                 stem = str(self.path.with_name(self.path.stem + '-stack'))
                 self._stack_done = save_field_stack(st, stem, apertures, lc, stars=stars, ap_stars=ap_stars,
                                                     title=self.path.stem,

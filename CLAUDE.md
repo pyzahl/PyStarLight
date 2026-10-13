@@ -93,6 +93,9 @@ GUI tests run headless (Agg): Agg timers never fire, so tests call `poll()`/`_po
 - Adv2 1.2.0 calls np.reshape(newshape=...), removed in numpy 2: `movie._patch_adv2_for_numpy2`
   swaps a thin numpy wrapper into the Adv2 module only. Adv2 also never detects missing
   timestamps (reports 2010-01-01); AdvReader returns None for a zero mid-exposure time.
+- Adv2 has ONE global open file per process. `AdvReader` serialises access (`_ADV_LOCK`) and
+  re-opens when another reader took the slot; `close()` only closes if it holds the slot. All
+  readers' `close()` must stay idempotent (the viewer closes inside `with` blocks).
 - Calibration clips: `calibrate.from_config` stacks `[calibration]` dark/flat clips; masters are
   cached in `~/.cache/pystarlight/masters` keyed on path/size/mtime (never next to the clip).
 - The stacked field image shows diagonal streaks on the owner's data: the sensor's fixed pattern
