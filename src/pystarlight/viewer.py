@@ -871,11 +871,12 @@ class Viewer:
 
     def start_stack(self, lc):
         """Registered stack of the analysed frames, annotated, in the background."""
-        from .stacking import attach_wcs, save_field_stack, stack_field
+        from .stacking import attach_wcs, stack_field
         from .wcs.solve import solution_path, stack_frames
         oc = self.cfg['output']
         self._stack_msg = 'stacking ...'
         self._stack_done = None
+        self._stack_result = None
         apertures = list(self.apertures)
         stars, ap_stars = self.all_stars(), dict(self.ap_stars)
 
@@ -893,9 +894,8 @@ class Viewer:
                         attach_wcs(st, self.wcs, solved)
                     mv.close()
                 stem = str(self.path.with_name(self.path.stem + '-stack'))
-                self._stack_done = save_field_stack(st, stem, apertures, lc, stars=stars, ap_stars=ap_stars,
-                                                    title=self.path.stem,
-                                                    formats=tuple(oc.get('stack_formats', ('svg', 'png'))))
+                self._stack_result = (st, stem, apertures, lc, stars, ap_stars, self.path.stem,
+                                      tuple(oc.get('stack_formats', ('svg', 'png'))))
             except Exception as e:
                 self._stack_msg = f'stacking failed: {e!r}'
         self._stack_job = threading.Thread(target=work, daemon=True)
@@ -909,6 +909,14 @@ class Viewer:
             self.say(self._stack_msg)
             return
         self._stack_timer.stop()
+        if self._stack_result is not None:
+            st, stem, apertures, lc, stars, ap_stars, title, formats = self._stack_result
+            try:
+                from .stacking import save_field_stack
+                self._stack_done = save_field_stack(st, stem, apertures, lc, stars=stars, ap_stars=ap_stars,
+                                                    title=title, formats=formats)
+            except Exception as e:
+                self._stack_msg = f'stacking failed: {e!r}'
         if self._stack_done:
             names = sorted({Path(p).name for p in self._stack_done})
             self.say('stacked field: ' + ', '.join(names))

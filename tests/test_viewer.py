@@ -143,6 +143,38 @@ def test_live_zoom_during_run(movie):
     assert 'faded' in readout_text({'signal': 1.0, 'fwhm': 3.0, 'peak_snr': 4, 'dimmed': 1, 'used': 0}, 3)
 
 
+def test_stack_export_runs_on_main_thread(movie, monkeypatch):
+    import threading
+
+    from pystarlight import stacking
+
+    main_thread = threading.get_ident()
+    stack_thread = []
+    export_thread = []
+    result = object()
+
+    def fake_stack(*args, **kwargs):
+        stack_thread.append(threading.get_ident())
+        return result
+
+    def fake_export(*args, **kwargs):
+        export_thread.append(threading.get_ident())
+        return ['stack.svg']
+
+    monkeypatch.setattr(stacking, 'stack_field', fake_stack)
+    monkeypatch.setattr(stacking, 'save_field_stack', fake_export)
+    v = Viewer(str(movie))
+    v.all_stars = lambda: []
+    v.start_stack(object())
+    v._stack_job.join()
+
+    assert stack_thread and stack_thread[0] != main_thread
+    assert export_thread == []
+    v._poll_stack()
+    assert export_thread == [main_thread]
+    assert v._stack_done == ['stack.svg']
+
+
 def test_display_levels_and_gamma(movie):
     v = Viewer(str(movie))
     assert v.levels_auto and v.gamma == 1.0

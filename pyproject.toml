@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 # Distribution name on PyPI ('pystarlight' is taken by an unrelated project).
 # The import name is 'pystarlight'.
 name = "starlight-photometry"
-dynamic = ["version"]
+version = "0.1.0"
 description = "Movie readers, star tracking and aperture photometry for occultation light curves"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -57,8 +57,8 @@ Source = "https://github.com/pyzahl/PyStarLight"
 Issues = "https://github.com/pyzahl/PyStarLight/issues"
 Changelog = "https://github.com/pyzahl/PyStarLight/blob/main/CHANGELOG.md"
 
-[tool.hatch.version]
-path = "src/pystarlight/__init__.py"
+[tool.pystarlight]
+codename = "Star Light Express"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pystarlight"]
