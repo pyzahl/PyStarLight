@@ -9,8 +9,8 @@ mpl = pytest.importorskip('matplotlib')
 mpl.use('Agg')
 
 from pystarlight import plot  # noqa: E402
-from pystarlight.viewer import Viewer, load_apertures  # noqa: E402
-from test_pipeline import STARS, render, write_ser  # noqa: E402
+from pystarlight.viewer import Viewer, load_apertures, save_apertures  # noqa: E402
+from test_pipeline import STARS, render, truth, write_ser  # noqa: E402
 
 
 @pytest.fixture
@@ -193,6 +193,91 @@ def test_display_levels_and_gamma(movie):
     v._per_frame_box.set_active(0)
     key(v, 'right')
     assert v.per_frame and v.levels_auto
+
+
+def test_aperture_size_controls_resize_boxes(movie):
+    from pystarlight.tracking import Aperture
+
+    v = Viewer(str(movie))
+    aperture = Aperture.centered_at('test', 100, 100, size=v.size)
+    v.apertures.append(aperture)
+    center = aperture.center
+
+    v.adjust_aperture_size(2)
+    assert v.size == aperture.size == 53
+    assert aperture.center == center
+    assert aperture.default_mask.shape == (53, 53)
+    assert v.aperture_size_text.get_text() == 'box 53px'
+
+    v.adjust_aperture_size(-2)
+    assert v.size == aperture.size == 51
+    assert aperture.center == center
+
+
+def test_viewer_defaults_zoom_previews_to_target_and_ref1(movie):
+    from pystarlight.tracking import Aperture
+
+    apertures = [Aperture.centered_at('target', 100, 100),
+                 Aperture.centered_at('ref1', 160, 120, color='yellow')]
+    save_apertures(movie.with_suffix('.apertures.json'), apertures)
+    v = Viewer(str(movie))
+
+    assert v.zoom_names == ['target', 'ref1']
+    assert v.zoom_axes[0].get_title(loc='left').startswith('1: target')
+    assert v.zoom_axes[1].get_title(loc='left').startswith('2: ref1')
+
+
+def test_target_preview_falls_back_to_red_aperture(movie):
+    from pystarlight.tracking import Aperture
+
+    x0, y0 = truth(0, 0)
+    x1, y1 = truth(0, 1)
+    apertures = [Aperture.centered_at('ap1', round(x0), round(y0), color='red'),
+                 Aperture.centered_at('ref1', round(x1), round(y1), color='yellow')]
+    save_apertures(movie.with_suffix('.apertures.json'), apertures)
+    v = Viewer(str(movie))
+
+    assert v.zoom_names == ['target', 'ref1']
+    assert v.zoom_axes[0].get_title(loc='left').startswith('1: ap1')
+    assert v.zoom_ims[0].get_array().size > 4
+    assert v.zoom_axes[1].get_title(loc='left').startswith('2: ref1')
+
+
+def test_default_previews_activate_when_roles_are_assigned(movie):
+    v = Viewer(str(movie))
+    assert v.zoom_names == ['target', 'ref1']
+
+    x, y = truth(0, 0)
+    v.add(x, y)
+    v.set_role(x, y, 'target')
+    assert v.zoom_axes[0].get_title(loc='left').startswith('1: target')
+
+    x, y = truth(0, 1)
+    v.add(x, y)
+    v.set_role(x, y, 'reference')
+    assert v.zoom_axes[1].get_title(loc='left').startswith('2: ref1')
+
+
+def test_auto_center_individual_and_all_apertures(movie):
+    from pystarlight.tracking import Aperture
+
+    v = Viewer(str(movie))
+    col0, row0 = truth(0, 0)
+    col1, row1 = truth(0, 1)
+    target = Aperture.centered_at('target', col0 + 4, row0 - 3, role='target')
+    reference = Aperture.centered_at('ref1', col1 - 4, row1 + 3, role='reference')
+    sky = Aperture.centered_at('sky1', 30, 30, role='sky')
+    v.apertures = [target, reference, sky]
+    reference_before = reference.center
+    sky_before = sky.center
+
+    v.center_nearest_aperture(*target.center)
+    assert np.hypot(target.center[0] - col0, target.center[1] - row0) < 1
+    assert reference.center == reference_before
+
+    v.center_all_apertures()
+    assert np.hypot(reference.center[0] - col1, reference.center[1] - row1) < 1
+    assert sky.center == sky_before
 
 
 def test_display_defaults_from_config(movie, monkeypatch, tmp_path):

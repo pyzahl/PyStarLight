@@ -4,6 +4,7 @@
 
 Mouse   left click     add aperture (snaps to the star's brightest pixels)
         right click    remove the nearest aperture
+    u              auto-center the nearest aperture on its fitted peak
 Keys    left / right   previous / next frame      page up / down  -/+ 25 frames
         home / end     first / last frame
         t r c k        give the aperture under the mouse a role (defaults; set in the config):
@@ -47,7 +48,7 @@ from .tracking import Aperture
 
 AP_FIELDS = ('name', 'x0', 'y0', 'size', 'color', 'thresh', 'default_mask_radius', 'role')
 PYMOVIE_KEYS = {'Y': 'yellow', 'R': 'red', 'G': 'green', 'W': 'white'}
-NAV_KEYS = ('left', 'right', 'pageup', 'pagedown', 'home', 'end', 'n', 'a', 's', 'l', 'p', 'i', '1', '2')
+NAV_KEYS = ('left', 'right', 'pageup', 'pagedown', 'home', 'end', 'n', 'a', 's', 'l', 'p', 'i', 'u', '1', '2')
 
 
 def free_matplotlib_keys(keys):
@@ -193,6 +194,11 @@ class Viewer:
         self.gamma_slider = Slider(self.fig.add_axes([0.12, 0.152, 0.36, 0.022]), 'gamma', 0.2, 3.0,
                                    valinit=self.gamma, valfmt='%.2f')
         self.gamma_slider.on_changed(self._on_gamma)
+        self.aperture_size_text = self.fig.text(0.49, 0.184, f'box {self.size}px', va='center', fontsize=8)
+        self._size_minus = Button(self.fig.add_axes([0.535, 0.165, 0.03, 0.04]), '-')
+        self._size_minus.on_clicked(lambda e: self.adjust_aperture_size(-2))
+        self._size_plus = Button(self.fig.add_axes([0.57, 0.165, 0.03, 0.04]), '+')
+        self._size_plus.on_clicked(lambda e: self.adjust_aperture_size(2))
         self._auto_button = Button(self.fig.add_axes([0.61, 0.172, 0.05, 0.036]), 'Auto')
         self._auto_button.on_clicked(lambda e: self.auto_levels())
         self._per_frame_box = CheckButtons(self.fig.add_axes([0.665, 0.165, 0.09, 0.05]), ['per frame'],
@@ -214,11 +220,12 @@ class Viewer:
             b = Button(self.fig.add_axes([0.14 + i * 0.075, 0.055, 0.065, 0.035]), label)
             b.on_clicked(cb)
             self._buttons.append(b)
-        self.fig.text(0.855, 0.94, self.cheat_sheet(), family='monospace', fontsize=8, va='top',
-                      color='0.25', linespacing=1.35)
+        self._center_all_button = Button(self.fig.add_axes([0.665, 0.055, 0.09, 0.035]), 'Center all')
+        self._center_all_button.on_clicked(lambda e: self.center_all_apertures())
+        self.fig.add_artist(self.cheat_sheet())
 
         # two zoomed aperture views (keys 1 / 2 over an aperture), ~4-5x the main image
-        self.zoom_names: list[Optional[str]] = [None, None]
+        self.zoom_names: list[Optional[str]] = ['target', 'ref1']
         self.zoom_axes, self.zoom_ims, self.zoom_marks = [], [], []
         for k, y in enumerate((0.30, 0.025)):
             zax = self.fig.add_axes([0.855, y, 0.13, 0.20])
@@ -239,6 +246,9 @@ class Viewer:
         if self.aperture_file.exists():
             self.apertures = load_apertures(self.aperture_file)
             self.ap_stars = load_aperture_stars(self.aperture_file)
+        self.wcs = self.orient = None
+        self.stars = []               # brightest stars, identified (wcs.field_stars)
+        self._star_marks = []
         self._ident_job = None
         self._ident_msg = ''
         self.show(0)
@@ -246,9 +256,6 @@ class Viewer:
         self.say(f'click: add aperture, right click: remove, roles {keys}, a: run, s/l: save/load')
 
         # plate solution: RA/Dec under the cursor and field orientation
-        self.wcs = self.orient = None
-        self.stars = []               # brightest stars, identified (wcs.field_stars)
-        self._star_marks = []
         self.ax.format_coord = self.format_coord
         self._solve_job = None
         self._solve_msg = ''
@@ -281,21 +288,42 @@ class Viewer:
         self.movie.close()
         return max(1, round(seconds * fps))
 
-    def cheat_sheet(self) -> str:
-        roles = '\n'.join(f"  {r['key']}  {name}" for name, r in self.roles.items())
-        return ('KEYS\n'
-                'click/r-click add/remove\n'
-                'over an aperture:\n'
-                f'{roles}\n'
-                '  n rename  1 2 zoom view\n'
-                '<- ->  1 frame  PgUp/Dn 25\n'
-                f'buttons 10 s ({self.jump} fr)\n'
-                'a run  s/l save/load\n'
-                'p plate-solve again\n'
-                'i identify (SIMBAD)\n'
-                'f full screen  o zoom\n'
-                'levels/gamma: sliders\n'
-                'Y R G W PyMovie colours')
+    def cheat_sheet(self):
+        from matplotlib.offsetbox import AnchoredOffsetbox, HPacker, TextArea, VPacker
+
+        text_props = {'family': 'monospace', 'fontsize': 8, 'color': '0.25'}
+        rows = [TextArea(line, textprops=text_props) for line in (
+            'KEYS',
+            'click/r-click add/remove',
+            'over an aperture:',
+        )]
+        for name, role in self.roles.items():
+            color = plot.APERTURE_COLORS.get(role['color'], role['color'])
+            key = TextArea(role['key'], textprops={
+                **text_props,
+                'color': color,
+                'fontweight': 'bold',
+                'bbox': {'boxstyle': 'square,pad=0.15', 'facecolor': 'none',
+                         'edgecolor': color, 'linewidth': 0.8},
+            })
+            rows.append(HPacker(children=[TextArea('  ', textprops=text_props), key,
+                                          TextArea(f'  {name}', textprops=text_props)],
+                                align='baseline', pad=0, sep=0))
+        rows.extend(TextArea(line, textprops=text_props) for line in (
+            'u auto-center peak',
+            'n rename  1 2 zoom view',
+            '<- ->  1 frame  PgUp/Dn 25',
+            f'buttons 10 s ({self.jump} fr)',
+            'a run  s/l save/load',
+            'p plate-solve again',
+            'i identify (SIMBAD)',
+            'f full screen  o zoom',
+            'levels/gamma: sliders',
+            'Y R G W PyMovie colours',
+        ))
+        content = VPacker(children=rows, align='left', pad=0, sep=1)
+        return AnchoredOffsetbox(loc='upper left', child=content, pad=0, borderpad=0, frameon=False,
+                                 bbox_to_anchor=(0.855, 0.94), bbox_transform=self.fig.transFigure)
 
     def go(self, i):
         self.slider.set_val(int(np.clip(i, 0, self.n - 1)))   # calls show()
@@ -408,8 +436,13 @@ class Viewer:
                 m.remove()
             self.zoom_marks[k] = []
             a = by_name.get(self.zoom_names[k])
+            if a is None and k == 0 and self.zoom_names[k] == 'target':
+                a = next((ap for ap in self.apertures if ap.role == 'target'), None)
+                if a is None:
+                    a = next((ap for ap in self.apertures if ap.color in ('red', 'green')), None)
+                if a is None:
+                    a = next((ap for ap in self.apertures if ap.role != 'sky'), None)
             if a is None:                       # unassigned, or the aperture was removed
-                self.zoom_names[k] = None
                 self.zoom_ims[k].set_data(np.zeros((2, 2)))
                 zax.set_title(f'{k + 1}: (press {k + 1} over an aperture)', fontsize=8, loc='left',
                               color='0.3')
@@ -656,10 +689,64 @@ class Viewer:
 
     # ---------------------------------------------------------------- editing
 
+    def adjust_aperture_size(self, delta: int):
+        """Resize all aperture boxes by two pixels while keeping their centres fixed."""
+        if delta not in (-2, 2):
+            raise ValueError('aperture size changes must be 2 pixels')
+        limit = min(self.image.shape)
+        if not 2 <= self.size + delta <= limit:
+            return
+        if any(not 2 <= a.size + delta <= limit for a in self.apertures):
+            return
+
+        self.size += delta
+        for aperture in self.apertures:
+            aperture.x0 -= delta // 2
+            aperture.y0 -= delta // 2
+            aperture.size += delta
+            aperture.default_mask, _ = circular_mask(aperture.size, aperture.default_mask_radius)
+            aperture.clamp(self.image.shape[1], self.image.shape[0])
+        self.aperture_size_text.set_text(f'box {self.size}px')
+        self.draw_apertures()
+        self.update_zooms()
+
     def nearest(self, x, y) -> Optional[Aperture]:
         if not self.apertures:
             return None
         return min(self.apertures, key=lambda a: np.hypot(a.center[0] - x, a.center[1] - y))
+
+    def center_aperture(self, aperture: Aperture) -> bool:
+        """Move one non-sky aperture to the fitted peak in the displayed frame."""
+        if aperture.role == 'sky':
+            return False
+        from .globaltrack import fit_peak
+
+        fit = fit_peak(self.image, *aperture.center, search=min(15, aperture.size / 2),
+                       calibration=self.calibration)
+        if not fit.ok:
+            return False
+        aperture.x0 = int(round(fit.x)) - aperture.size // 2
+        aperture.y0 = int(round(fit.y)) - aperture.size // 2
+        aperture.clamp(self.image.shape[1], self.image.shape[0])
+        return True
+
+    def center_nearest_aperture(self, x: float, y: float):
+        aperture = self.nearest(x, y)
+        if aperture is None:
+            return
+        if self.center_aperture(aperture):
+            self.draw_apertures()
+            self.update_zooms()
+            self.say(f'centered {aperture.name} on fitted peak')
+        else:
+            self.say(f'could not center {aperture.name}')
+
+    def center_all_apertures(self):
+        candidates = [a for a in self.apertures if a.role != 'sky']
+        centered = sum(self.center_aperture(a) for a in candidates)
+        self.draw_apertures()
+        self.update_zooms()
+        self.say(f'auto-centered {centered}/{len(candidates)} apertures')
 
     def _free_name(self, base: str, numbered: bool = True) -> str:
         names = {a.name for a in self.apertures}
@@ -687,6 +774,7 @@ class Viewer:
         self.apertures.append(Aperture(self._free_name('ap'), x0, y0, self.size,
                                        thresh=pm['threshold'], default_mask_radius=pm['default_mask_radius']))
         self.draw_apertures()
+        self.update_zooms()
 
     def place_sky(self, x, y):
         """Sky apertures go exactly where clicked (no snapping onto stars)."""
@@ -715,6 +803,7 @@ class Viewer:
         if role == 'sky':
             a.x0, a.y0 = self.place_sky(x, y)
         self.draw_apertures()
+        self.update_zooms()
 
     def set_color(self, x, y, color):
         a = self.nearest(x, y)
@@ -755,6 +844,8 @@ class Viewer:
             self.set_role(ev.xdata, ev.ydata, self.role_keys[k])
         elif k in PYMOVIE_KEYS and ev.inaxes is self.ax:
             self.set_color(ev.xdata, ev.ydata, PYMOVIE_KEYS[k])
+        elif k == 'u' and ev.inaxes is self.ax:
+            self.center_nearest_aperture(ev.xdata, ev.ydata)
         elif k == 'n' and ev.inaxes is self.ax:
             a = self.nearest(ev.xdata, ev.ydata)
             if a:
