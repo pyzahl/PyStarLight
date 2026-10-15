@@ -33,7 +33,7 @@ uv run pystarlight-config init --here    # private config: ./pystarlight.toml (g
 ```
 
 Edit the config: your name, email, your nova.astrometry.net API key, and your observing
-site(s). Sites use the same keys as PyOccult: point `pyoccult_sites` at your PyOccult
+site(s). Sites use the same keys as PySyzygos (formerly PyOccult): point `pysyzygos_sites` at your PySyzygos
 `sites.py` (read as data, never executed) and/or add `[sites.<id>]` tables with `focal_mm`
 and `sensor_mm`, from which the expected plate scale is computed. The file is only readable
 by you and is never part of the repository. `pystarlight-config show` prints it with secrets
@@ -53,10 +53,13 @@ to every aperture box. Record them with the same gain and exposure as the observ
 uv run pystarlight-view path/to/recording.ravf
 ```
 
-When the movie opens, a median stack of its first frames is **plate-solved** on
-nova.astrometry.net in the background (private upload; result cached as `<movie>.wcs.fit`).
-The cursor readout then shows RA/Dec, an N/E compass is drawn, and the status line gives the
-plate scale, the direction of north and whether the image is mirrored. `p` solves again.
+Press `p` to **plate-solve**: a median stack of the first frames goes to nova.astrometry.net
+in the background (private upload; result cached as `<movie>.wcs.fit`, loaded automatically
+when the movie is opened again; nothing is uploaded without `p`). Burnt-in timestamp rows are
+blanked first; an ADV file's own RA/Dec is used as the field-centre hint, and the site's
+plate-scale hint only for recordings made at the site.
+The cursor readout then shows RA/Dec, an N/E compass is drawn, and the line below the status
+gives the plate scale, the direction of north and whether the image is mirrored.
 
 The **three brightest stars** are then found in the stack and named: astrometry.net's name
 where it has one (it only knows bright-star and HD names), otherwise the nearest SIMBAD object,
@@ -95,7 +98,7 @@ All keys:
 | buttons `-10 s` / `+10 s` | jump 10 s (frame count from the timestamps) |
 | `a`, button **Run** | analyse from the current frame to the end |
 | `s` / `l` | save / load apertures (`<movie>.apertures.json`) |
-| `p` | plate-solve again |
+| `p` | plate-solve (uploads to astrometry.net) |
 | `i` | identify the stars in the apertures (astrometry.net names, SIMBAD) |
 | `f` | full screen (matplotlib) |
 | `o` | zoom rectangle (matplotlib toolbar); click the house icon to reset |
@@ -240,7 +243,7 @@ x, y = wcs.target_pixel(wcs.load_wcs(fits_path), '18h12m01s +22d07m00s')
 | `pipeline` | `analyze()` (PyMovie-exact) → `LightCurves`, with progress/cancel hooks for a worker thread |
 | `globaltrack` | `analyze_global()`: roles, peak fits, global shift + rotation, sub-pixel apertures, occultation-aware target tracking |
 | `export` | PyMovie-layout CSV for PyOTE |
-| `config` | private config from the template, PyOccult-compatible sites (`pystarlight-config`) |
+| `config` | private config from the template, PySyzygos-compatible sites (`pystarlight-config`) |
 | `timestamps` | `VtiReader` (IOTA 2/3, BoxSprite, Kiwi NTSC/PAL, GHS), `check_timing()`, midnight rollover |
 | `wcs` | astrometry.net client, two-star solution, WCS → pixel, UCAC4 lookup |
 | `calibrate` | master dark/flat, gain and defect maps, per-aperture correction |

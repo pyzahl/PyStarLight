@@ -132,9 +132,12 @@ def run_analysis(movie_path, apertures, start, stop, cfg, calibration=None, prog
         if a['mode'] == 'global' and any(ap.role in ('target', 'reference', 'check') for ap in apertures):
             from .globaltrack import analyze_global
             ret = analyze_global(mv, apertures, start, stop, radius=a['radius'] or None,
+                                  radius_fwhm=a['radius_fwhm'],
                                   background=a['background'], search=a['search'],
                                   rotation=a['rotation'], min_snr=a['min_snr'],
                                   dim_fraction=a['dim_fraction'], target_drift=a['target_drift'],
+                                  savgol_fit=a['savgol_fit'], savgol_window=a['savgol_window'],
+                                  savgol_order=a['savgol_order'],
                                   calibration=calibration, progress=progress)
             mv.close ()
             return ret
@@ -170,7 +173,9 @@ class Viewer:
         self.fig.canvas.manager.set_window_title(f'PyStarLight - {self.path.name}')
         self.ax = self.fig.add_axes([0.04, 0.24, 0.80, 0.70])     # right margin: key cheat sheet
         self.info = self.fig.text(0.04, 0.955, '', family='monospace', fontsize=10)
-        self.status = self.fig.text(0.04, 0.012, '', fontsize=9, color='0.3')   # own row below the buttons
+        self.status = self.fig.text(0.04, 0.026, '', fontsize=9, color='0.3')   # own row below the buttons
+        # background jobs (plate solve, identification, stacking): own line, never hiding `status`
+        self.job_status = self.fig.text(0.04, 0.006, '', fontsize=8, color='0.45')
 
         frame = self.movie.read(0)
         self.movie.close()
@@ -201,11 +206,16 @@ class Viewer:
         self._size_plus.on_clicked(lambda e: self.adjust_aperture_size(2))
         self._center_all_button = Button(self.fig.add_axes([0.87, 0.505, 0.10, 0.03]), 'Center all')
         self._center_all_button.on_clicked(lambda e: self.center_all_apertures())
+        self._fit_frame_button = Button(self.fig.add_axes([0.87, 0.47, 0.10, 0.03]), 'Fit frame')
+        self._fit_frame_button.on_clicked(lambda e: self.fit_frame())
         self._auto_button = Button(self.fig.add_axes([0.61, 0.172, 0.05, 0.036]), 'Auto')
         self._auto_button.on_clicked(lambda e: self.auto_levels())
         self._per_frame_box = CheckButtons(self.fig.add_axes([0.665, 0.165, 0.09, 0.05]), ['per frame'],
                                            [self.per_frame])
         self._per_frame_box.on_clicked(self._on_per_frame)
+        self._savgol_box = CheckButtons(self.fig.add_axes([0.765, 0.165, 0.075, 0.05]), ['SG fit'],
+                                        [bool(self.cfg['analysis']['savgol_fit'])])
+        self._savgol_box.on_clicked(self._on_savgol)
 
         self.slider = Slider(self.fig.add_axes([0.2, 0.115, 0.6, 0.025]), 'frame', 0, self.n - 1,
                              valinit=0, valstep=1, valfmt='%d')
@@ -237,8 +247,8 @@ class Viewer:
         # two zoomed aperture views (keys 1 / 2 over an aperture), ~4-5x the main image
         self.zoom_names: list[Optional[str]] = ['target', 'ref1']
         self.zoom_axes, self.zoom_ims, self.zoom_marks = [], [], []
-        for k, y in enumerate((0.26, 0.025)):
-            zax = self.fig.add_axes([0.855, y, 0.13, 0.20])
+        for k, (y, hgt) in enumerate(((0.25, 0.19), (0.025, 0.20))):   # room above for 'Fit frame'
+            zax = self.fig.add_axes([0.855, y, 0.13, hgt])
             zax.set_xticks([])
             zax.set_yticks([])
             zax.set_title(f'{k + 1}: (press {k + 1} over an aperture)', fontsize=8, loc='left')
@@ -269,9 +279,14 @@ class Viewer:
         self.ax.format_coord = self.format_coord
         self._solve_job = None
         self._solve_msg = ''
-        acfg = self.cfg['astrometry']
-        if acfg.get('auto_solve') and acfg.get('api_key'):
-            self.start_solve()
+        # never submits on its own: a cached solution is loaded, a new solve needs key p
+        from .wcs.solve import solution_path
+        if solution_path(self.path).exists():
+            if self.cfg['astrometry'].get('auto_solve'):
+                self.start_solve()
+        else:
+            self.say_job('no plate solution yet: press p to solve (uploads the stacked frames to '
+                         'nova.astrometry.net, private)')
 
     # ---------------------------------------------------------------- display
 
@@ -281,6 +296,11 @@ class Viewer:
 
     def say(self, msg):
         self.status.set_text(msg)
+        self.fig.canvas.draw_idle()
+
+    def say_job(self, msg):
+        """Background jobs (plate solve, identification, stacking): line below the status line."""
+        self.job_status.set_text(msg)
         self.fig.canvas.draw_idle()
 
     def frames_per(self, seconds: float) -> int:
@@ -325,7 +345,7 @@ class Viewer:
             '<- ->  1 frame  PgUp/Dn 25',
             f'buttons 10 s ({self.jump} fr)',
             'a run  s/l save/load',
-            'p plate-solve again',
+            'p plate-solve (upload)',
             'i identify (SIMBAD)',
             'f full screen  o zoom',
             'levels/gamma: sliders',
@@ -413,6 +433,14 @@ class Viewer:
         if self.per_frame:
             self.auto_levels()
 
+    def _on_savgol(self, _label):
+        """Peak fit for the next run (global mode) and for centring: Savitzky-Golay + 2-D
+        Gaussian with fit-centred photometry, or the standard fit."""
+        a = self.cfg['analysis']
+        a['savgol_fit'] = not a['savgol_fit']
+        self.say('peak fit: ' + ('Savitzky-Golay + 2-D Gaussian, circles on fitted centres'
+                                 if a['savgol_fit'] else 'standard Gaussian, global solution'))
+
     def show(self, i):
         self.index = i
         self.movie = open_movie(str(self.path))
@@ -449,17 +477,18 @@ class Viewer:
                 out[n] = {c: float(v[j]) for c, v in lc[n].items()}
         return out
 
-    def update_zooms(self, image=None, readings=None, frame=None):
+    def update_zooms(self, image=None, readings=None, frame=None, radius=None):
         """Redraw the zoom views. image/readings/frame: a frame being analysed (live view);
-        default: the displayed frame and, after a run, its stored readings."""
+        default: the displayed frame and, after a run, its stored readings. radius: the
+        photometry circle to draw (default: the last run's)."""
         if not hasattr(self, 'zoom_axes'):
             return
         live = image is not None
         image = self.image if image is None else image
         frame = self.index if frame is None else frame
         readings = self._lc_readings(frame) if readings is None else readings
-        radius = None
-        if self._lc is not None and 'radius' in self._lc.frame_info and len(self._lc.frame_info['radius']):
+        fi = self._lc.frame_info if self._lc is not None else {}
+        if radius is None and len(fi.get('radius', ())):
             radius = float(self._lc.frame_info['radius'][0])
         h, w = image.shape
         by_name = {a.name: a for a in self.apertures}
@@ -564,6 +593,7 @@ class Viewer:
                     self._solve_msg = f'star identification failed: {e}'
             except Exception as e:
                 self._solve_msg = f'plate solve failed: {e}'
+        self._solve_t0 = time.monotonic()
         self._solve_job = threading.Thread(target=work, daemon=True)
         self._solve_job.start()
         self._solve_timer = self.fig.canvas.new_timer(interval=500)
@@ -575,17 +605,19 @@ class Viewer:
 
     def _poll_solve(self):
         if self._solve_job is not None and self._solve_job.is_alive():
-            self.say(f'plate solving: {self._solve_msg}')
+            elapsed = time.monotonic() - self._solve_t0
+            self.say_job(f'plate solving ({elapsed:.0f} s): {self._solve_msg}')
             return
         self._solve_timer.stop()
         self._solve_job = None
         if self.orient is None:
-            self.say(self._solve_msg)
+            self.say_job(self._solve_msg)
             return
         self.draw_compass()
         self.draw_stars()
         names = '; '.join(s.label() for s in self.stars)
-        self.say('plate solved: ' + self.orient.describe() + (f'   |   brightest: {names}' if names else ''))
+        self.say_job('plate solved: ' + self.orient.describe()
+                       + (f'   |   brightest: {names}' if names else ''))
         self.update_zooms()
         if self._unidentified():
             self.start_identify()
@@ -653,7 +685,7 @@ class Viewer:
 
     def _poll_identify(self):
         if self._ident_job is not None and self._ident_job.is_alive():
-            self.say(f'identifying: {self._ident_msg}')
+            self.say_job(f'identifying: {self._ident_msg}')
             return
         self._ident_timer.stop()
         self._ident_job = None
@@ -662,7 +694,7 @@ class Viewer:
         self.draw_apertures()
         self.draw_stars()
         self.update_zooms()
-        self.say(f'identified: {self._ident_msg}')
+        self.say_job(f'identified: {self._ident_msg}')
 
     def all_stars(self):
         """Brightest stars plus the identified aperture stars (no duplicates), for the exports."""
@@ -751,10 +783,12 @@ class Viewer:
         """Move one non-sky aperture to the fitted peak in the displayed frame."""
         if aperture.role == 'sky':
             return False
-        from .globaltrack import fit_peak
+        from .globaltrack import peak_fitter
 
-        fit = fit_peak(self.image, *aperture.center, search=min(15, aperture.size / 2),
-                       calibration=self.calibration)
+        a = self.cfg['analysis']
+        fitter = peak_fitter(a['savgol_fit'], a['savgol_window'], a['savgol_order'])
+        fit = fitter(self.image, *aperture.center, search=min(15, aperture.size / 2),
+                     calibration=self.calibration)
         if not fit.ok:
             return False
         aperture.x0 = int(round(fit.x)) - aperture.size // 2
@@ -779,6 +813,45 @@ class Viewer:
         self.draw_apertures()
         self.update_zooms()
         self.say(f'auto-centered {centered}/{len(candidates)} apertures')
+
+    def fit_frame(self) -> dict:
+        """Peak fit (standard or SG, as the checkbox) on every star aperture in the displayed
+        frame, plus photometry on a circle at each fitted centre. Apertures do not move.
+        Results go to the zoom views, cyan + marks and the status line; returns them."""
+        from .globaltrack import auto_radius, box_background, circle_stats, peak_fitter
+
+        a_cfg = self.cfg['analysis']
+        fitter = peak_fitter(a_cfg['savgol_fit'], a_cfg['savgol_window'], a_cfg['savgol_order'])
+        stars = [a for a in self.apertures if a.role != 'sky']
+        if not stars:
+            self.say('fit: no star apertures')
+            return {}
+        fits = {a.name: fitter(self.image, *self.centre_of(a), search=min(15, a.size / 2),
+                               calibration=self.calibration) for a in stars}
+        fw = [f.fwhm for f in fits.values() if f.ok]
+        radius = a_cfg['radius'] or auto_radius(fw, a_cfg['radius_fwhm'])
+        readings = {}
+        for a in stars:
+            f = fits[a.name]
+            cx, cy = (f.x, f.y) if f.ok else self.centre_of(a)
+            s, area, maxpx, hits = circle_stats(self.image, cx, cy, radius, self.calibration)
+            bk, bs = box_background(self.image, cx, cy, a.size, self.calibration)
+            fit = (f.x, f.y, f.fwhm, f.snr) if f.ok else (np.nan,) * 4
+            readings[a.name] = dict(zip(
+                ('signal', 'sum', 'area', 'bkavg', 'bkstd', 'xc', 'yc', 'x_fit', 'y_fit', 'fwhm',
+                 'peak_snr', 'used', 'dimmed', 'maxpx'),
+                (s - area * bk, s, area, bk, bs, cx, cy, *fit, float(f.ok), 0.0, maxpx)))
+        self.draw_apertures()
+        for a in stars:
+            if fits[a.name].ok:
+                self.patches += self.ax.plot([fits[a.name].x], [fits[a.name].y], '+', color='cyan',
+                                             ms=9, mew=1)
+        self.update_zooms(readings=readings, radius=radius)
+        kind = 'SG' if a_cfg['savgol_fit'] else 'std'
+        parts = [f'{n} ' + (f'FWHM {fits[n].fwhm:.1f} SNR {fits[n].snr:.0f} S {r["signal"]:,.0f}'
+                            if fits[n].ok else 'no fit') for n, r in readings.items()]
+        self.say(f'fit fr {self.index} ({kind}, r {radius:.1f}px): ' + ' | '.join(parts))
+        return readings
 
     def _free_name(self, base: str, numbered: bool = True) -> str:
         names = {a.name for a in self.apertures}
@@ -1029,7 +1102,7 @@ class Viewer:
 
     def _poll_stack(self):
         if self._stack_job.is_alive():
-            self.say(self._stack_msg)
+            self.say_job(self._stack_msg)
             return
         self._stack_timer.stop()
         if self._stack_result is not None:
@@ -1042,9 +1115,9 @@ class Viewer:
                 self._stack_msg = f'stacking failed: {e!r}'
         if self._stack_done:
             names = sorted({Path(p).name for p in self._stack_done})
-            self.say('stacked field: ' + ', '.join(names))
+            self.say_job('stacked field: ' + ', '.join(names))
         else:
-            self.say(self._stack_msg)
+            self.say_job(self._stack_msg)
 
     def _target_and_refs(self):
         norm = {n for n, r in self.roles.items() if r['normalize']}

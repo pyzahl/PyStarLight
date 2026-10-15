@@ -96,8 +96,9 @@ def resolve_path(cfg: dict, value: str) -> Optional[Path]:
 SITE_KEYS = ('name', 'lat', 'lon', 'ele', 'aperture_cm', 'focal_mm', 'sensor_mm', 'mpc_code')
 
 
-def read_pyoccult_sites(path: str) -> tuple[dict, Optional[str]]:
-    """`sites` dict and `default_site` from a PyOccult sites.py, read as data (never executed)."""
+def read_pysyzygos_sites(path: str) -> tuple[dict, Optional[str]]:
+    """`sites` dict and `default_site` from a PySyzygos (formerly PyOccult) sites.py, read as
+    data (never executed)."""
     import ast
     tree = ast.parse(Path(path).read_text(), filename=str(path))
     found = {}
@@ -109,13 +110,14 @@ def read_pyoccult_sites(path: str) -> tuple[dict, Optional[str]]:
 
 
 def sites(cfg: dict) -> tuple[dict, Optional[str]]:
-    """All sites: those from the PyOccult file (if configured), overridden by [sites.*] tables.
-    Returns (sites, default site id). Site keys follow PyOccult: lat, lon, ele (m), name,
+    """All sites: those from the PySyzygos sites.py (if configured), overridden by [sites.*] tables.
+    Returns (sites, default site id). Site keys follow PySyzygos: lat, lon, ele (m), name,
     aperture_cm, focal_mm, sensor_mm (width, height); PyStarLight adds binning, camera."""
     out, default = {}, None
-    py = resolve_path(cfg, cfg.get('pyoccult_sites') or '')
+    # pyoccult_sites: the key's name before PyOccult became PySyzygos (older config files)
+    py = resolve_path(cfg, cfg.get('pysyzygos_sites') or cfg.get('pyoccult_sites') or '')
     if py is not None and py.is_file():
-        out, default = read_pyoccult_sites(str(py))
+        out, default = read_pysyzygos_sites(str(py))
         out = {k: dict(v) for k, v in out.items()}
     for k, v in cfg.get('sites', {}).items():
         out[k] = {**out.get(k, {}), **v}
@@ -124,9 +126,10 @@ def sites(cfg: dict) -> tuple[dict, Optional[str]]:
 
 
 def site(cfg: dict, name: Optional[str] = None) -> Optional[dict]:
-    """The named site, else $PYOCCULT_SITE, else the default; None if there is none."""
+    """The named site, else $PYSYZYGOS_SITE (or the older $PYOCCULT_SITE), else the default;
+    None if there is none."""
     all_sites, default = sites(cfg)
-    key = name or os.environ.get('PYOCCULT_SITE') or default
+    key = name or os.environ.get('PYSYZYGOS_SITE') or os.environ.get('PYOCCULT_SITE') or default
     if key is None or key not in all_sites:
         return None
     return {'id': key, **all_sites[key]}
@@ -166,7 +169,7 @@ def main(argv=None):
     i.add_argument('--force', action='store_true', help='replace an existing file')
     sub.add_parser('path', help='show which config file is in use')
     sub.add_parser('show', help='print settings (secrets masked)')
-    sub.add_parser('sites', help='list observing sites (incl. PyOccult sites.py)')
+    sub.add_parser('sites', help='list observing sites (incl. PySyzygos sites.py)')
     a = ap.parse_args(argv)
     if a.cmd == 'init':
         path = a.path

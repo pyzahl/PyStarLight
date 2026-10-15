@@ -165,6 +165,7 @@ def test_stack_export_runs_on_main_thread(movie, monkeypatch):
     monkeypatch.setattr(stacking, 'save_field_stack', fake_export)
     v = Viewer(str(movie))
     v.all_stars = lambda: []
+    v.say('wrote shake.csv and shake-summary (pdf)')
     v.start_stack(object())
     v._stack_job.join()
 
@@ -173,6 +174,8 @@ def test_stack_export_runs_on_main_thread(movie, monkeypatch):
     v._poll_stack()
     assert export_thread == [main_thread]
     assert v._stack_done == ['stack.svg']
+    assert 'summary' in v.status.get_text()            # stacking reports on its own line
+    assert 'stacked field: stack.svg' in v.job_status.get_text()
 
 
 def test_display_levels_and_gamma(movie):
@@ -193,6 +196,26 @@ def test_display_levels_and_gamma(movie):
     v._per_frame_box.set_active(0)
     key(v, 'right')
     assert v.per_frame and v.levels_auto
+
+
+def test_savgol_checkbox_switches_peak_fit(movie):
+    v = Viewer(str(movie))
+    assert v.cfg['analysis']['savgol_fit'] is False
+    v._savgol_box.set_active(0)
+    assert v.cfg['analysis']['savgol_fit'] is True
+    (r0, c0, _) = STARS[0]
+    click(v, c0, r0)
+    a = v.apertures[0]
+    centred = []
+    for _ in range(2):                               # SG fit, then the standard fit: same box
+        a.x0 += 3
+        a.y0 -= 2
+        assert v.center_aperture(a)
+        centred.append((a.x0, a.y0))
+        if len(centred) == 1:
+            v._savgol_box.set_active(0)
+    assert v.cfg['analysis']['savgol_fit'] is False
+    assert centred[0] == centred[1]
 
 
 def test_aperture_size_controls_resize_boxes(movie):
@@ -319,3 +342,21 @@ def test_display_defaults_from_config(movie, monkeypatch, tmp_path):
     monkeypatch.setenv('PYSTARLIGHT_CONFIG', str(f))
     v = Viewer(str(movie))
     assert not v.levels_auto and (v.lo, v.hi) == (320, 700) and v.im.norm.gamma == 0.7
+
+
+def test_fit_frame_button_fits_without_moving(movie):
+    v = Viewer(str(movie))
+    (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
+    click(v, c0, r0)
+    click(v, c1, r1)
+    click(v, 30, 30)
+    key(v, 'k', 30, 30)                              # sky: not fitted
+    before = [(a.x0, a.y0) for a in v.apertures]
+    for sg in (False, True):
+        v.cfg['analysis']['savgol_fit'] = sg
+        r = v.fit_frame()
+        assert [(a.x0, a.y0) for a in v.apertures] == before
+        assert set(r) == {v.apertures[0].name, v.apertures[1].name}
+        for x in r.values():
+            assert x['used'] == 1 and x['signal'] > 0 and x['fwhm'] > 2
+        assert 'SG' in v.status.get_text() if sg else 'std' in v.status.get_text()

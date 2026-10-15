@@ -7,10 +7,10 @@
 # Lookup order: $PYSTARLIGHT_CONFIG, ./pystarlight.toml (project-local, git-ignored),
 # ~/.config/pystarlight/config.toml. Anything left out falls back to this template.
 
-# Observing sites, same keys as PyOccult's sites.py. Either point to that file, or add
-# [sites.<id>] tables below (they override/extend the PyOccult ones).
-pyoccult_sites = ""        # e.g. "~/SVN/PyOccult/sites.py"
-default_site = ""          # site id; $PYOCCULT_SITE also works (as in PyOccult)
+# Observing sites, same keys as PySyzygos' sites.py. Either point to that file, or add
+# [sites.<id>] tables below (they override/extend the PySyzygos ones).
+pysyzygos_sites = ""       # e.g. "~/SVN/PySyzygos/sites.py"
+default_site = ""          # site id; $PYSYZYGOS_SITE also works (as in PySyzygos)
 
 [observer]
 name = ""
@@ -27,12 +27,15 @@ camera = ""
 api_key = ""
 url = "https://nova.astrometry.net/api/"
 timeout_s = 900
-auto_solve = true          # plate-solve when a movie is opened (result cached as <movie>.wcs.fit)
+auto_solve = true          # load the cached solution (<movie>.wcs.fit) on open; new solves only with key p
 stack_frames = 16          # frames median-stacked for the solve (more stars, no cosmic rays)
 scale_err_pct = 20         # tolerance on the plate scale computed from the site's optics
+scale_hint = true          # send a plate-scale hint (site optics, or scale_arcsec); false = blind solve
+scale_arcsec = 0.0         # override the plate scale, arcsec/px (0 = from the site's optics)
+center_hint = true         # send the recording's own RA/Dec (ADV metadata) as the field centre
 public = false             # let astrometry.net show the image publicly
 
-# Example site table (PyOccult layout + optional binning/camera):
+# Example site table (PySyzygos layout + optional binning/camera):
 # [sites.home]
 # name = "Home"
 # lat = 40.95497
@@ -104,7 +107,9 @@ normalize = false
 
 [analysis]
 mode = "global"            # "global" (all stars track together, peak fits) or "pymovie" (exact PyMovie)
-radius = 0.0               # photometry radius, px; 0 = 1.5 x median FWHM
+radius = 0.0               # photometry radius, px; 0 = radius_fwhm x median FWHM (follows the seeing)
+radius_fwhm = 1.5          # auto radius in FWHM: 1.5 keeps nearly all light; ~0.85 best SNR for faint,
+                           # sky-limited targets (LF35 C-14 test: scatter 23% -> 19%)
 background = "local"       # "local" box per aperture, or "sky" from sky apertures
 search = 15                # px around the predicted position to look for each star
 rotation = true            # fit field rotation as well as shift
@@ -112,6 +117,10 @@ min_snr = 5.0              # minimum peak SNR for a star to steer tracking
 dim_fraction = 0.4         # target left out of tracking when fading below this (relative to others)
 target_drift = true        # follow the target's own slow offset, interpolated across the event
 normalize_window = 31      # rows; smoothing of the reference sum
+savgol_fit = false         # alternative peak fit: Savitzky-Golay smoothing + 2-D Gaussian; photometry
+                           # circles centred on each star's fitted centre (viewer checkbox "SG fit")
+savgol_window = 5          # px, odd; Savitzky-Golay window (keep near the star's FWHM)
+savgol_order = 2           # polynomial order, < savgol_window
 
 [pymovie]
 # Used when analysis.mode = "pymovie"

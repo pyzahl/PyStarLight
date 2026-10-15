@@ -6,6 +6,31 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Alternative peak fit for global mode (`analysis.savgol_fit`, viewer checkbox "SG fit"):
+  2-D Savitzky-Golay smoothing, then an axis-aligned 2-D Gaussian fit (`fit_peak_savgol`);
+  photometry circles sit on each star's fitted centre where the fit is good, else on the
+  global solution. The standard fit stays the default.
+- Viewer button "Fit frame" (below "Center all"): peak fit and circle photometry of every star
+  aperture on the displayed frame, without moving apertures; shown in the zoom views and status.
+
+### Changed
+- Automatic photometry radius is `[analysis] radius_fwhm` x median FWHM (default 1.5 as
+  before), so it follows the seeing; ~0.85 gives the best SNR for faint, sky-limited targets.
+  Minimum radius 1.5 px (was 2.0).
+- The viewer no longer submits a plate solve when a movie is opened: it loads a cached solution,
+  and only key `p` uploads to astrometry.net.
+- Plate solve: burnt-in timestamp rows are blanked before the upload; a recording's own RA/Dec
+  (ADV metadata) is sent as the field-centre hint, and the site's plate-scale hint is dropped
+  when the recording was made elsewhere (it made such solves fail).
+- Plate-solve hints are configurable in `[astrometry]`: `scale_hint` (false = blind solve),
+  `scale_arcsec` (override the plate scale), `center_hint` (send the recording's RA/Dec).
+- Viewer: plate solve, identification and stacking report on their own line below the status,
+  so they no longer hide "wrote ... -summary" and other messages.
+
+### Fixed
+- Global mode failed with KeyError for apertures without a role (since the SG-fit option).
+
 ## [0.1.0] - 2026-10-11
 
 ### Added
@@ -30,7 +55,7 @@ uses [Semantic Versioning](https://semver.org/).
   astrometry.net key, paths, aperture roles, analysis and plot settings.
 - Automatic plate solve when a movie is opened in the viewer (median stack, plate-scale hint
   from the site's optics, private upload, cached); RA/Dec readout, N/E compass, orientation
-  (scale, north angle, mirrored). Sites compatible with PyOccult's `sites.py`.
+  (scale, north angle, mirrored). Sites compatible with PyOccult's (now PySyzygos') `sites.py`.
 - Fixed (inherited from PyMovie): the image uploaded to astrometry.net was written as int16,
   wrapping 16-bit pixels above 32767 to negative values.
 - PyMovie-layout CSV export for PyOTE (`LightCurves.to_pymovie_csv`; the viewer writes it as

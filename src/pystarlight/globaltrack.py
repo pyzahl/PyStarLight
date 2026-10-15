@@ -33,6 +33,7 @@ from typing import Callable, Optional
 import numpy as np
 from scipy.ndimage import median_filter
 from scipy.optimize import least_squares
+from scipy.signal import savgol_filter
 
 from .movie import MovieReader
 from .photometry import robust_mean_std
@@ -115,6 +116,81 @@ def fit_peak(image: np.ndarray, x: float, y: float, search: float = 15, half: in
     smin, smax = sigma_range or (0.3, half * 0.9)
     ok = bool(r.success and snr >= min_snr and smin < s < min(smax, half * 0.9))
     return PeakFit(float(x0), float(y0), float(s), float(a), float(b), float(snr), ok)
+
+
+def _gauss_xy(p, xx, yy):
+    x0, y0, sx, sy, a, b = p
+    return b + a * np.exp(-(((xx - x0) / sx) ** 2 + ((yy - y0) / sy) ** 2) / 2)
+
+
+def savgol_2d(img: np.ndarray, window: int = 5, order: int = 2) -> np.ndarray:
+    """Separable 2-D Savitzky-Golay smoothing: rows, then columns. The window is cut to
+    the image size (odd) and the order to below the window."""
+    w = min(window, *img.shape)
+    w -= 1 - w % 2
+    if w < 3:
+        return img
+    o = min(order, w - 1)
+    out = savgol_filter(img, w, o, axis=1)
+    return savgol_filter(out, w, o, axis=0)
+
+
+def fit_peak_savgol(image: np.ndarray, x: float, y: float, search: float = 15, half: int = 7,
+                    min_snr: float = 5.0, calibration=None,
+                    sigma_range: Optional[tuple[float, float]] = None,
+                    window: int = 5, order: int = 2) -> PeakFit:
+    """Alternative to fit_peak: the cut-out is smoothed with a 2-D Savitzky-Golay filter,
+    then fitted with an axis-aligned Gaussian (sigma_x, sigma_y) plus constant. The centre
+    is the fitted model's. Same star search as fit_peak; PeakFit.sigma is sqrt(sx * sy).
+
+    The SNR uses the residuals against the unsmoothed cut-out, so it stays comparable with
+    fit_peak (residuals of the smoothed data would understate the noise)."""
+    h, w = image.shape
+    xs0, xs1 = max(0, int(x - search)), min(w, int(x + search) + 1)
+    ys0, ys1 = max(0, int(y - search)), min(h, int(y + search) + 1)
+    win = image[ys0:ys1, xs0:xs1].astype(np.float64)
+    if calibration is not None:
+        win = calibration.apply_roi(win, xs0, ys0)
+    if win.size == 0:
+        return PeakFit(x, y, 0, 0, 0, 0, False)
+    sm = median_filter(win, 3)                         # hot pixels and cosmic rays out
+    py, px = np.unravel_index(np.argmax(sm), sm.shape)
+    px += xs0
+    py += ys0
+
+    cx0, cx1 = max(0, px - half), min(w, px + half + 1)
+    cy0, cy1 = max(0, py - half), min(h, py + half + 1)
+    cut = image[cy0:cy1, cx0:cx1].astype(np.float64)
+    if calibration is not None:
+        cut = calibration.apply_roi(cut, cx0, cy0)
+    smooth = savgol_2d(cut, window, order)
+    yy, xx = np.mgrid[cy0:cy1, cx0:cx1]
+    b0 = float(np.median(smooth))
+    a0 = float(smooth.max() - b0)
+    if a0 <= 0:
+        return PeakFit(float(px), float(py), 0, 0, b0, 0, False)
+    p0 = [px, py, 1.5, 1.5, a0, b0]
+    lo = [cx0 - 0.5, cy0 - 0.5, 0.3, 0.3, 0, -np.inf]
+    hi = [cx1 - 0.5, cy1 - 0.5, float(half), float(half), np.inf, np.inf]
+    try:
+        r = least_squares(lambda p: (_gauss_xy(p, xx, yy) - smooth).ravel(), p0, bounds=(lo, hi),
+                          x_scale=[1, 1, 1, 1, a0, max(abs(b0), 1)])
+    except ValueError:
+        return PeakFit(float(px), float(py), 0, 0, b0, 0, False)
+    x0, y0, sx, sy, a, b = r.x
+    s = math.sqrt(sx * sy)
+    noise = float(np.std(_gauss_xy(r.x, xx, yy) - cut)) or 1e-9
+    snr = a / noise
+    smin, smax = sigma_range or (0.3, half * 0.9)
+    ok = bool(r.success and snr >= min_snr and smin < s < min(smax, half * 0.9))
+    return PeakFit(float(x0), float(y0), float(s), float(a), float(b), float(snr), ok)
+
+
+def peak_fitter(savgol: bool = False, window: int = 5, order: int = 2) -> Callable[..., PeakFit]:
+    """fit_peak, or fit_peak_savgol with the given filter, as one call signature."""
+    if not savgol:
+        return fit_peak
+    return lambda *args, **kw: fit_peak_savgol(*args, window=window, order=order, **kw)
 
 
 # --------------------------------------------------------------------------- transform
@@ -235,8 +311,10 @@ class GlobalTracker:
     Clouds dim all stars alike and do not trigger it; an occultation dims only the target."""
 
     def __init__(self, apertures: list[Aperture], search: float = 15, rotation: bool = True,
-                 min_snr: float = 5.0, calibration=None, dim_fraction: float = 0.4):
+                 min_snr: float = 5.0, calibration=None, dim_fraction: float = 0.4,
+                 fitter: Optional[Callable[..., PeakFit]] = None):
         self.apertures = apertures
+        self.fitter = fitter or fit_peak
         self.search = search
         self.rotation = rotation
         self.min_snr = min_snr
@@ -258,7 +336,7 @@ class GlobalTracker:
         for a in self.apertures:
             cx, cy = a.x0 + a.size / 2 - 0.5, a.y0 + a.size / 2 - 0.5
             if a.role in STAR_ROLES:
-                f = fit_peak(image, cx, cy, a.size / 2, min_snr=self.min_snr, calibration=self.calibration)
+                f = self.fitter(image, cx, cy, a.size / 2, min_snr=self.min_snr, calibration=self.calibration)
                 if f.ok:
                     cx, cy = f.x, f.y
                     sig.append(f.sigma)
@@ -276,7 +354,7 @@ class GlobalTracker:
         for search in (self.search, 2 * self.search):
             for a in self.stars:
                 gx, gy = prev.apply(*self.ref[a.name])
-                fits[a.name] = fit_peak(image, gx, gy, search, min_snr=self.min_snr,
+                fits[a.name] = self.fitter(image, gx, gy, search, min_snr=self.min_snr,
                                         calibration=self.calibration, sigma_range=self.sigma_range)
             if sum(f.ok for f in fits.values()) >= max(1, len(self.stars) // 2):
                 break                                    # most stars found; else widen search once
@@ -315,18 +393,29 @@ STAR_COLUMNS = ('frame', 'signal', 'sum', 'area', 'bkavg', 'bkstd', 'noise', 'xc
 SKY_COLUMNS = ('frame', 'bkavg', 'bkstd', 'xc', 'yc')
 
 
+def auto_radius(fwhms, factor: float = 1.5) -> float:
+    """Photometry radius from the measured star widths: factor x median FWHM (at least
+    1.5 px; 4 px without any fit). The FWHM is set by the seeing, so this adapts to it.
+    1.5 keeps nearly all the light; about 0.85 maximises the SNR of a faint star when the
+    sky noise dominates."""
+    fw = [f for f in fwhms if np.isfinite(f)]
+    return max(1.5, factor * float(np.median(fw))) if fw else 4.0
+
+
 def analyze_global(reader: MovieReader, apertures: list[Aperture],
                    start: int = 0, stop: Optional[int] = None, *,
-                   radius: Optional[float] = None, background: str = 'local',
+                   radius: Optional[float] = None, radius_fwhm: float = 1.5,
+                   background: str = 'local',
                    search: float = 15, rotation: bool = True, min_snr: float = 5.0,
                    calibration=None, preprocess: Optional[Callable] = None,
                    lunar: bool = False, event: Optional[tuple[int, int]] = None,
                    target_drift: bool = True, dim_fraction: float = 0.4,
+                   savgol_fit: bool = False, savgol_window: int = 5, savgol_order: int = 2,
                    progress: Optional[Callable[[int, dict], None]] = None,
                    cancel: Optional[threading.Event] = None) -> LightCurves:
     """Track all star apertures together and measure with sub-pixel circular apertures.
 
-    radius: photometry radius in px; default 1.5 x median FWHM on the first frame.
+    radius: photometry radius in px; default radius_fwhm x median FWHM on the first frame.
     background: 'local' (robust mean of each aperture's box, as PyMovie), or 'sky'
         (robust mean over the sky apertures; needs at least one).
     search: px around the predicted position to look for each star (doubled once
@@ -338,6 +427,12 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
         small offset from it (refraction, field distortion). That offset is measured on
         frames where the target is well seen, smoothed, and linearly interpolated across
         the event. This needs a second pass over the frames (about doubles the time).
+    savgol_fit: alternative peak fit (fit_peak_savgol): Savitzky-Golay smoothing
+        (savgol_window, savgol_order) and a 2-D Gaussian fit, used for tracking; each
+        star's circle is centred on its own fitted centre wherever that fit is good (ok,
+        not faded or excluded, within `radius` of the global solution). Elsewhere, e.g.
+        the target during the event, the global solution places it as before (with
+        target_drift: plus the target's interpolated own offset).
     Columns per star: signal (sum - area*bkavg), sum, area, bkavg, bkstd,
         noise (bkstd*sqrt(area), background-only), xc/yc (aperture centre used),
         x_fit/y_fit/fwhm/peak_snr (this star's own fit), used (1 if it steered tracking),
@@ -356,15 +451,17 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
     first = reader.read(start).image
     if preprocess:
         first = preprocess(first)
-    tr = GlobalTracker(apertures, search, rotation, min_snr, calibration, dim_fraction)
+    fitter = peak_fitter(savgol_fit, savgol_window, savgol_order)
+    tr = GlobalTracker(apertures, search, rotation, min_snr, calibration, dim_fraction, fitter)
     target = next((a for a in apertures if a.role == 'target'), None)
     tr.initialize(first)
     if radius is None:
-        fw = [f.fwhm for f in (fit_peak(first, *tr.ref[a.name], 3, calibration=calibration)
+        fw = [f.fwhm for f in (fitter(first, *tr.ref[a.name], 3, calibration=calibration)
                                for a in tr.stars) if f.ok]
-        radius = max(2.0, 1.5 * float(np.median(fw))) if fw else 4.0
+        radius = auto_radius(fw, radius_fwhm)
 
     rows = []
+    glob = {a.name: [] for a in apertures if a.role != 'sky'}   # global-solution centres
     for fr in reader.frames(start, stop, step):
         if cancel is not None and cancel.is_set():
             break
@@ -385,12 +482,16 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
             if a.role == 'sky':
                 vals[a.name] = (fr.index, *sky_vals[a.name])
                 continue
+            glob[a.name].append((cx, cy))
+            f = fits.get(a.name)
+            if (savgol_fit and f is not None and f.ok and not getattr(f, 'dimmed', False)
+                    and not getattr(f, 'excluded', False) and math.hypot(f.x - cx, f.y - cy) <= radius):
+                cx, cy = f.x, f.y                        # centre from the fitted model
             s, area, maxpx, hits = circle_stats(img, cx, cy, radius, calibration)
             if background == 'sky':
                 bk, bs = sky_level, sky_std
             else:
                 bk, bs = box_background(img, cx, cy, a.size, calibration, lunar)
-            f = fits.get(a.name)
             fx, fy, fw, snr, used = ((f.x, f.y, f.fwhm, f.snr, float(getattr(f, 'used', False)))
                                      if f is not None and f.ok else (np.nan,) * 4 + (0.0,))
             dimmed = float(getattr(f, 'dimmed', False) or getattr(f, 'excluded', False)) if f else 0.0
@@ -400,15 +501,24 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
         if progress:
             progress(fr.index, vals)
 
-    rows.sort(key=lambda r: r[0])
+    order = np.argsort([r[0] for r in rows], kind='stable')
+    rows = [rows[i] for i in order]
+    glob = {n: np.array(v, dtype=float).reshape(-1, 2)[order] for n, v in glob.items()}
     cols = {}
     for a in apertures:
         names = SKY_COLUMNS if a.role == 'sky' else STAR_COLUMNS
         data = np.array([r[4][a.name] for r in rows], dtype=float).reshape(-1, len(names))
         cols[a.name] = {c: data[:, i] for i, c in enumerate(names)}
     if target_drift and target is not None and rows:
-        _apply_target_drift(reader, cols[target.name], target, radius, background, cols,
-                            sky, calibration, preprocess, lunar, cancel)
+        tc = cols[target.name]
+        if savgol_fit:                       # offsets from the global solution, not the fit centres
+            gx, gy = glob[target.name].T
+            fitted = (tc['xc'] != gx) | (tc['yc'] != gy)
+            _apply_target_drift(reader, tc, target, radius, background, cols, sky, calibration,
+                                preprocess, lunar, cancel, global_xy=(gx, gy), keep=fitted)
+        else:
+            _apply_target_drift(reader, tc, target, radius, background, cols,
+                                sky, calibration, preprocess, lunar, cancel)
     info_keys = list(rows[0][3]) if rows else []
     frame_info = {k: np.array([r[3][k] for r in rows], dtype=float) for k in info_keys}
     frame_info['radius'] = np.full(len(rows), radius)
@@ -424,17 +534,22 @@ def _running_median(y, window):
 
 
 def _apply_target_drift(reader, tc, target, radius, background, cols, sky, calibration,
-                        preprocess, lunar, cancel, window: int = 25, min_shift: float = 0.02):
+                        preprocess, lunar, cancel, window: int = 25, min_shift: float = 0.02,
+                        global_xy=None, keep=None):
     """Move the target aperture by its own (smoothed, gap-interpolated) offset from the
-    global solution and re-measure it. Updates the target's columns in place."""
+    global solution and re-measure it. Updates the target's columns in place.
+
+    global_xy: the global-solution centres when xc/yc are not (savgol_fit centres them on
+    the fit); keep: rows left as measured (already on the fitted centre)."""
+    gx, gy = global_xy if global_xy is not None else (tc['xc'].copy(), tc['yc'].copy())
     # well seen = fitted and not faded; it need not have steered the tracking (a drifting
     # target is rejected from the global fit as an outlier, which is fine)
     good = (tc['dimmed'] == 0) & np.isfinite(tc['x_fit'])
     if good.sum() < 5:
         return
     f = tc['frame']
-    rx = _running_median((tc['x_fit'] - tc['xc'])[good], window)
-    ry = _running_median((tc['y_fit'] - tc['yc'])[good], window)
+    rx = _running_median((tc['x_fit'] - gx)[good], window)
+    ry = _running_median((tc['y_fit'] - gy)[good], window)
     ox = np.interp(f, f[good], rx)          # linear across gaps, constant beyond the ends
     oy = np.interp(f, f[good], ry)
     if max(np.abs(ox).max(), np.abs(oy).max()) < min_shift:
@@ -444,10 +559,10 @@ def _apply_target_drift(reader, tc, target, radius, background, cols, sky, calib
         if cancel is not None and cancel.is_set():
             break
         i = row_of.get(fr.index)
-        if i is None:
+        if i is None or (keep is not None and keep[i]):
             continue
         img = preprocess(fr.image) if preprocess else fr.image
-        cx, cy = tc['xc'][i] + ox[i], tc['yc'][i] + oy[i]
+        cx, cy = gx[i] + ox[i], gy[i] + oy[i]
         s, area, maxpx, hits = circle_stats(img, cx, cy, radius, calibration)
         tc['maxpx'][i], tc['hit_defect'][i] = maxpx, hits
         if background == 'sky':

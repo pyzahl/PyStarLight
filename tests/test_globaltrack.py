@@ -9,9 +9,12 @@ from pystarlight import Aperture, open_movie
 from pystarlight.globaltrack import (
     analyze_global,
     aperture_weights,
+    auto_radius,
     circle_sum,
     fit_peak,
+    fit_peak_savgol,
     fit_rigid,
+    savgol_2d,
 )
 from test_pipeline import write_ser
 
@@ -168,3 +171,81 @@ def test_explicit_event_window(movie):
     with open_movie(path) as mv:
         lc = analyze_global(mv, apertures(), event=(38, 56))
     assert np.all(lc['target']['used'][38:57] == 0)
+
+
+def test_savgol_peak_fit_subpixel():
+    rng = np.random.default_rng(1)
+    y, x = np.indices((40, 40))
+    for x0, y0, sx, sy in [(20.0, 20.0, 1.6, 1.6), (19.3, 21.7, 1.4, 2.0), (22.5, 18.25, 2.2, 1.7)]:
+        star = 2000 * np.exp(-(((y - y0) / sy) ** 2 + ((x - x0) / sx) ** 2) / 2)
+        img = 100 + star + rng.normal(0, 5, (40, 40))
+        f = fit_peak_savgol(img, 20, 20)
+        assert f.ok and abs(f.x - x0) < 0.05 and abs(f.y - y0) < 0.05
+        assert f.snr > 100                              # noise from the unsmoothed residuals
+
+
+def test_savgol_peak_fit_ignores_hot_pixel():
+    img = np.full((40, 40), 100.0)
+    y, x = np.indices((40, 40))
+    img += 800 * np.exp(-((y - 25) ** 2 + (x - 15) ** 2) / (2 * 1.5 ** 2))
+    img[10, 30] = 30000
+    f = fit_peak_savgol(img, 20, 20)
+    assert abs(f.x - 15) < 0.1 and abs(f.y - 25) < 0.1
+
+
+def test_savgol_2d_keeps_quadratic_and_small_images():
+    y, x = np.indices((15, 15), dtype=float)
+    q = 3 + 0.5 * x - 0.2 * y + 0.1 * x * x - 0.05 * y * y
+    assert np.allclose(savgol_2d(q, 5, 2), q)          # exact for polynomials up to the order
+    tiny = np.arange(4.0).reshape(2, 2)
+    assert np.array_equal(savgol_2d(tiny, 5, 2), tiny)  # too small to filter: unchanged
+
+
+def test_savgol_fit_centres_on_fit(movie):
+    path, rotate = movie
+    with open_movie(path) as mv:
+        lc = analyze_global(mv, apertures(), savgol_fit=True)
+    t = lc['target']
+    ev = np.array(list(EVENT))
+    base = np.r_[0:38, 57:90]
+    on_fit = (t['xc'] == t['x_fit']) & (t['yc'] == t['y_fit'])
+    assert on_fit[base].mean() > 0.9                   # circle on the target's own fit when seen
+    assert not on_fit[ev].any()                        # global solution while occulted
+    xy = np.array([truth(i, 0, rotate) for i in range(90)])
+    assert np.hypot(t['xc'] - xy[:, 0], t['yc'] - xy[:, 1]).max() < 0.4
+    flux = lc.normalized(window=9)
+    assert np.abs(flux[ev]).max() < 0.05
+    assert np.std(flux[base]) < 0.03
+
+
+def test_savgol_fit_follows_drift_across_event(tmp_path):
+    rng = np.random.default_rng(9)
+    p = tmp_path / 'drift.ser'
+    write_ser(p, [render_drift(i, rng, 0.0) for i in range(90)])
+    with open_movie(str(p)) as mv:
+        lc = analyze_global(mv, apertures(), savgol_fit=True)
+    t = lc['target']
+    xy = np.array([truth(i, 0, False) for i in range(90)])
+    true_x = xy[:, 0] + 0.03 * np.arange(90)
+    assert np.hypot(t['xc'] - true_x, t['yc'] - xy[:, 1]).max() < 0.3
+
+
+@pytest.mark.parametrize('savgol', [False, True])
+def test_aperture_without_role_is_measured(movie, savgol):
+    path, _ = movie
+    aps = apertures() + [Aperture.centered_at('ap1', 100, 170)]       # no role: measured, not tracking
+    with open_movie(path) as mv:
+        lc = analyze_global(mv, aps, savgol_fit=savgol)
+    assert len(lc['ap1']['signal']) == 90
+
+
+def test_radius_follows_fwhm_factor(movie):
+    assert auto_radius([2.0, 2.4, 2.2], 1.5) == pytest.approx(3.3)
+    assert auto_radius([2.0, np.nan], 0.5) == 1.5                    # floor
+    assert auto_radius([], 1.0) == 4.0
+    path, _ = movie
+    with open_movie(path) as mv:
+        r15 = analyze_global(mv, apertures(), 0, 5).frame_info['radius'][0]
+        r085 = analyze_global(mv, apertures(), 0, 5, radius_fwhm=0.85).frame_info['radius'][0]
+    assert r085 == pytest.approx(r15 * 0.85 / 1.5)
+    assert r15 == pytest.approx(1.5 * 2.3548 * SIGMA, rel=0.05)

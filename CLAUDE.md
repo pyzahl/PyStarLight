@@ -6,7 +6,7 @@ PyPI by an unrelated project). MIT licence. Owner: Percy Zahl (GitHub pyzahl/PyS
 
 Most processing is derived from PyMovie 4.2.8 (Bob Anderson, MIT), whose source lives at
 `../PyMovie/pymovie` with its own venv (`../PyMovie/pymovie/.venv`, Python 3.10, old pinned numpy).
-PyOTE source: `../py-ote`. PyOccult (sites, local Gaia extracts): `../PyOccult`.
+PyOTE source: `../py-ote`. PySyzygos (formerly PyOccult; sites, local Gaia extracts): still in `../PyOccult`.
 
 ## Working rules (from the owner)
 
@@ -34,11 +34,11 @@ PyOTE source: `../py-ote`. PyOccult (sites, local Gaia extracts): `../PyOccult`.
 | `photometry.py` | PyMovie-exact background (`robust_mean_std`), blob mask, centroids, TME, `measure_aperture` |
 | `tracking.py` | `Aperture` dataclass (incl. `role`), PyMovie `Tracker` (0/1/2 yellow), `TrackPath` |
 | `pipeline.py` | `analyze()` PyMovie mode → `LightCurves` (`to_csv`, `to_pymovie_csv`, `normalized`) |
-| `globaltrack.py` | `analyze_global()`: roles, Gaussian peak fits, weighted robust rigid transform, dimming detection, target drift interpolation, sub-pixel circular apertures |
+| `globaltrack.py` | `analyze_global()`: roles, Gaussian peak fits, weighted robust rigid transform, dimming detection, target drift interpolation, sub-pixel circular apertures; opt-in `savgol_fit` (SG smoothing + 2-D Gaussian, fit-centred circles) |
 | `export.py` | PyMovie-layout CSV for PyOTE (`write_pymovie_csv`, `sky_lines`) |
 | `timestamps/` | `ocr.py` (PyMovie's VTI OCR, verbatim), `vti.py` (`VtiReader`), `timing.py` (checks, new) |
 | `wcs/` | `solve.py` (astrometry.net, orientation, plate scale, `solve_movie`, `field_stars`), `identify.py` (brightest stars, SIMBAD, `identify_positions`), `manual.py` (two-star, verbatim), `astrometry_client.py` (verbatim-ish) |
-| `config.py` + `config_template.toml` | private config, PyOccult-compatible sites (`pystarlight-config`) |
+| `config.py` + `config_template.toml` | private config, PySyzygos-compatible sites (`pystarlight-config`) |
 | `plot.py` | publication figures (`style`, `summary`, panels) |
 | `stacking.py` | registered field stack (`stack_field`, `attach_wcs`, `save_field_stack` → FITS + annotated SVG/PNG/PDF), `remove_hot_pixels`; `self_dark` is opt-in only (fails for small drift) |
 | `viewer.py` | `pystarlight-view`: matplotlib GUI (keys, zoom views, live updates, plate solve, identification) |
@@ -104,7 +104,7 @@ GUI tests run headless (Agg): Agg timers never fire, so tests call `poll()`/`_po
 ## Owner's setup
 
 ASTRID camera (IMX296, 1456×1088, 16-bit RAVF, GPS timestamps via OTEStamper), typical 4–10 fps;
-APO107 with ×0.5 reducer (measured ≈ 343 mm, 2.07″/px). Site `home` from PyOccult's `sites.py`,
+APO107 with ×0.5 reducer (measured ≈ 343 mm, 2.07″/px). Site `home` from PySyzygos' `sites.py`,
 corrected in the private config (`aperture_cm` 10.7, `sensor_mm` 5.02 × 3.75).
 Test recording `None_20261011_042339_1` (near Deneb): target TYC 3574-1718-1, refs HD 197161,
 BD+44 3540, BD+44 3545.

@@ -10,6 +10,7 @@ pixel_aspect is pixel width / height (1.0 for square pixels; analog video often 
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
@@ -260,6 +261,42 @@ def ucac4_position(star_id: str):
     return SkyCoord(row['_RAJ2000'], row['_DEJ2000'], frame='icrs')
 
 
+def stamp_rows(image: np.ndarray, edge_fraction: float = 0.15, min_fraction: float = 0.25,
+               nsigma: float = 10.0) -> tuple[int, int]:
+    """(top, bottom): rows taken by a burnt-in timestamp at the top / bottom edge. A stamp
+    row has many pixels far off the sky (black background, saturated text); stars never fill
+    a quarter of a row. Rows are counted from the outermost such row to the edge, plus one."""
+    h = image.shape[0]
+    st = robust_mean_std(np.asarray(image[h // 4:3 * h // 4], dtype=np.float64))
+    off = (np.abs(image - st.mean) > nsigma * max(st.std, 1e-6)).mean(axis=1) >= min_fraction
+    n = max(1, int(h * edge_fraction))
+    top = np.flatnonzero(off[:n])
+    bot = np.flatnonzero(off[h - n:])
+    return (int(top.max()) + 2 if top.size else 0,
+            n - int(bot.min()) + 1 if bot.size else 0)
+
+
+def movie_hints(metadata: dict, site: Optional[dict] = None, max_km: float = 20.0) -> dict:
+    """Solve hints from a recording's own metadata (ADV: RA in hours, DEC, LATITUDE,
+    LONGITUDE). 'center': (ra_deg, dec_deg) if given; 'other_site': True when the recording
+    was made more than max_km from `site` (its optics, hence its plate scale, do not apply)."""
+    def num(k):
+        try:
+            return float(metadata[k])
+        except (KeyError, TypeError, ValueError):
+            return None
+    out = {'center': None, 'other_site': False}
+    ra, dec = num('RA'), num('DEC')
+    if ra is not None and dec is not None and -90 <= dec <= 90 and (ra, dec) != (0, 0):
+        out['center'] = (ra * 15.0 if 0 <= ra < 24 else ra, dec)
+    lat, lon = num('LATITUDE'), num('LONGITUDE')
+    if site and lat is not None and lon is not None and site.get('lat') is not None:
+        dlat = math.radians(lat - float(site['lat']))
+        dlon = math.radians(lon - float(site['lon'])) * math.cos(math.radians(lat))
+        out['other_site'] = 6371.0 * math.hypot(dlat, dlon) > max_km
+    return out
+
+
 def stack_frames(reader, start: int = 0, count: int = 16) -> np.ndarray:
     """Median of `count` frames from `start`: deeper and free of cosmic rays and hot flickers."""
     stop = min(len(reader) - 1, start + count - 1)
@@ -271,8 +308,10 @@ def solve_movie(movie_path: str, cfg: Optional[dict] = None, site_name: Optional
                 cancel: Optional[threading.Event] = None, force: bool = False):
     """Plate-solve a recording once and cache the solution as <movie>.wcs.fit.
 
-    Uses a median stack of [astrometry] stack_frames frames, and the plate scale of the site
-    (focal_mm, sensor_mm, binning) as a hint. Returns (astropy WCS, Orientation)."""
+    Uses a median stack of [astrometry] stack_frames frames. Hints: the plate scale from
+    [astrometry] scale_arcsec, else from the site (focal_mm, sensor_mm, binning) unless the
+    recording was made elsewhere; none with scale_hint = false. The recording's RA/Dec as the
+    field centre unless center_hint = false. Returns (astropy WCS, Orientation)."""
     from pathlib import Path
 
     from ..config import load
@@ -290,13 +329,29 @@ def solve_movie(movie_path: str, cfg: Optional[dict] = None, site_name: Optional
             log(f'using cached plate solution {dest.name}')
             return w, orientation(w, shape)
         img = stack_frames(mv, start, int(acfg['stack_frames']))
+        meta = dict(getattr(mv, 'metadata', {}) or {})
+    top, bottom = stamp_rows(img)
+    if top or bottom:
+        log(f'timestamp rows blanked: top {top}, bottom {bottom}')
+        img = prepare_for_astrometry(img, top, bottom)
     scale = None
     st = get_site(cfg, site_name)
-    if st and st.get('focal_mm') and st.get('sensor_mm'):
+    hints = movie_hints(meta, st)
+    center = hints['center'] if acfg.get('center_hint', True) else None
+    if center:
+        log('field centre from the recording: RA {:.3f}, Dec {:.3f} deg'.format(*center))
+    if not acfg.get('scale_hint', True):
+        log('no plate-scale hint (scale_hint = false)')
+    elif float(acfg.get('scale_arcsec') or 0) > 0:
+        scale = float(acfg['scale_arcsec'])
+        log(f'plate scale from the config: {scale:.2f}"/px')
+    elif hints['other_site']:
+        log(f"recorded elsewhere than site {st['id']}: no plate-scale hint")
+    elif st and st.get('focal_mm') and st.get('sensor_mm'):
         scale = plate_scale(st['focal_mm'], st['sensor_mm'][0], shape[1], int(st.get('binning', 1)))
         log(f"site {st['id']}: expected plate scale {scale:.2f}\"/px")
     path, job = solve_astrometry_net(img, workdir=str(dest.parent / '.wcs-work'), frame_num=start, log=log,
-                                     cancel=cancel, scale_arcsec=scale,
+                                     cancel=cancel, scale_arcsec=scale, center=center,
                                      scale_err_pct=float(acfg['scale_err_pct']), dest=str(dest),
                                      return_job=True)
     w = load_wcs(path)
