@@ -21,6 +21,7 @@ Keys: e/E exposure -/+, g/G gain -/+, d/D gamma -/+, t software trigger, r recor
 q quit. Recordings are SER files (16-bit, UTC timestamp per frame), see ser_recorder.py.
 """
 import argparse
+import collections
 import os
 import signal
 import threading
@@ -44,7 +45,7 @@ except ImportError:             # as a plain script next to its helper modules
     import veye_mvcam  # noqa: E402
     from ser_recorder import Recorder  # noqa: E402
 
-GPS_RATES = ["30", "20", "10", "8", "6", "4", "2", "1", "0.5"]     # fps
+GPS_RATES = ["30", "20", "15", "10", "8", "6", "5", "4", "3", "2", "1", "0.5"]     # fps
 
 parser = argparse.ArgumentParser(description="Aravis / VEYE MIPI live view")
 parser.add_argument("--camera", default=None,
@@ -126,6 +127,9 @@ LAG_EXTRA_NS = 3_000_000    # VEYE: frame start comes frame period + this after 
 VEYE_FREE_LEAD_NS = 3_330_000
 VEYE_TRIGGER_OFFSET_NS = 330_000
 VEYE_LINE_NS = 14_330
+# Smallest region the Pi's CSI-2 pipeline streams from a VEYE IMX178 (Y12): smaller ones fail at
+# STREAMON with EPIPE (measured; width 368 fails, 376 works; height 316 fails, 320 works)
+VEYE_MIN_ROI = (376, 320)
 
 
 def try_call(fn):
@@ -311,15 +315,41 @@ class Grabber(threading.Thread):
         self.missed = 0             # GPS pulses without a frame
         self.bad = {}               # non-SUCCESS buffer statuses -> count
         self.cam_fps = 0.0
+        self.intervals = collections.deque(maxlen=200)  # frame-start spacing (ns), recent frames
         self.running = True
         self.last_ok = time.monotonic()
+        self.paused = False         # pause(): the stream is about to be replaced
+        self.parked = False         # ... and this thread has let go of it
+        self.generation = 0         # +1 per new stream (frame IDs and timing restart)
+
+    def pause(self):
+        """Stop using the stream (before it is replaced); returns once this thread is idle."""
+        self.paused = True
+        t = time.monotonic() + 2.0
+        while not self.parked and time.monotonic() < t:
+            time.sleep(0.005)
+
+    def resume(self, stream):
+        self.stream = stream
+        self.generation += 1
+        self.paused = False
 
     def run(self):
         last_id = None
         last_ns, last_starts = None, None
         last_stamper, last_pulse = None, None
+        last_gen = self.generation
         t0, n = time.monotonic(), 0
         while self.running:
+            if self.paused:
+                self.parked = True
+                time.sleep(0.01)
+                continue
+            self.parked = False
+            if self.generation != last_gen:     # new stream: nothing to compare with
+                last_gen = self.generation
+                last_id = last_ns = last_starts = last_stamper = last_pulse = None
+                self.intervals.clear()
             buf = self.stream.timeout_pop_buffer(200_000)  # short timeout -> quick shutdown
             dt = time.monotonic() - t0
             if dt >= 1.0:
@@ -347,6 +377,10 @@ class Grabber(threading.Thread):
                     dt = frame_ns - last_ns
                     if dt > 1.5 * period:
                         self.dropped += round(dt / period) - 1
+            if last_ns is not None and starts == last_starts:
+                self.intervals.append(frame_ns - last_ns)
+            elif starts != last_starts:
+                self.intervals.clear()          # restarted: old spacing no longer applies
             last_ns, last_starts = frame_ns, starts
             stamper = self.stamper
             pulse = None
@@ -379,10 +413,12 @@ class Grabber(threading.Thread):
 class Controller(threading.Thread):
     """Applies camera settings off the GUI thread; only the newest request per key is sent."""
 
-    def __init__(self, camera, apply_trigger):
+    def __init__(self, camera, apply_trigger, change_roi):
         super().__init__(daemon=True)
         self.camera = camera
         self.apply_trigger = apply_trigger  # mode -> configures the camera (not acquiring)
+        self.change_roi = change_roi        # (x, y, w, h) -> rebuilds the stream
+        self.roi_changes = 0                # +1 per applied region (the GUI follows)
         self.cond = threading.Condition()
         self.pending = {}
         self.running = True
@@ -405,6 +441,9 @@ class Controller(threading.Thread):
                 todo, self.pending = self.pending, {}
                 self.busy = bool(todo)
             try:
+                if "roi" in todo:
+                    self.change_roi(todo["roi"])
+                    self.roi_changes += 1
                 if "trigger" in todo:
                     print(f"Trigger mode: {todo['trigger']}")
                     self.camera.stop_acquisition()
@@ -434,27 +473,145 @@ class Controller(threading.Thread):
 # ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
-class ImageView(QtWidgets.QLabel):
-    """Shows the newest frame scaled to fit (aspect kept)."""
+class ImageView(QtWidgets.QWidget):
+    """Shows the newest frame: fit to the window; mouse wheel zooms around the cursor, left
+    drag pans, double-click fits again. In select mode a left drag draws a rectangle
+    instead, emitted in image pixels. Past 1:1 pixels are shown as blocks (nearest)."""
+
+    changed = QtCore.pyqtSignal()                       # view moved: render again
+    selected = QtCore.pyqtSignal(int, int, int, int)    # x0, y0, x1, y1 (image pixels)
+    MAX_ZOOM = 64.0
 
     def __init__(self):
         super().__init__()
-        self.setAlignment(QtCore.Qt.AlignCenter)
         self.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Ignored)
         self.setMinimumSize(320, 240)
-        self.setStyleSheet("background: black; color: gray;")
-        self.setText("waiting for frames...")
+        self.setMouseTracking(True)
+        self.zoom = 1.0             # 1: the whole image fits
+        self.center = None          # image point at the view centre (None: image centre)
+        self.img_size = None        # (w, h) of the frame shown
+        self.qimg = None
+        # mapping of the drawn image: screen = (ox, oy) + (image - (x0, y0)) * (sx, sy)
+        self.map = None
+        self.select_mode = False
+        self.drag = None            # ("pan", start pos, start centre) / ("select", image point)
+        self.band = None            # rectangle being dragged (image pixels)
+        self.marks = []             # [(x0, y0, x1, y1, QColor)] to draw (image pixels)
+        self.cursor_img = None      # image point under the mouse
 
-    def fit_scale(self, w, h):
-        return min(self.width() / w, self.height() / h)
+    def reset_view(self):
+        self.zoom, self.center = 1.0, None
+        self.changed.emit()
 
-    def show_frame(self, disp):
-        """disp: uint8 (h, w) grey or (h, w, 3) BGR, already at display size."""
-        disp = np.ascontiguousarray(disp)
-        h, w = disp.shape[:2]
+    def _fit(self):
+        w, h = self.img_size
+        return min(max(1, self.width()) / w, max(1, self.height()) / h)
+
+    def render(self, frame, lut):
+        """frame: full-resolution (h, w) or (h, w, 3) raw values; lut: raw -> 8 bit."""
+        H, W = frame.shape[:2]
+        if self.img_size != (W, H):             # new region: start from the whole image
+            self.img_size, self.zoom, self.center = (W, H), 1.0, None
+        vw, vh = max(1, self.width()), max(1, self.height())
+        scale = self._fit() * self.zoom
+        sw, sh = vw / scale, vh / scale         # visible part, image pixels
+        cx, cy = self.center or (W / 2, H / 2)
+        cx = min(max(cx, sw / 2), W - sw / 2) if sw < W else W / 2
+        cy = min(max(cy, sh / 2), H - sh / 2) if sh < H else H / 2
+        self.center = (cx, cy) if self.zoom > 1.0 else None
+        X0, Y0 = cx - sw / 2, cy - sh / 2       # view's top-left, image pixels (may be < 0)
+        x0, y0 = max(0, int(np.floor(X0))), max(0, int(np.floor(Y0)))
+        x1, y1 = min(W, int(np.ceil(X0 + sw)) + 1), min(H, int(np.ceil(Y0 + sh)) + 1)
+        ow = max(1, round((x1 - x0) * scale))
+        oh = max(1, round((y1 - y0) * scale))
+        crop = frame[y0:y1, x0:x1]
+        interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_NEAREST
+        disp = np.ascontiguousarray(np.take(lut, cv2.resize(crop, (ow, oh), interpolation=interp),
+                                            mode="clip"))
         fmt = QtGui.QImage.Format_Grayscale8 if disp.ndim == 2 else QtGui.QImage.Format_BGR888
-        img = QtGui.QImage(disp.data, w, h, disp.strides[0], fmt).copy()
-        self.setPixmap(QtGui.QPixmap.fromImage(img))
+        self.qimg = QtGui.QImage(disp.data, ow, oh, disp.strides[0], fmt).copy()
+        sx, sy = ow / (x1 - x0), oh / (y1 - y0)
+        self.map = ((x0 - X0) * scale, (y0 - Y0) * scale, x0, y0, sx, sy)
+        self.update()
+
+    def to_image(self, pos):
+        ox, oy, x0, y0, sx, sy = self.map
+        return x0 + (pos.x() - ox) / sx, y0 + (pos.y() - oy) / sy
+
+    def to_screen(self, x, y):
+        ox, oy, x0, y0, sx, sy = self.map
+        return ox + (x - x0) * sx, oy + (y - y0) * sy
+
+    def paintEvent(self, event):
+        p = QtGui.QPainter(self)
+        p.fillRect(self.rect(), QtCore.Qt.black)
+        if self.qimg is None:
+            p.setPen(QtCore.Qt.gray)
+            p.drawText(self.rect(), QtCore.Qt.AlignCenter, "waiting for frames...")
+            return
+        p.drawImage(QtCore.QPointF(self.map[0], self.map[1]), self.qimg)
+        rects = list(self.marks)
+        if self.band is not None:
+            rects.append((*self.band, QtGui.QColor("#00e5ff")))
+        for x0, y0, x1, y1, color in rects:
+            pen = QtGui.QPen(color, 2)
+            pen.setCosmetic(True)
+            p.setPen(pen)
+            a, b = self.to_screen(x0, y0), self.to_screen(x1, y1)
+            p.drawRect(QtCore.QRectF(QtCore.QPointF(*a), QtCore.QPointF(*b)))
+        if self.zoom > 1.0:
+            p.setPen(QtCore.Qt.yellow)
+            p.drawText(8, 18, f"zoom {self.zoom:.1f}×  (double-click: fit)")
+
+    def wheelEvent(self, e):
+        if self.map is None:
+            return
+        new = min(max(self.zoom * 1.25 ** (e.angleDelta().y() / 120), 1.0), self.MAX_ZOOM)
+        ix, iy = self.to_image(e.pos())
+        s = self._fit() * new                   # keep the image point under the cursor
+        self.center = (ix - (e.pos().x() - self.width() / 2) / s,
+                       iy - (e.pos().y() - self.height() / 2) / s)
+        self.zoom = new
+        self.changed.emit()
+
+    def mousePressEvent(self, e):
+        if self.map is None or e.button() != QtCore.Qt.LeftButton:
+            return
+        if self.select_mode:
+            self.drag = ("select", self.to_image(e.pos()))
+        else:
+            W, H = self.img_size
+            self.drag = ("pan", e.pos(), self.center or (W / 2, H / 2))
+
+    def mouseMoveEvent(self, e):
+        if self.map is None:
+            return
+        self.cursor_img = self.to_image(e.pos())
+        if self.drag is None:
+            return
+        if self.drag[0] == "pan" and self.zoom > 1.0:
+            s = self._fit() * self.zoom
+            d = e.pos() - self.drag[1]
+            self.center = (self.drag[2][0] - d.x() / s, self.drag[2][1] - d.y() / s)
+            self.changed.emit()
+        elif self.drag[0] == "select":
+            (ax, ay), (bx, by) = self.drag[1], self.cursor_img
+            self.band = (min(ax, bx), min(ay, by), max(ax, bx), max(ay, by))
+            self.update()
+
+    def mouseReleaseEvent(self, e):
+        if self.drag is not None and self.drag[0] == "select" and self.band is not None:
+            W, H = self.img_size
+            x0, y0, x1, y1 = self.band
+            self.selected.emit(int(max(0, x0)), int(max(0, y0)), int(min(W, x1)), int(min(H, y1)))
+        self.drag, self.band = None, None
+        self.update()
+
+    def leaveEvent(self, e):
+        self.cursor_img = None
+
+    def mouseDoubleClickEvent(self, e):
+        self.reset_view()
 
 
 def grid_box(title):
@@ -480,13 +637,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.gps_msg = ""
         self.last_exposure = None
         self.last_saved = ""
+        self.roi_seen = 0                   # controller.roi_changes already followed
+        self.roi_pending = None             # selected/typed region not applied yet
         # last requested values (keys step from these, not from a lagging camera read-back)
         self.target = {"exposure": ctx.controller.exposure_us, "gain": ctx.controller.gain_db}
 
         self.view = ImageView()
+        self.view.changed.connect(self.on_view_changed)
+        self.view.selected.connect(self.on_roi_selected)
         panel = QtWidgets.QWidget()
         col = QtWidgets.QVBoxLayout(panel)
         col.addWidget(self.make_camera_box())
+        col.addWidget(self.make_roi_box())
         col.addWidget(self.make_trigger_box())
         col.addWidget(self.make_gps_box())
         col.addWidget(self.make_record_box())
@@ -551,6 +713,16 @@ class MainWindow(QtWidgets.QMainWindow):
             g.addWidget(spin, r, 2)
         self.cam_info = QtWidgets.QLabel()
         g.addWidget(self.cam_info, 3, 0, 1, 3)
+        # measured frame timing (from the frame-start times) and the exposure actually set
+        self.frame_labels = {}
+        for r, (key, name) in enumerate((("frame", "Frame"), ("rate", "Rate"),
+                                         ("interval", "Interval"), ("exp", "Exposure")), 4):
+            g.addWidget(QtWidgets.QLabel(name), r, 0)
+            lab = QtWidgets.QLabel("-")
+            lab.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
+            lab.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            g.addWidget(lab, r, 1, 1, 2)
+            self.frame_labels[key] = lab
 
         self.set_exposure_widgets(self.target["exposure"])
         self.set_gain_widgets(self.target["gain"])
@@ -613,6 +785,105 @@ class MainWindow(QtWidgets.QMainWindow):
         self.gamma = float(np.clip(gamma, GAMMA_MIN, GAMMA_MAX))
         self.set_gamma_widgets(self.gamma)
         self.lut = self.build_lut(self.gamma)
+        self.redraw = True
+
+    # ---- panel: sensor region ----
+    def make_roi_box(self):
+        c = self.c
+        sw, sh = c.sensor
+        box, g = grid_box("Sensor region (ROI)")
+        g.setColumnStretch(3, 1)                # x/w and y/h boxes equally wide
+        self.roi_spins = []
+        # VEYE: x and width in steps of 8, y and height in steps of 4
+        mw, mh = self.min_roi = VEYE_MIN_ROI if c.is_veye else (64, 64)
+        for i, (name, top, step, lo) in enumerate((("x", sw - mw, 8, 0), ("y", sh - mh, 4, 0),
+                                                   ("w", sw, 8, mw), ("h", sh, 4, mh))):
+            spin = QtWidgets.QSpinBox(minimum=lo, maximum=top, singleStep=step,
+                                      keyboardTracking=False)
+            spin.valueChanged.connect(lambda _: self.on_roi_typed())
+            g.addWidget(QtWidgets.QLabel(name), i // 2, 2 * (i % 2))
+            g.addWidget(spin, i // 2, 2 * (i % 2) + 1)
+            self.roi_spins.append(spin)
+        self.roi_select = QtWidgets.QPushButton("Select", checkable=True)
+        self.roi_select.setToolTip("drag a rectangle on the image")
+        self.roi_select.toggled.connect(self.on_roi_select_mode)
+        self.roi_apply = QtWidgets.QPushButton("Apply")
+        self.roi_apply.clicked.connect(self.apply_roi)
+        self.roi_full = QtWidgets.QPushButton("Full sensor")
+        self.roi_full.clicked.connect(lambda: self.apply_roi((0, 0, sw, sh)))
+        buttons = QtWidgets.QHBoxLayout()
+        for w in (self.roi_select, self.roi_apply, self.roi_full):
+            buttons.addWidget(w)
+        g.addLayout(buttons, 2, 0, 1, 4)
+        self.roi_info = QtWidgets.QLabel(wordWrap=True)
+        g.addWidget(self.roi_info, 3, 0, 1, 4)
+        self.show_roi(c.region)
+        return box
+
+    def show_roi(self, region):
+        for spin, v in zip(self.roi_spins, region):
+            self._quiet(spin, int(v))
+
+    def snap_roi(self, x, y, w, h, sensor):
+        """Round to the VEYE steps (x, w: 8; y, h: 4), at least the minimum size, keep it on
+        the sensor (a too small selection grows around its centre)."""
+        sw, sh = sensor
+        mw, mh = self.min_roi
+        cx, cy = x + w / 2, y + h / 2
+        w = max(mw, min(sw, int(round(w / 8)) * 8))
+        h = max(mh, min(sh, int(round(h / 4)) * 4))
+        x, y = cx - w / 2, cy - h / 2
+        x = max(0, min(sw - w, int(x) // 8 * 8))
+        y = max(0, min(sh - h, int(y) // 4 * 4))
+        return x, y, w, h
+
+    def on_roi_typed(self):
+        self.roi_pending = self.snap_roi(*(s.value() for s in self.roi_spins), self.c.sensor)
+        self.update_roi_marks()
+
+    def on_roi_select_mode(self, on):
+        self.view.select_mode = on
+        self.view.setCursor(QtCore.Qt.CrossCursor if on else QtCore.Qt.ArrowCursor)
+
+    def on_roi_selected(self, x0, y0, x1, y1):
+        rx, ry = self.c.region[:2]              # image pixels -> sensor pixels
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            return                              # a click, not a rectangle
+        self.roi_pending = self.snap_roi(rx + x0, ry + y0, x1 - x0, y1 - y0, self.c.sensor)
+        self.show_roi(self.roi_pending)
+        self.roi_select.setChecked(False)
+        self.update_roi_marks()
+
+    def update_roi_marks(self):
+        """Pending region (yellow) on the image, in image pixels of the current region."""
+        marks = []
+        if self.roi_pending is not None and tuple(self.roi_pending) != tuple(self.c.region):
+            rx, ry = self.c.region[:2]
+            x, y, w, h = self.roi_pending
+            marks.append((x - rx, y - ry, x - rx + w, y - ry + h, QtGui.QColor("#ffd600")))
+        self.view.marks = marks
+        self.view.update()
+
+    def apply_roi(self, region=None):
+        region = self.snap_roi(*(region or (s.value() for s in self.roi_spins)), self.c.sensor)
+        if tuple(region) == tuple(self.c.region):
+            return
+        self.roi_pending = region
+        self.roi_info.setText(f"applying {region[2]}x{region[3]} at ({region[0]}, {region[1]})...")
+        self.c.controller.request("roi", region)
+
+    def after_roi_change(self):
+        c = self.c
+        self.setWindowTitle(f"{c.camera.get_vendor_name()} {c.camera.get_model_name()}"
+                            f" - {c.width}x{c.height} {c.pixel_format}")
+        self.show_roi(c.region)
+        self.roi_pending = None
+        self.update_roi_marks()
+        self.img = None                         # old size; wait for a new frame
+        self.last_exposure = None               # new frame period -> new pulse-to-frame lag
+
+    # ---- view ----
+    def on_view_changed(self):
         self.redraw = True
 
     # ---- panel: trigger ----
@@ -829,30 +1100,30 @@ class MainWindow(QtWidgets.QMainWindow):
     # ---- timers ----
     def on_frame_timer(self):
         c = self.c
-        item = c.grabber.take()
-        if item is not None:
-            buf, self.frame_id, _ = item
-            try:
-                if c.recorder.state == "recording":
-                    if c.recorder.latest is not None:     # already unpacked by the recorder
-                        self.img, c.recorder.latest = c.recorder.latest, None
-                else:
-                    self.img = c.decode(buf)    # copies the data out of the buffer
-            finally:
-                c.stream.push_buffer(buf)
-            self.redraw = True
+        if not c.stream_lock.acquire(blocking=False):
+            return                              # the stream is being replaced (new ROI)
+        try:
+            item = c.grabber.take()
+            if item is not None:
+                buf, self.frame_id, _ = item
+                try:
+                    if c.recorder.state == "recording":
+                        if c.recorder.latest is not None:     # already unpacked by the recorder
+                            self.img, c.recorder.latest = c.recorder.latest, None
+                    else:
+                        self.img = c.decode(buf)    # copies the data out of the buffer
+                finally:
+                    c.stream.push_buffer(buf)
+                self.redraw = True
+        finally:
+            c.stream_lock.release()
         if self.img is None or not self.redraw:
             return
         self.redraw = False
         img = self.img
-        # Order: debayer (needs full res) -> downscale -> gamma LUT
+        # Order: debayer (needs full res) -> crop + scale to the view -> gamma LUT
         frame = cv2.cvtColor(img, c.decode.bayer_code) if c.decode.bayer_code is not None else img
-        h, w = frame.shape[:2]
-        s = self.view.fit_scale(w, h)
-        if s < 1.0:
-            frame = cv2.resize(frame, (max(1, int(w * s)), max(1, int(h * s))),
-                               interpolation=cv2.INTER_AREA)
-        self.view.show_frame(np.take(self.lut, frame, mode="clip"))
+        self.view.render(frame, self.lut)
         self.disp_n += 1
 
     def on_status_timer(self):
@@ -876,6 +1147,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if dt >= 1.0:
             self.disp_fps, self.disp_t0, self.disp_n = self.disp_n / dt, now, 0
 
+        if c.controller.roi_changes != self.roi_seen:
+            self.roi_seen = c.controller.roi_changes
+            self.after_roi_change()
+
         # exposure changed -> new frame period -> new pulse-to-frame lag
         stamper = c.grabber.stamper
         if stamper is not None and c.controller.exposure_us != self.last_exposure:
@@ -886,6 +1161,7 @@ class MainWindow(QtWidgets.QMainWindow):
         peak = int(self.img.max()) if self.img is not None else 0
         self.cam_info.setText(f"{c.width}x{c.height} {c.pixel_format}   "
                               f"peak {peak}/{c.decode.max_value}")
+        self.update_frame_info(mode)
 
         # ---- trigger ----
         busy = rec.state != "idle"
@@ -937,6 +1213,16 @@ class MainWindow(QtWidgets.QMainWindow):
         L["lag"].setText(f"{stamper.last_lag_ns / 1e6:.1f} ms"
                          if stamper is not None and stamper.last_lag_ns is not None else "-")
 
+        # ---- region ----
+        for w in self.roi_spins + [self.roi_select, self.roi_apply, self.roi_full]:
+            w.setEnabled(not busy and not c.controller.busy)
+        x, y, w, h = c.region
+        sw, sh = c.sensor
+        if not c.controller.busy:
+            self.roi_info.setText(f"now {w}x{h} at ({x}, {y})"
+                                  + ("" if (w, h) != (sw, sh) else " - full sensor")
+                                  + ("<br>locked while recording" if busy else ""))
+
         # ---- recording ----
         for w in self.rec_widgets:
             w.setEnabled(not busy)
@@ -971,7 +1257,43 @@ class MainWindow(QtWidgets.QMainWindow):
             f"exp {c.controller.exposure_us / 1000:.3f} ms  gain {c.controller.gain_db:.1f} dB  "
             f"cam {g.cam_fps:.1f} fps  view {self.disp_fps:.1f} fps  lost {g.dropped}  "
             f"bad {sum(g.bad.values())}  restarts {c.controller.restarts}  "
-            f"frame {self.frame_id}{trig}")
+            f"frame {self.frame_id}{trig}" + self.cursor_text())
+
+    def cursor_text(self):
+        """Sensor position and raw value under the mouse."""
+        p, img = self.view.cursor_img, self.img
+        if p is None or img is None:
+            return ""
+        ix, iy = int(p[0]), int(p[1])
+        if not (0 <= ix < img.shape[1] and 0 <= iy < img.shape[0]):
+            return ""
+        v = img[iy, ix]
+        rx, ry = self.c.region[:2]
+        return f"   ({rx + ix}, {ry + iy}) = {v if np.ndim(v) == 0 else tuple(v)}"
+
+    def update_frame_info(self, mode):
+        """Frame number, measured rate and spacing of the last ~200 frames, actual exposure."""
+        c, g, F = self.c, self.c.grabber, self.frame_labels
+        F["frame"].setText(f"#{self.frame_id if self.frame_id is not None else '-'}"
+                           f"   lost {g.dropped + g.missed}")
+        iv = np.array(g.intervals, dtype=np.float64) / 1e6     # ms
+        if len(iv) >= 2:
+            F["rate"].setText(f"{1000 / iv.mean():.3f} fps   ({len(iv) + 1} frames)")
+            F["interval"].setText(f"{iv.mean():.3f} ms  ±{iv.std():.3f}  "
+                                  f"{iv.min():.2f}..{iv.max():.2f}")
+        else:
+            F["rate"].setText(f"{g.cam_fps:.2f} fps")
+            F["interval"].setText("-")
+        exp = c.controller.exposure_us / 1000
+        text = f"{exp:.3f} ms"
+        if abs(c.controller.exposure_us - self.target["exposure"]) > 1:
+            text += f"  (asked {self.target['exposure'] / 1000:.3f})"
+        if c.is_veye and mode == "free":
+            text += f"  period {c.camera.frame_period_ns() / 1e6:.3f}"
+        F["exp"].setText(text)
+        F["exp"].setToolTip("exposure read back from the camera"
+                            + ("; period: frame period the camera is set to (free run)"
+                               if c.is_veye else ""))
 
     def closeEvent(self, event):
         self.frame_timer.stop()
@@ -1147,10 +1469,50 @@ def main(argv=None):
                 stream.push_buffer(Aravis.Buffer.new_allocate(payload_size))
             success = Aravis.BufferStatus.SUCCESS
 
-        controller = Controller(camera, apply_trigger)
+        stream_lock = threading.Lock()      # held while the stream is replaced
+
+        def change_roi(region):
+            """New sensor region (x, y, w, h): stop, rebuild the stream, restart. The GUI
+            locks this while recording, so the recorder is idle and its queue empty."""
+            nonlocal stream, width, height
+
+            def rebuild(reg):
+                nonlocal stream
+                if stream is not None:
+                    camera.stop_acquisition()
+                    if is_veye:
+                        stream.close()
+                stream = ctx.stream = grabber.stream = None
+                camera.set_region(*reg)
+                if is_veye:
+                    stream = camera.create_stream(args.buffers)
+                else:
+                    stream = camera.create_stream(None, None)
+                    payload = camera.get_payload()
+                    for _ in range(args.buffers):
+                        stream.push_buffer(Aravis.Buffer.new_allocate(payload))
+                camera.start_acquisition()
+
+            old = ctx.region
+            with stream_lock:
+                grabber.pause()
+                grabber.take()              # a buffer of the old stream goes with it
+                try:
+                    rebuild(region)
+                except Exception as e:
+                    print(f"Region {region} failed ({e}); back to {old}")
+                    rebuild(old)
+                ctx.region = tuple(camera.get_region())
+                width, height = ctx.region[2:]
+                ctx.stream, ctx.width, ctx.height = stream, width, height
+                recorder.width, recorder.height = width, height
+                grabber.resume(stream)
+            print(f"Region: {width}x{height} at ({ctx.region[0]}, {ctx.region[1]})")
+
+        controller = Controller(camera, apply_trigger, change_roi)
         controller.start()
         recorder = Recorder(
-            lambda raw: decode.raw(raw, width, height), width, height,
+            lambda raw: decode.raw(raw, width, height), width, height,     # follows a new ROI
             int(decode.max_value).bit_length(), args.record_dir,
             name=camera.get_model_name().replace(" ", "_"),
             instrument=f"{camera.get_vendor_name()} {camera.get_model_name()}",
@@ -1180,7 +1542,8 @@ def main(argv=None):
                             recorder=recorder, gps=gps, compass=compass, stream=stream,
                             decode=decode, is_veye=is_veye, width=width, height=height,
                             pixel_format=pixel_format, exp_min=exp_min, exp_max=exp_max,
-                            gain_min=gain_min, gain_max=gain_max)
+                            gain_min=gain_min, gain_max=gain_max, stream_lock=stream_lock,
+                            region=tuple(camera.get_region()), sensor=(sensor_w, sensor_h))
         app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
         signal.signal(signal.SIGINT, lambda *_: app.quit())     # Ctrl+C in the terminal
         win = MainWindow(ctx)

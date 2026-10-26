@@ -247,6 +247,7 @@ class Stream:
         self.idle = set(range(req.count))   # with us, not queued and not handed out
         self.queued = set()
         self.streaming = False
+        self.closed = False
         self.completed = self.failed = self.underruns = 0
         # frame numbers keep counting across restarts (V4L2 restarts at 0 on STREAMON)
         self.next_frame_id = 0
@@ -281,6 +282,8 @@ class Stream:
 
     def push_buffer(self, buf):
         with self.lock:
+            if self.closed:                 # a buffer of a stream already replaced
+                return
             if self.streaming:
                 self._qbuf(buf.index)
             else:
@@ -327,6 +330,8 @@ class Stream:
 
     def close(self):
         self.stop()
+        with self.lock:
+            self.closed = True
         for m in self.maps:
             m.close()
         os.close(self.fd)

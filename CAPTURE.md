@@ -59,16 +59,22 @@ python3 src/pystarlight/camera.py --list                             # cameras f
 
 | panel | contents |
 |---|---|
-| **Camera** | exposure (log slider + ms box), gain, display gamma, resolution, peak value |
-| **Trigger** | **GPS trigger** checkbox (off = free run, or the `--trigger hw/sw` mode), **GPS frame rate** 30 / 20 / 10 / 8 / 6 / 4 / 2 / 1 / 0.5 fps, warnings (exposure longer than the pulse period, rate too high for the camera, no fix), missed pulses |
+| image | fit to the window; **mouse wheel** zooms around the cursor (up to 64×, pixels as blocks past 1:1), **left drag** pans, **double-click** fits again |
+| **Camera** | exposure (log slider + ms box), gain, display gamma, resolution, peak value; measured frame number, rate, interval (mean ± jitter, min..max over ~200 frames), exposure read back from the camera and, in free run, its frame period |
+| **Sensor region (ROI)** | x / y / w / h boxes, **Select** (then drag a rectangle on the image; shown in yellow until applied), **Apply**, **Full sensor**; current region |
+| **Trigger** | **GPS trigger** checkbox (off = free run, or the `--trigger hw/sw` mode), **GPS frame rate** 30 / 20 / 15 / 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1 / 0.5 fps, warnings (exposure longer than the pulse period, rate too high for the camera, no fix), missed pulses |
 | **GPS** | UTC, fix, satellites (used / tracked / in view), DOP, position, altitude, timepulse rate, exposure start of the newest frame, its trigger pulse, pulse → frame delay, rolling-shutter line time, heading if a compass is found |
 | **Recording** | folder, observer, telescope, start **Now** or **At UTC** (with "next min"), stop after N s and/or N frames; Record button (orange = armed / Cancel, red = recording / Stop), frame count, elapsed time, countdown, last file saved |
-| status bar | exposure, gain, camera and display fps, lost frames, bad buffers, restarts, frame ID, trigger count / lost |
+| status bar | exposure, gain, camera and display fps, lost frames, bad buffers, restarts, frame ID, trigger count / lost, sensor position and raw value under the mouse |
 
 Keys: `e/E` exposure, `g/G` gain, `d/D` gamma, `r` record / stop, `t` software trigger (in `sw`
 mode), `q` quit.
 
-- The trigger controls are locked while a recording is armed or running.
+- The trigger and ROI controls are locked while a recording is armed or running.
+- Applying a ROI stops the camera, rebuilds the stream (media pipeline, buffers) and restarts it,
+  in about a second. If the new region fails, the previous one is restored.
+- Regions are rounded to the VEYE steps (x, w: 8; y, h: 4). A selection smaller than the minimum
+  grows around its centre.
 - Switching between GPS and free run restarts the camera's acquisition.
 - On exit, the GPS goes back to its default 1 Hz PPS.
 
@@ -180,6 +186,9 @@ every other pulse once that's exceeded; watch `lost` in the status bar.
 | 3088 × 2064 (full) | 30.12 ms | 10 fps works; 20 → 10 fps and 30 → 15 fps (every 2nd pulse lost) |
 | 1280 × 720 | 10.85 ms | 30 fps works with 0 lost (5 ms exposure) |
 
+- **Smallest region (VEYE IMX178, Y12): 376 × 320.** Smaller ones fail when the stream starts
+  (EPIPE from the Pi's CSI-2 pipeline). Measured: width 368 fails and 376 works; height 316 fails
+  and 320 works. A 488 × 320 region runs at 195 fps.
 - **Exposure must be shorter than the pulse period.** At 1.6 s exposure and a 1 Hz PPS, most pulses
   are lost.
 - **No GPS fix means no pulses**, and so no frames in GPS mode. The GUI shows this in red.
