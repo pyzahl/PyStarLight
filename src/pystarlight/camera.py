@@ -97,6 +97,9 @@ parser.add_argument("--trigger-edge", choices=["rising", "falling"], default="ri
                     help="active edge of the hardware trigger (default rising)")
 parser.add_argument("--trigger-delay", type=float, default=None,
                     help="delay from trigger edge to exposure start, in the camera's units (us)")
+parser.add_argument("--y-trigger", type=int, default=None, metavar="ROW",
+                    help="VEYE, GPS trigger: set the trigger delay so the timepulse (the GPS LED "
+                         "switching on) falls on this image row; follows exposure and ROI changes")
 parser.add_argument("--roi", default=None,
                     help="sensor region x,y,w,h (default: full sensor); smaller = faster "
                          "(and needed for GPS rates above ~10 fps on a full IMX178)")
@@ -131,14 +134,20 @@ VEYE_FREE_LEAD_NS = 3_330_000
 VEYE_TRIGGER_OFFSET_NS = 330_000
 VEYE_LINE_NS = {12: 14_330, 10: 12_130, 8: 11_800}      # by bit depth
 VEYE_CALIBRATED_BITS = (12,)
+# The camera's trigger-delay clock runs 0.33 % fast: real delay = register (us) x this. Measured
+# 2026-10-26 with the GPS LED (12 bit, full frame, 2 ms): its on edge one pulse later needed
+# 970.94 ms in the register for 968.10 ms real, two pulses later 1974.70 ms for 1968.10 ms;
+# its off edge (100 ms after the pulse) agreed within the 0.5 ms steps.
+VEYE_DELAY_SCALE = 0.9967
 # pixel formats per bit depth, in order of preference ({b}: Mono / Bayer base name); packed
 # 10-bit GenICam formats are left out (the decoder doesn't unpack them)
 FORMATS_BY_BITS = {12: ["{b}12p", "{b}12Packed", "{b}16", "Y12", "Y12P"],
                    10: ["{b}10", "Y10", "Y10P"],
                    8: ["{b}8", "GREY"]}
-# Smallest region the Pi's CSI-2 pipeline streams from a VEYE IMX178 (Y12): smaller ones fail at
-# STREAMON with EPIPE (measured; width 368 fails, 376 works; height 316 fails, 320 works)
-VEYE_MIN_ROI = (376, 320)
+# Smallest region the Pi's CSI-2 pipeline streams from a VEYE IMX178 (Y12): lower ones fail at
+# STREAMON with EPIPE (measured; height 316 fails, 320 works). The sensor always reads full-width
+# rows (veye_mvcam crops x in software), so any width works (8 measured; 368 failed before that)
+VEYE_MIN_ROI = (8, 320)
 
 
 def try_call(fn):
@@ -281,6 +290,26 @@ class Decoder:
 # ---------------------------------------------------------------------------
 # GPS pulse time stamps
 # ---------------------------------------------------------------------------
+def trigger_delay_ns(is_veye):
+    """The real delay from trigger pulse to exposure; the setting is in camera µs."""
+    d = (args.trigger_delay or 0) * 1000
+    return d * VEYE_DELAY_SCALE if is_veye else d
+
+
+def onset_delay_us(row, rate, period_ns, exp_ns, line_ns):
+    """VEYE trigger delay (camera µs) that centres image row `row`'s exposure on the next
+    timepulse, i.e. on the GPS LED switching on. Row y starts exposing at pulse + delay +
+    (frame period - exposure) + VEYE_TRIGGER_OFFSET_NS + y * line."""
+    lead = period_ns - exp_ns + VEYE_TRIGGER_OFFSET_NS + row * line_ns + exp_ns / 2
+    return (-lead) % (1e9 / rate) / VEYE_DELAY_SCALE / 1000
+
+
+def pulses_per_frame(rate, period_ns, delay_ns):
+    """VEYE: a trigger that comes while the camera is busy (its delay + about two frame periods
+    + 3 ms after the last trigger) is lost, so the camera takes every n-th pulse."""
+    return int((delay_ns + 2 * period_ns + LAG_EXTRA_NS) * rate / 1e9) + 1
+
+
 class PulseStamper:
     """Finds the pulse of a UTC-aligned pulse train (GPS timepulse) that triggered a frame.
 
@@ -296,6 +325,7 @@ class PulseStamper:
         self.period_ns = 1e9 / float(self.rate)
         self.lag_ns = float(lag_ns)
         self.last_lag_ns = None             # measured frame start - pulse
+        self.stride = 1                     # pulses per frame (the camera skips the others)
 
     def __call__(self, frame_ns):
         k = round((frame_ns - self.lag_ns) * self.rate / 10**9)
@@ -413,8 +443,8 @@ class Grabber(threading.Thread):
                 pulse = stamper(frame_ns)
                 if stamper is last_stamper and last_pulse is not None:
                     gap = pulse - last_pulse
-                    if gap > 1.5 * stamper.period_ns:
-                        self.missed += round(gap / stamper.period_ns) - 1
+                    if gap > (stamper.stride + 0.5) * stamper.period_ns:
+                        self.missed += round(gap / stamper.period_ns) - stamper.stride
                 last_stamper, last_pulse = stamper, pulse
             exp_ns = self.exposure_start(frame_ns, pulse)
             self.exp_ns, self.pulse_ns = exp_ns, pulse
@@ -477,6 +507,12 @@ class Controller(threading.Thread):
                     self.camera.stop_acquisition()
                     self.apply_trigger(todo["trigger"])
                     self.camera.start_acquisition()
+                if "delay" in todo:
+                    # the camera ignores the delay register while acquiring
+                    self.camera.stop_acquisition()
+                    us = todo["delay"]
+                    try_call(lambda us=us: self.camera.set_float("TriggerDelay", us))
+                    self.camera.start_acquisition()
                 if "exposure" in todo:
                     self.camera.set_exposure_time(todo["exposure"])
                     self.exposure_us = self.camera.get_exposure_time()
@@ -525,6 +561,7 @@ class ImageView(QtWidgets.QWidget):
         self.drag = None            # ("pan", start pos, start centre) / ("select", image point)
         self.band = None            # rectangle being dragged (image pixels)
         self.marks = []             # [(x0, y0, x1, y1, QColor)] to draw (image pixels)
+        self.hline = None           # (row, QColor): a dashed line across the image
         self.cursor_img = None      # image point under the mouse
 
     def reset_view(self):
@@ -587,6 +624,13 @@ class ImageView(QtWidgets.QWidget):
             p.setPen(pen)
             a, b = self.to_screen(x0, y0), self.to_screen(x1, y1)
             p.drawRect(QtCore.QRectF(QtCore.QPointF(*a), QtCore.QPointF(*b)))
+        if self.hline is not None:
+            row, color = self.hline
+            pen = QtGui.QPen(color, 1, QtCore.Qt.DashLine)
+            pen.setCosmetic(True)
+            p.setPen(pen)
+            a, b = self.to_screen(0, row + 0.5), self.to_screen(self.img_size[0], row + 0.5)
+            p.drawLine(QtCore.QPointF(*a), QtCore.QPointF(*b))
         if self.zoom > 1.0:
             p.setPen(QtCore.Qt.yellow)
             p.drawText(8, 18, f"zoom {self.zoom:.1f}×  (double-click: fit)")
@@ -986,6 +1030,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_roi_marks()
         self.lut = self.build_lut(self.gamma)   # new value range
         self.update_rows_label()
+        self.ytrig_spin.setMaximum(c.height - 1)
         self.img = None                         # old size/format; wait for a new frame
         self.last_exposure = None               # new frame period -> new pulse-to-frame lag
 
@@ -1006,13 +1051,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self.trig_button = QtWidgets.QPushButton("Software trigger (t)")
         self.trig_button.clicked.connect(self.software_trigger)
         self.trig_info = QtWidgets.QLabel(wordWrap=True)
+        self.delay_spin = QtWidgets.QDoubleSpinBox(decimals=3, maximum=10_000.0, suffix=" ms",
+                                                   keyboardTracking=False)
+        self.delay_spin.setValue((args.trigger_delay or 0) / 1000)
+        self.delay_spin.setToolTip("trigger edge to exposure start, in camera units")
+        self.ytrig_check = QtWidgets.QCheckBox("y-trigger row")
+        self.ytrig_check.setToolTip("GPS trigger: set the delay so the timepulse (the GPS LED "
+                                    "switching on) falls on this image row (orange line)")
+        self.ytrig_check.setChecked(args.y_trigger is not None)
+        self.ytrig_spin = QtWidgets.QSpinBox(maximum=self.c.height - 1, keyboardTracking=False)
+        self.ytrig_spin.setValue(self.c.height // 2 if args.y_trigger is None else args.y_trigger)
+        self.ytrig_check.setVisible(self.c.is_veye)
+        self.ytrig_spin.setVisible(self.c.is_veye)
         g.addWidget(self.gps_check, 0, 0, 1, 2)
         g.addWidget(QtWidgets.QLabel("GPS frame rate"), 1, 0)
         g.addWidget(self.rate_combo, 1, 1)
-        g.addWidget(self.trig_button, 2, 0, 1, 2)
-        g.addWidget(self.trig_info, 3, 0, 1, 2)
+        g.addWidget(QtWidgets.QLabel("Trigger delay"), 2, 0)
+        g.addWidget(self.delay_spin, 2, 1)
+        g.addWidget(self.ytrig_check, 3, 0)
+        g.addWidget(self.ytrig_spin, 3, 1)
+        g.addWidget(self.trig_button, 4, 0, 1, 2)
+        g.addWidget(self.trig_info, 5, 0, 1, 2)
         self.gps_check.toggled.connect(lambda _: self.on_trigger_mode())
         self.rate_combo.currentIndexChanged.connect(lambda _: self.on_rate())
+        self.delay_spin.valueChanged.connect(self.on_delay)
+        self.ytrig_check.toggled.connect(lambda _: self.follow_y_trigger())
+        self.ytrig_spin.valueChanged.connect(lambda _: self.follow_y_trigger())
         return box
 
     def mode(self):
@@ -1025,7 +1089,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """Frame start after the trigger pulse: VEYE frame period + ~3 ms (measured on an
         IMX178); elsewhere just a guess (exposure + 3 ms)."""
         c = self.c
-        delay = (args.trigger_delay or 0) * 1000
+        delay = trigger_delay_ns(c.is_veye)
         if c.is_veye:
             return c.camera.frame_period_ns() + LAG_EXTRA_NS + delay
         return c.controller.exposure_us * 1000 + LAG_EXTRA_NS + delay
@@ -1079,6 +1143,31 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot()
     def on_rate_later(self):
         self.on_rate()
+
+    def on_delay(self, ms):
+        args.trigger_delay = ms * 1000                  # camera units (µs)
+        if self.mode() != "free":
+            self.c.controller.request("delay", args.trigger_delay)
+        if self.mode() == "gps":
+            self.on_rate()                              # new pulse-to-frame lag
+
+    def y_trigger_delay_us(self):
+        """The delay that puts the timepulse on the y-trigger row (None: off or not GPS)."""
+        c = self.c
+        if not (c.is_veye and self.mode() == "gps" and self.ytrig_check.isChecked()):
+            return None
+        line = VEYE_LINE_NS.get(format_bits(c.pixel_format), VEYE_LINE_NS[12])
+        return onset_delay_us(self.ytrig_spin.value(), float(self.pulse_rate()),
+                              c.camera.frame_period_ns(), c.controller.exposure_us * 1000, line)
+
+    def follow_y_trigger(self, busy=False):
+        """Keeps the delay on the y-trigger row as exposure, region, depth and rate change
+        (not while recording: each change restarts the camera)."""
+        us = self.y_trigger_delay_us()
+        self.view.hline = None if us is None else (self.ytrig_spin.value(), QtGui.QColor("#ff9100"))
+        self.view.update()
+        if us is not None and not busy and abs(us - (args.trigger_delay or 0)) > 1:
+            self.delay_spin.setValue(round(us) / 1000)  # -> on_delay
 
     def software_trigger(self):
         if self.mode() == "sw":
@@ -1288,6 +1377,11 @@ class MainWindow(QtWidgets.QMainWindow):
         busy = rec.state != "idle"
         self.gps_check.setEnabled(not busy)
         self.rate_combo.setEnabled(not busy and mode == "gps" and not self.gps_busy)
+        self.follow_y_trigger(busy)
+        ytrig = self.view.hline is not None
+        self.delay_spin.setEnabled(not busy and not ytrig)
+        self.ytrig_check.setEnabled(not busy and mode == "gps")
+        self.ytrig_spin.setEnabled(not busy and mode == "gps")
         info = []
         trig = ""
         if mode != "free" and c.is_veye:
@@ -1300,10 +1394,22 @@ class MainWindow(QtWidgets.QMainWindow):
                 info.append(f"<b style='color:#d33'>Exposure {exp_ms:.0f} ms is longer than "
                             f"the pulse period {1000 / rate:.0f} ms.</b>")
             elif c.is_veye:
-                fmax = 1e9 / (2 * c.camera.frame_period_ns() + LAG_EXTRA_NS)
-                if rate > fmax:
+                delay_ns = trigger_delay_ns(True)
+                n = pulses_per_frame(rate, c.camera.frame_period_ns(), delay_ns)
+                if stamper is not None:
+                    stamper.stride = n
+                if n > 1 and delay_ns < 1e9 / rate / 2:
+                    fmax = 1e9 / (2 * c.camera.frame_period_ns() + LAG_EXTRA_NS)
                     info.append(f"<b style='color:#d33'>The camera follows only ~{fmax:.0f} fps "
                                 f"here; use a smaller ROI or a lower rate.</b>")
+                elif n > 1:
+                    info.append(f"The delay runs past the next pulse: the camera takes every "
+                                f"{n}. pulse ({rate / n:g} fps).")
+                if ytrig:
+                    line = VEYE_LINE_NS.get(format_bits(c.pixel_format), VEYE_LINE_NS[12])
+                    info.append(f"y-trigger: timepulse on row {self.ytrig_spin.value()}; the "
+                                f"edge spans ~{exp_ms * 1e6 / line:.0f} rows (shorter exposure: "
+                                f"sharper)")
             if c.gps is None:
                 info.append("No GPS: the trigger pulses must come at this rate by themselves.")
             elif not c.gps.has_fix():
@@ -1556,8 +1662,9 @@ def main(argv=None):
             if mode != "sw":
                 try_call(lambda: camera.set_string("TriggerActivation",
                                                    args.trigger_edge.capitalize() + "Edge"))
-            if args.trigger_delay is not None:
-                try_call(lambda: camera.set_float("TriggerDelay", args.trigger_delay))
+            # always: the camera keeps a delay from an earlier session, which the time
+            # stamps would not know about
+            try_call(lambda: camera.set_float("TriggerDelay", args.trigger_delay or 0))
 
         apply_trigger("free" if args.trigger == "off" else args.trigger)
 
@@ -1657,7 +1764,7 @@ def main(argv=None):
             exp_ns = controller.exposure_us * 1000
             if pulse_ns is None:
                 return int(frame_ns - exp_ns - (VEYE_FREE_LEAD_NS if is_veye else 0))
-            pulse_ns += int((args.trigger_delay or 0) * 1000)
+            pulse_ns += int(trigger_delay_ns(is_veye))
             if is_veye:
                 return int(pulse_ns + camera.frame_period_ns() - exp_ns + VEYE_TRIGGER_OFFSET_NS)
             return pulse_ns

@@ -215,11 +215,12 @@ class Buffer:
         s = self.stream
         rows = np.frombuffer(s.maps[self.index], np.uint8,
                              count=s.height * s.bytesperline).reshape(s.height, s.bytesperline)
-        return rows[:, :s.row_bytes].copy()
+        return rows[:, s.row_offset:s.row_offset + s.row_bytes].copy()
 
 
 class Stream:
-    def __init__(self, device, width, height, pixel_format, bits, n_buffers):
+    def __init__(self, device, width, height, pixel_format, bits, n_buffers, crop_x=0, crop_w=None):
+        """Captures width x height; buffers hand out columns crop_x .. crop_x + crop_w."""
         self.fd = os.open(device, os.O_RDWR | os.O_NONBLOCK)
         self.lock = threading.Lock()
 
@@ -231,8 +232,11 @@ class Stream:
         pix = fmt.fmt.pix
         if pix.pixelformat != _fourcc(pixel_format):
             raise RuntimeError(f"{device} refused pixel format {pixel_format}")
-        self.width, self.height = pix.width, pix.height
+        self.width = pix.width if crop_w is None else crop_w
+        self.height = pix.height
         self.bytesperline, self.payload = pix.bytesperline, pix.sizeimage
+        # x on multiples of 8 keeps the offset on whole packed pixel groups
+        self.row_offset = crop_x * bits // 8
         self.row_bytes = self.width * bits // 8
 
         req = _RequestBuffers(count=n_buffers, type=V4L2_BUF_TYPE_VIDEO_CAPTURE,
@@ -429,14 +433,25 @@ class Camera:
 
     def set_region(self, x, y, w, h):
         # the driver needs x and width on multiples of 8, y and height on multiples of 4
-        self.region = (x // 8 * 8, y // 4 * 4, w // 8 * 8, h // 4 * 4)
+        # shift a region that runs off the sensor back onto it (rows are cropped in software)
+        w, h = min(w, self.sensor_w) // 8 * 8, min(h, self.sensor_h) // 4 * 4
+        x, y = min(x, self.sensor_w - w) // 8 * 8, min(y, self.sensor_h - h) // 4 * 4
+        self.region = (x, y, w, h)
 
     def get_region(self):
         return self.region
 
     def _configure_pipeline(self):
+        """Sets up the sensor for full-width rows y .. y + h; create_stream crops x.
+
+        The camera firmware applies only the low 8 bits of the ROI x offset (measured on
+        an IMX178M: x=1600 reads back as 1600 but the image starts at column 64), so the
+        horizontal crop is done in software instead. The frame rate depends only on the row
+        count (full-width and 640-wide 480-row regions both allow 163 fps), so nothing is lost.
+        """
         _, mbus, _, _, csi2_out = FORMATS[self.pixel_format]
-        x, y, w, h = self.region
+        _, y, _, h = self.region
+        x, w = 0, self.sensor_w
         md = self.media_dev
         _run("media-ctl", "-d", md, "-r")
         _run("media-ctl", "-d", md, "-l", "'csi2':4 -> 'rp1-cfe-csi2_ch0':0 [1]")
@@ -605,7 +620,7 @@ class Camera:
         self._configure_pipeline()
         _, _, bits, fourcc, _ = FORMATS[self.pixel_format]
         x, y, w, h = self.region
-        self.stream = Stream(self.video_dev, w, h, fourcc, bits, n_buffers)
+        self.stream = Stream(self.video_dev, self.sensor_w, h, fourcc, bits, n_buffers, x, w)
         # max frame rate depends on the ROI and format just applied
         if self.fixed_fps is not None:
             self._write_fps(self.fixed_fps)

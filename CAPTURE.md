@@ -62,7 +62,7 @@ python3 src/pystarlight/camera.py --list                             # cameras f
 | image | fit to the window; **mouse wheel** zooms around the cursor (up to 64×, pixels as blocks past 1:1), **left drag** pans, **double-click** fits again |
 | **Camera** | exposure (log slider + ms box), gain, display gamma, resolution, peak value; measured frame number, rate, interval (mean ± jitter, min..max over ~200 frames), exposure read back from the camera and, in free run, its frame period; **Depth** 12 / 10 / 8 bit |
 | **Sensor region (ROI)** | x / y / w / h boxes, **Select** (then drag a rectangle on the image; shown in yellow until applied), **Apply**, **Full sensor**; current region |
-| **Trigger** | **GPS trigger** checkbox (off = free run, or the `--trigger hw/sw` mode), **GPS frame rate** 30 / 20 / 15 / 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1 / 0.5 fps, warnings (exposure longer than the pulse period, rate too high for the camera, no fix), missed pulses |
+| **Trigger** | **GPS trigger** checkbox (off = free run, or the `--trigger hw/sw` mode), **GPS frame rate** 30 / 20 / 15 / 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1 / 0.5 fps, **Trigger delay** (ms), **y-trigger row** (VEYE, GPS mode; see below), warnings (exposure longer than the pulse period, rate too high for the camera, pulses skipped because of the delay, no fix), missed pulses |
 | **GPS** | UTC, fix, satellites (used / tracked / in view), DOP, position, altitude, timepulse rate, exposure start of the newest frame, its trigger pulse, pulse → frame delay, rolling-shutter line time, heading if a compass is found |
 | **Recording** | folder, observer, telescope, start **Now** or **At UTC** (with "next min"), stop after N s and/or N frames; Record button (orange = armed / Cancel, red = recording / Stop), frame count, elapsed time, countdown, last file saved |
 | status bar | exposure, gain, camera and display fps, lost frames, bad buffers, restarts, frame ID, trigger count / lost, sensor position and raw value under the mouse |
@@ -79,7 +79,19 @@ mode), `q` quit.
   are restored.
 - Regions are rounded to the VEYE steps (x, w: 8; y, h: 4). A selection smaller than the minimum
   grows around its centre.
-- Switching between GPS and free run restarts the camera's acquisition.
+- Switching between GPS and free run restarts the camera's acquisition, and so does changing the
+  trigger delay: the camera ignores the delay register while it streams.
+- **y-trigger** (or `--y-trigger ROW`): the app sets the trigger delay so that the timepulse, the
+  moment the GPS LED switches on, falls on that image row, marked with a dashed orange line. It
+  keeps the delay there while exposure, region, depth or rate change (not while recording). Use
+  it to check the timing: put the LED on the line and the line should cut the LED in half.
+  - The edge is exposure / line time rows wide (2 ms: about 140 rows), so use a short exposure for
+    a sharp line.
+  - The delay is nearly a full pulse period (about 970 ms at 1 Hz, full frame). The camera is
+    still busy at the next pulse, so it takes every 2nd pulse and runs at half the rate. The
+    trigger box says so, and those skipped pulses don't count as missed.
+  - Measured (2 ms, LED at rows 151–190): target 140 → edge at row 142.8, 170 → 176.7, i.e.
+    within 0.1 ms.
 - On exit, the GPS goes back to its default 1 Hz PPS.
 
 ## How it works
@@ -87,7 +99,7 @@ mode), `q` quit.
 **Threads.**
 - **Grabber** pops frames, stamps them, and passes every wanted frame to the recorder. It keeps
   only the newest frame for display, undecoded.
-- **Controller** applies exposure, gain and trigger changes off the GUI thread. Register writes and
+- **Controller** applies exposure, gain, trigger and trigger-delay changes off the GUI thread. Register writes and
   stream restarts are slow.
 - **Recorder** decodes frames and writes the SER file.
 - **Gps** reads the serial port.
@@ -115,7 +127,10 @@ mode), `q` quit.
 - The predicted delay is refreshed whenever the exposure changes, then follows the measured delay.
 - The stamper uses the rate the **GPS confirmed** (ACK), not the one selected in the menu, so a
   rejected or still-pending change can't mis-stamp frames.
-- Missed pulses (gaps in the pulse sequence) are counted.
+- Missed pulses (gaps in the pulse sequence) are counted, except for the pulses the camera skips on
+  purpose: a trigger that comes while the camera is still busy (its delay + about two frame
+  periods + 3 ms after the last trigger) is lost, so with a long delay or a high rate it takes
+  every n-th pulse (`pulses_per_frame`).
 
 **Recording start and stop.**
 - In GPS mode, start and stop times refer to the **trigger pulse**. A recording armed for 23:40:00
@@ -130,7 +145,7 @@ that offset.
 
 | mode | row-0 exposure start | clock |
 |---|---|---|
-| GPS trigger | pulse + trigger delay + (frame period − exposure) + 0.33 ms | GPS only |
+| GPS trigger | pulse + 0.9967 × trigger delay + (frame period − exposure) + 0.33 ms | GPS only |
 | free run | frame_ns − exposure − 3.33 ms | Pi (NTP) |
 
 - `frame_ns` is the CSI-2 frame-start time that the rp1-cfe driver records in CLOCK_MONOTONIC,
@@ -141,7 +156,10 @@ that offset.
   after the trigger. Short exposures therefore start well after the pulse: about 22.5 ms after it
   at 8 ms exposure, full frame. Stamping a GPS frame at the pulse itself would be up to about 30 ms
   early.
-- The constants are `VEYE_FREE_LEAD_NS`, `VEYE_TRIGGER_OFFSET_NS` and `VEYE_LINE_NS` in
+- The trigger delay is set in camera µs, but the camera's delay clock runs 0.33 % fast: the real
+  delay is 0.9967 × the setting (`VEYE_DELAY_SCALE`). That's 3 ms at a 970 ms delay.
+- The constants are `VEYE_FREE_LEAD_NS`, `VEYE_TRIGGER_OFFSET_NS`, `VEYE_LINE_NS` and
+  `VEYE_DELAY_SCALE` in
   `camera.py`, measured on this IMX178. For other cameras (Aravis, other VEYE models) nothing is
   measured, and the code falls back to frame start − exposure, or the pulse + delay.
 
@@ -170,6 +188,28 @@ The GPS module's PPS LED was placed in the camera's view, defocused into a round
   stamped hh:mm:ss.022450 with the LED fully lit, as predicted. In free run, the LED brightness
   predicted from the stamps and the line time matched the measured brightness in 100 frames to
   0.2% on average and 6% at worst (about 0.5 ms of the 8 ms exposure).
+
+### Trigger-delay clock (2026-10-26)
+
+The LED was refocused to a small blob at rows 151–190, columns 1508–1554. GPS trigger at 1 Hz, full
+frame, 12 bit, 2 ms exposure. The delay was swept in 0.5 ms steps, with the LED's mean brightness
+recorded per step (dark 14, lit 59). Delays at which the LED is half lit:
+
+| edge | register | predicted (real time) | real / register |
+|---|---|---|---|
+| off (100 ms after the pulse) | 68.25 ms | 68.12 ms | 0.998 (± 0.15 %) |
+| on, next pulse | 970.94 ms | 968.10 ms | 0.9971 |
+| on, pulse after next | 1974.70 ms | 1968.10 ms | 0.9967 |
+
+- The error grows with the delay: +3 ms at one period, +6.6 ms at two. So it's a clock rate, not a
+  fixed offset. 0.34 % would match a 74.25 MHz clock counted as 74.0 MHz. That's a guess, not
+  checked.
+- The register takes values up to 10 s, but **only while the camera isn't streaming**. Writes
+  during acquisition are ignored (it reads back the old value). It also **keeps its value after the
+  app exits**, so `apply_trigger` always writes it (0 unless `--trigger-delay`). Otherwise a delay
+  left over from the last session would shift every exposure while the stamps assumed none.
+- With a ~970 ms delay at 1 Hz, frames come every 2 s: every other pulse is lost while the camera
+  is busy, as `pulses_per_frame` predicts.
 
 Other measurements:
 - Pulse → frame start = frame period + 3.0 ms at exposures from 1 to 200 ms (1 Hz). For example:
@@ -213,9 +253,17 @@ every other pulse once that's exceeded; watch `lost` in the status bar.
   Binning in software would gain neither speed nor signal-to-noise over summing pixels in an
   aperture afterwards. It would only shrink the files. The trigger-capability and trigger-cycle
   registers (0x30, 0x46C, 0x470) are missing in this firmware too.
-- **Smallest region (VEYE IMX178, Y12): 376 × 320.** Smaller ones fail when the stream starts
-  (EPIPE from the Pi's CSI-2 pipeline). Measured: width 368 fails and 376 works; height 316 fails
-  and 320 works. A 488 × 320 region runs at 195 fps.
+- **Smallest region (VEYE IMX178, Y12): height 320, any width.** Lower ones fail when the stream
+  starts (EPIPE from the Pi's CSI-2 pipeline): height 316 fails and 320 works. A 488 × 320 region
+  runs at 195 fps. Width used to be limited too (368 failed, 376 worked), but the sensor now
+  always reads full rows (next point), so 8 px wide works.
+- **The camera ignores the high bits of the ROI x offset** (firmware 0x01360201, measured
+  2026-10-25). The x offset register (0x820) reads back what was written, but the image starts at
+  x mod 256: 400 → 144, 800 → 32, 1600 → 64, 2400 → 96. The y offset works, and the write order
+  makes no difference. So `veye_mvcam` sets the sensor to full-width rows (y and height as
+  asked) and crops x in software (`Stream(crop_x, crop_w)`). That costs no speed: the frame rate
+  depends only on the row count (3088 × 480 and 640 × 480 both reach 163 fps). Check with frames,
+  not register read-back, before going back to a hardware x offset after a firmware update.
 - **Exposure must be shorter than the pulse period.** At 1.6 s exposure and a 1 Hz PPS, most pulses
   are lost.
 - **No GPS fix means no pulses**, and so no frames in GPS mode. The GUI shows this in red.
@@ -231,4 +279,8 @@ every other pulse once that's exceeded; watch `lost` in the status bar.
 - Wire the compass and calibrate it, if a heading is useful.
 - A `pystarlight-camera` entry point would need a `camera` extra (PyQt5, pyserial); gi/Aravis
   remain system-only.
-- The older copy in `raspberrypi_v4l2/rpi5_scripts/` doesn't have the row-0 timing corrections.
+- The older copy in `raspberrypi_v4l2/rpi5_scripts/` doesn't have the row-0 timing corrections or
+  the trigger-delay work. It does have the ROI x-crop fix in its `veye_mvcam.py`.
+- An "LED off" option for the y-trigger: the off edge needs only a short delay, so no pulses are
+  skipped. It needs the pulse length (`min(100 ms, period / 4)`, as `set_timepulse` sets it; 100
+  ms after a GPS power cycle).
