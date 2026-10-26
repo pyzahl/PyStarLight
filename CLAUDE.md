@@ -42,6 +42,7 @@ PyOTE source: `../py-ote`. PySyzygos (formerly PyOccult; sites, local Gaia extra
 | `plot.py` | publication figures (`style`, `summary`, panels) |
 | `stacking.py` | registered field stack (`stack_field`, `attach_wcs`, `save_field_stack` → FITS + annotated SVG/PNG/PDF), `remove_hot_pixels`; `self_dark` is opt-in only (fails for small drift) |
 | `viewer.py` | `pystarlight-view`: matplotlib GUI (keys, zoom views, live updates, plate solve, identification) |
+| `camera.py` | capture on the Raspberry Pi 5: PyQt5 live view + SER recorder for VEYE MV-MIPI (`veye_mvcam.py`) and Aravis cameras; GPS trigger (`gps_ublox.py`: u-blox timepulse rate, NMEA status); `ser_recorder.py` writes SER. Needs system `gi`/Aravis, PyQt5, pyserial (not in the package deps); run as a file on the Pi: `python3 src/pystarlight/camera.py` (importing the package needs scikit-image etc.) |
 
 `ocr.py`, `wcs/manual.py`, `wcs/astrometry_client.py` are kept close to PyMovie's files and
 excluded from ruff, so upstream fixes diff cleanly. Don't reformat them.
