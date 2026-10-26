@@ -60,7 +60,7 @@ python3 src/pystarlight/camera.py --list                             # cameras f
 | panel | contents |
 |---|---|
 | image | fit to the window; **mouse wheel** zooms around the cursor (up to 64×, pixels as blocks past 1:1), **left drag** pans, **double-click** fits again |
-| **Camera** | exposure (log slider + ms box), gain, display gamma, resolution, peak value; measured frame number, rate, interval (mean ± jitter, min..max over ~200 frames), exposure read back from the camera and, in free run, its frame period |
+| **Camera** | exposure (log slider + ms box), gain, display gamma, resolution, peak value; measured frame number, rate, interval (mean ± jitter, min..max over ~200 frames), exposure read back from the camera and, in free run, its frame period; **Depth** 12 / 10 / 8 bit |
 | **Sensor region (ROI)** | x / y / w / h boxes, **Select** (then drag a rectangle on the image; shown in yellow until applied), **Apply**, **Full sensor**; current region |
 | **Trigger** | **GPS trigger** checkbox (off = free run, or the `--trigger hw/sw` mode), **GPS frame rate** 30 / 20 / 15 / 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1 / 0.5 fps, warnings (exposure longer than the pulse period, rate too high for the camera, no fix), missed pulses |
 | **GPS** | UTC, fix, satellites (used / tracked / in view), DOP, position, altitude, timepulse rate, exposure start of the newest frame, its trigger pulse, pulse → frame delay, rolling-shutter line time, heading if a compass is found |
@@ -70,9 +70,13 @@ python3 src/pystarlight/camera.py --list                             # cameras f
 Keys: `e/E` exposure, `g/G` gain, `d/D` gamma, `r` record / stop, `t` software trigger (in `sw`
 mode), `q` quit.
 
-- The trigger and ROI controls are locked while a recording is armed or running.
-- Applying a ROI stops the camera, rebuilds the stream (media pipeline, buffers) and restarts it,
-  in about a second. If the new region fails, the previous one is restored.
+- The panel sits beside the image with a draggable divider. The **GPS** section folds away (click
+  its title), leaving one line: fix, satellites, UTC. The divider position and the fold are
+  remembered in `~/.config/PyStarLight/camera.conf`.
+- The trigger, ROI and depth controls are locked while a recording is armed or running.
+- Applying a ROI or a new depth stops the camera, rebuilds the stream (media pipeline, buffers)
+  and restarts it, in about a second. If the camera rejects the change, the previous settings
+  are restored.
 - Regions are rounded to the VEYE steps (x, w: 8; y, h: 4). A selection smaller than the minimum
   grows around its centre.
 - Switching between GPS and free run restarts the camera's acquisition.
@@ -186,6 +190,29 @@ every other pulse once that's exceeded; watch `lost` in the status bar.
 | 3088 × 2064 (full) | 30.12 ms | 10 fps works; 20 → 10 fps and 30 → 15 fps (every 2nd pulse lost) |
 | 1280 × 720 | 10.85 ms | 30 fps works with 0 lost (5 ms exposure) |
 
+- **Pixel depth.** Lower depth reads out faster, measured in free run at 1 ms exposure:
+
+  | depth (VEYE format) | 3088 × 2064 | 1280 × 720 |
+  |---|---|---|
+  | 12 bit (Y12) | 33.2 fps (30.12 ms) | 92.2 fps |
+  | 10 bit (Y10) | 39.2 fps (25.54 ms) | 108.7 fps |
+  | 8 bit (GREY) | 40.1 fps (24.91 ms) | 111.5 fps |
+
+  The sensor's line time sets the speed, not the amount of data. So 10 bit gets nearly all of
+  the gain while keeping 4× finer steps than 8 bit. Packed and unpacked variants (Y10P / Y10) run
+  at the same speed. The GPS trigger limit improves in the same proportion (estimated, full
+  frame: about 15.8 / 18.5 / 18.9 fps).
+- **Timing is calibrated for 12 bit only.** For 10 and 8 bit, the line time is estimated from the
+  minimum frame period (12.13 and 11.80 µs; frame period = rows × line + about 0.5 ms, which fits
+  the 12-bit numbers at full frame and at 1280 × 720). The row-0 offsets are assumed unchanged.
+  The GUI marks these as estimates. Rerun the LED measurement before relying on 10- or 8-bit
+  timestamps to better than a few ms.
+- **No hardware binning or subsampling.** The camera reports `ReadMode_Cap` (0x2C) = 1, normal
+  readout only, and `ReadOut_Mode` (0x838, newer VEYE register map: 0 normal, 1 binning, 2
+  subsampling) reads 0xFFFFFFFF, i.e. not present in this firmware (Device_Version 0x01360201).
+  Binning in software would gain neither speed nor signal-to-noise over summing pixels in an
+  aperture afterwards. It would only shrink the files. The trigger-capability and trigger-cycle
+  registers (0x30, 0x46C, 0x470) are missing in this firmware too.
 - **Smallest region (VEYE IMX178, Y12): 376 × 320.** Smaller ones fail when the stream starts
   (EPIPE from the Pi's CSI-2 pipeline). Measured: width 368 fails and 376 works; height 316 fails
   and 320 works. A 488 × 320 region runs at 195 fps.

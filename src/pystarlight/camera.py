@@ -53,9 +53,9 @@ parser.add_argument("--camera", default=None,
                          "(e.g. Basler, a2A1920, Grasshopper, 2316xxxx, VEYE, IMX178). "
                          "Default: first found")
 parser.add_argument("--list", action="store_true", help="list connected cameras and exit")
-parser.add_argument("--bits", choices=["12", "8"], default="12",
-                    help="12 = keep full 12-bit data (packed, unpacked on the host); "
-                         "8 = switch camera to 8-bit")
+parser.add_argument("--bits", choices=["12", "10", "8"], default="12",
+                    help="pixel depth (default 12); 10 and 8 bit read out faster (IMX178 full "
+                         "frame: 33.2 / 39.2 / 40.1 fps); also selectable in the GUI")
 parser.add_argument("--format", default=None,
                     help="explicit GenICam PixelFormat (e.g. Mono12p, Mono16, Mono8), or for VEYE "
                          "cameras GREY, Y10, Y12 (unpacked by the Pi) or Y10P, Y12P (packed); "
@@ -123,10 +123,19 @@ LAG_EXTRA_NS = 3_000_000    # VEYE: frame start comes frame period + this after 
 # mid-exposure, 8 and 20 ms exposures agreeing to ~0.1 ms):
 #   free run:     frame_ns - exposure - 3.33 ms   (frame_ns: CSI-2 frame start, Pi clock)
 #   GPS trigger:  pulse + trigger delay + (frame period - exposure) + 0.33 ms   (no Pi clock)
-# Row y starts y * 14.33 us after row 0 (29.6 ms over all 2064 rows).
+# Row y starts y * 14.33 us after row 0 (29.6 ms over all 2064 rows). Measured for 12 bit only;
+# 10 and 8 bit read out faster: their line times are estimated from the minimum frame periods
+# (frame period = rows x line + ~0.5 ms, which fits 12 bit at both full frame and 1280x720),
+# and the two offsets are assumed unchanged - not calibrated.
 VEYE_FREE_LEAD_NS = 3_330_000
 VEYE_TRIGGER_OFFSET_NS = 330_000
-VEYE_LINE_NS = 14_330
+VEYE_LINE_NS = {12: 14_330, 10: 12_130, 8: 11_800}      # by bit depth
+VEYE_CALIBRATED_BITS = (12,)
+# pixel formats per bit depth, in order of preference ({b}: Mono / Bayer base name); packed
+# 10-bit GenICam formats are left out (the decoder doesn't unpack them)
+FORMATS_BY_BITS = {12: ["{b}12p", "{b}12Packed", "{b}16", "Y12", "Y12P"],
+                   10: ["{b}10", "Y10", "Y10P"],
+                   8: ["{b}8", "GREY"]}
 # Smallest region the Pi's CSI-2 pipeline streams from a VEYE IMX178 (Y12): smaller ones fail at
 # STREAMON with EPIPE (measured; width 368 fails, 376 works; height 316 fails, 320 works)
 VEYE_MIN_ROI = (376, 320)
@@ -155,6 +164,22 @@ def parse_utc(text):
         if t < now:
             t += timedelta(days=1)
     return t
+
+
+def format_bits(pixel_format):
+    """Bit depth of a pixel format name (12 / 10 / 8; 16 counts as 12, the cameras' ADC)."""
+    for bits in (12, 10, 8):
+        if any(pixel_format == f.format(b=b) for f in FORMATS_BY_BITS[bits]
+               for b in ("Mono", "BayerRG", "BayerBG", "BayerGR", "BayerGB")):
+            return bits
+    return 16 if "16" in pixel_format else 8
+
+
+def format_for_bits(bits, available, current):
+    """The preferred pixel format of a bit depth that the camera offers (None: none)."""
+    base = "Bayer" + current[5:7] if current.startswith("Bayer") else "Mono"
+    return next((f.format(b=base) for f in FORMATS_BY_BITS[bits]
+                 if f.format(b=base) in available), None)
 
 
 def utc_str(ns, digits=3):
@@ -417,8 +442,9 @@ class Controller(threading.Thread):
         super().__init__(daemon=True)
         self.camera = camera
         self.apply_trigger = apply_trigger  # mode -> configures the camera (not acquiring)
-        self.change_roi = change_roi        # (x, y, w, h) -> rebuilds the stream
-        self.roi_changes = 0                # +1 per applied region (the GUI follows)
+        # reconfigure(region=(x, y, w, h) or None, pixel_format=name or None): rebuilds the stream
+        self.reconfigure = change_roi
+        self.reconfigs = 0                  # +1 per rebuilt stream (the GUI follows)
         self.cond = threading.Condition()
         self.pending = {}
         self.running = True
@@ -430,6 +456,8 @@ class Controller(threading.Thread):
 
     def request(self, key, value):
         with self.cond:
+            if key == "reconfigure" and key in self.pending:    # region and format both
+                value = {**self.pending[key], **value}
             self.pending[key] = value
             self.cond.notify()
 
@@ -441,9 +469,9 @@ class Controller(threading.Thread):
                 todo, self.pending = self.pending, {}
                 self.busy = bool(todo)
             try:
-                if "roi" in todo:
-                    self.change_roi(todo["roi"])
-                    self.roi_changes += 1
+                if "reconfigure" in todo:
+                    self.reconfigure(**todo["reconfigure"])
+                    self.reconfigs += 1
                 if "trigger" in todo:
                     print(f"Trigger mode: {todo['trigger']}")
                     self.camera.stop_acquisition()
@@ -614,6 +642,48 @@ class ImageView(QtWidgets.QWidget):
         self.reset_view()
 
 
+class CollapsibleBox(QtWidgets.QWidget):
+    """A titled panel section whose body folds away; set_summary() fills the title line
+    while it is folded (e.g. 'GPS - 3D, 9 sats')."""
+
+    toggled = QtCore.pyqtSignal(bool)                   # True: open
+
+    def __init__(self, title, opened=True):
+        super().__init__()
+        self.title = title
+        self.summary = ""
+        self.button = QtWidgets.QToolButton(checkable=True, checked=opened)
+        self.button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        self.button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.button.setStyleSheet("QToolButton { border: none; font-weight: bold; text-align: left; }")
+        self.button.toggled.connect(self._toggled)
+        self.body = QtWidgets.QFrame()
+        self.body.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        self.grid = QtWidgets.QGridLayout(self.body)
+        self.grid.setColumnStretch(1, 1)
+        col = QtWidgets.QVBoxLayout(self)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(2)
+        col.addWidget(self.button)
+        col.addWidget(self.body)
+        self._toggled(opened)
+
+    def _toggled(self, opened):
+        self.body.setVisible(opened)
+        self.button.setArrowType(QtCore.Qt.DownArrow if opened else QtCore.Qt.RightArrow)
+        self._title()
+        self.toggled.emit(opened)
+
+    def set_summary(self, text):
+        if text != self.summary:
+            self.summary = text
+            self._title()
+
+    def _title(self):
+        folded = not self.button.isChecked() and self.summary
+        self.button.setText(f"{self.title}  —  {self.summary}" if folded else self.title)
+
+
 def grid_box(title):
     box = QtWidgets.QGroupBox(title)
     grid = QtWidgets.QGridLayout(box)
@@ -642,6 +712,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # last requested values (keys step from these, not from a lagging camera read-back)
         self.target = {"exposure": ctx.controller.exposure_us, "gain": ctx.controller.gain_db}
 
+        self.settings = QtCore.QSettings("PyStarLight", "camera")     # panel layout only
         self.view = ImageView()
         self.view.changed.connect(self.on_view_changed)
         self.view.selected.connect(self.on_roi_selected)
@@ -656,19 +727,27 @@ class MainWindow(QtWidgets.QMainWindow):
         scroll = QtWidgets.QScrollArea()
         scroll.setWidget(panel)
         scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        scroll.setFixedWidth(panel.sizeHint().width() + 24)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        # the labels are still empty here, so the size hint is too small; the splitter
+        # handle lets the panel be widened (its width is remembered)
+        panel_w = max(panel.sizeHint().width() + 30, 480)
+        scroll.setMinimumWidth(min(panel_w, 360))
 
-        central = QtWidgets.QWidget()
-        row = QtWidgets.QHBoxLayout(central)
-        row.setContentsMargins(4, 4, 4, 4)
-        row.addWidget(self.view, 1)
-        row.addWidget(scroll)
-        self.setCentralWidget(central)
+        self.splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.splitter.addWidget(self.view)
+        self.splitter.addWidget(scroll)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 0)
+        self.splitter.setChildrenCollapsible(False)
+        self.setCentralWidget(self.splitter)
         self.status = QtWidgets.QLabel()
         self.statusBar().addWidget(self.status, 1)
-        self.resize(int(ctx.width * args.scale) + scroll.width() + 20,
-                    max(int(ctx.height * args.scale) + 40, 600))
+        view_w = int(ctx.width * args.scale)
+        self.resize(view_w + panel_w + 20, max(int(ctx.height * args.scale) + 40, 600))
+        self.splitter.setSizes([view_w, panel_w])
+        sizes = self.settings.value("splitter")
+        if sizes:
+            self.splitter.setSizes([int(v) for v in sizes])
 
         for key, fn in (("e", lambda: self.step_exposure(0.8)),
                         ("Shift+E", lambda: self.step_exposure(1.25)),
@@ -723,6 +802,16 @@ class MainWindow(QtWidgets.QMainWindow):
             lab.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
             g.addWidget(lab, r, 1, 1, 2)
             self.frame_labels[key] = lab
+        self.bits_combo = QtWidgets.QComboBox()
+        self.bits_choices = [b for b in (12, 10, 8)
+                             if format_for_bits(b, self.c.available, self.c.pixel_format)]
+        self.bits_combo.addItems([f"{b} bit" for b in self.bits_choices])
+        self.bits_combo.setToolTip("lower depth reads out faster (IMX178 full frame: "
+                                   "12 bit 33.2, 10 bit 39.2, 8 bit 40.1 fps)")
+        self.show_bits()
+        self.bits_combo.currentIndexChanged.connect(self.on_bits)
+        g.addWidget(QtWidgets.QLabel("Depth"), 8, 0)
+        g.addWidget(self.bits_combo, 8, 1, 1, 2)
 
         self.set_exposure_widgets(self.target["exposure"])
         self.set_gain_widgets(self.target["gain"])
@@ -786,6 +875,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.set_gamma_widgets(self.gamma)
         self.lut = self.build_lut(self.gamma)
         self.redraw = True
+
+    def show_bits(self):
+        bits = format_bits(self.c.pixel_format)
+        if bits in self.bits_choices:
+            self.bits_combo.blockSignals(True)
+            self.bits_combo.setCurrentIndex(self.bits_choices.index(bits))
+            self.bits_combo.blockSignals(False)
+
+    def on_bits(self, index):
+        c = self.c
+        fmt = format_for_bits(self.bits_choices[index], c.available, c.pixel_format)
+        if fmt and fmt != c.pixel_format:
+            self.roi_info.setText(f"switching to {fmt}...")
+            c.controller.request("reconfigure", {"pixel_format": fmt})
 
     # ---- panel: sensor region ----
     def make_roi_box(self):
@@ -870,16 +973,20 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.roi_pending = region
         self.roi_info.setText(f"applying {region[2]}x{region[3]} at ({region[0]}, {region[1]})...")
-        self.c.controller.request("roi", region)
+        self.c.controller.request("reconfigure", {"region": region})
 
-    def after_roi_change(self):
+    def after_reconfigure(self):
+        """New region and/or pixel format (or the old ones back, if they failed)."""
         c = self.c
         self.setWindowTitle(f"{c.camera.get_vendor_name()} {c.camera.get_model_name()}"
                             f" - {c.width}x{c.height} {c.pixel_format}")
         self.show_roi(c.region)
+        self.show_bits()
         self.roi_pending = None
         self.update_roi_marks()
-        self.img = None                         # old size; wait for a new frame
+        self.lut = self.build_lut(self.gamma)   # new value range
+        self.update_rows_label()
+        self.img = None                         # old size/format; wait for a new frame
         self.last_exposure = None               # new frame period -> new pulse-to-frame lag
 
     # ---- view ----
@@ -979,7 +1086,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ---- panel: GPS ----
     def make_gps_box(self):
-        box, g = grid_box("GPS")
+        opened = self.settings.value("gps_open", True, type=bool)
+        box = self.gps_box = CollapsibleBox("GPS", opened)
+        box.toggled.connect(lambda o: self.settings.setValue("gps_open", o))
+        g = box.grid
         self.gps_labels = {}
         rows = [("utc", "UTC (GPS)"), ("fix", "Fix"), ("sats", "Satellites"), ("dop", "DOP"),
                 ("pos", "Position"), ("alt", "Altitude"), ("pulse", "Timepulse"),
@@ -989,7 +1099,7 @@ class MainWindow(QtWidgets.QMainWindow):
             rows.append(("heading", "Heading"))
         for r, (key, name) in enumerate(rows):
             g.addWidget(QtWidgets.QLabel(name), r, 0)
-            lab = QtWidgets.QLabel("-")
+            lab = QtWidgets.QLabel("-", wordWrap=True)
             lab.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
             g.addWidget(lab, r, 1)
             self.gps_labels[key] = lab
@@ -997,12 +1107,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.gps_labels["utc"].setFont(mono)
         self.gps_labels["stamp"].setFont(mono)
         self.gps_labels["pulse_t"].setFont(mono)
-        if self.c.is_veye:
-            self.gps_labels["rows"].setText(
-                f"row y +y×{VEYE_LINE_NS / 1000:.2f} µs "
-                f"({self.c.height * VEYE_LINE_NS / 1e6:.1f} ms to the last row)")
-            self.gps_labels["rows"].setToolTip("SER time stamps are the exposure start of row 0")
+        self.update_rows_label()
         return box
+
+    def update_rows_label(self):
+        c = self.c
+        if not c.is_veye:
+            return
+        bits = format_bits(c.pixel_format)
+        line = VEYE_LINE_NS.get(bits, VEYE_LINE_NS[12])
+        cal = bits in VEYE_CALIBRATED_BITS
+        lab = self.gps_labels["rows"]
+        lab.setText(f"row y +y×{line / 1000:.2f} µs ({c.height * line / 1e6:.1f} ms to the last row)"
+                    + ("" if cal else " - estimate"))
+        lab.setStyleSheet("" if cal else "color: #e65100;")
+        lab.setToolTip("SER time stamps are the exposure start of row 0"
+                       + ("" if cal else f"; timing measured for 12 bit only, {bits} bit "
+                          "stamps may be off by a few ms"))
 
     # ---- panel: recording ----
     def make_record_box(self):
@@ -1147,9 +1268,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if dt >= 1.0:
             self.disp_fps, self.disp_t0, self.disp_n = self.disp_n / dt, now, 0
 
-        if c.controller.roi_changes != self.roi_seen:
-            self.roi_seen = c.controller.roi_changes
-            self.after_roi_change()
+        if c.controller.reconfigs != self.roi_seen:
+            self.roi_seen = c.controller.reconfigs
+            self.after_reconfigure()
 
         # exposure changed -> new frame period -> new pulse-to-frame lag
         stamper = c.grabber.stamper
@@ -1202,8 +1323,12 @@ class MainWindow(QtWidgets.QMainWindow):
                     L[key].setText(text)
             fix_ok = c.gps.has_fix()
             L["fix"].setStyleSheet("" if fix_ok else "color: #d33; font-weight: bold;")
+            utc = c.gps.utc.strftime("%H:%M:%S") if c.gps.utc else "-"
+            self.gps_box.set_summary(f"{L['fix'].text().split(',')[0]}, {c.gps.sats_used} sats, "
+                                     f"{utc} UTC" + ("" if fix_ok else "  NO FIX"))
         else:
             L["utc"].setText("no GPS")
+            self.gps_box.set_summary("no GPS")
         if c.compass is not None:
             h = c.compass.heading()
             L["heading"].setText(f"{h:.0f}° magnetic (uncalibrated)" if h is not None else "-")
@@ -1214,7 +1339,7 @@ class MainWindow(QtWidgets.QMainWindow):
                          if stamper is not None and stamper.last_lag_ns is not None else "-")
 
         # ---- region ----
-        for w in self.roi_spins + [self.roi_select, self.roi_apply, self.roi_full]:
+        for w in self.roi_spins + [self.roi_select, self.roi_apply, self.roi_full, self.bits_combo]:
             w.setEnabled(not busy and not c.controller.busy)
         x, y, w, h = c.region
         sw, sh = c.sensor
@@ -1296,6 +1421,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                if c.is_veye else ""))
 
     def closeEvent(self, event):
+        self.settings.setValue("splitter", self.splitter.sizes())
         self.frame_timer.stop()
         self.status_timer.stop()
         event.accept()
@@ -1376,10 +1502,9 @@ def main(argv=None):
         if args.format:
             wanted = [args.format]
         else:
+            # GREY / Y10 / Y12 (P: packed) are the names a VEYE camera offers
             base = "Bayer" + current[5:7] if current.startswith("Bayer") else "Mono"
-            # GREY / Y12 / Y12P are the names a VEYE camera offers
-            wanted = ([base + "8", "GREY"] if args.bits == "8"
-                      else [base + "12p", base + "12Packed", base + "16", "Y12", "Y12P"])
+            wanted = [f.format(b=base) for f in FORMATS_BY_BITS[int(args.bits)]]
         chosen = next((f for f in wanted if f in available), None)
         if chosen is None:
             print(f"None of {wanted} supported; keeping {current}")
@@ -1471,18 +1596,20 @@ def main(argv=None):
 
         stream_lock = threading.Lock()      # held while the stream is replaced
 
-        def change_roi(region):
-            """New sensor region (x, y, w, h): stop, rebuild the stream, restart. The GUI
-            locks this while recording, so the recorder is idle and its queue empty."""
-            nonlocal stream, width, height
+        def reconfigure(region=None, pixel_format=None):
+            """New sensor region (x, y, w, h) and/or pixel format: stop, rebuild the stream,
+            restart. The GUI locks this while recording, so the recorder is idle and its
+            queue empty."""
+            nonlocal stream, width, height, decode
 
-            def rebuild(reg):
+            def rebuild(reg, fmt):
                 nonlocal stream
                 if stream is not None:
                     camera.stop_acquisition()
                     if is_veye:
                         stream.close()
                 stream = ctx.stream = grabber.stream = None
+                camera.set_pixel_format_from_string(fmt)
                 camera.set_region(*reg)
                 if is_veye:
                     stream = camera.create_stream(args.buffers)
@@ -1493,23 +1620,27 @@ def main(argv=None):
                         stream.push_buffer(Aravis.Buffer.new_allocate(payload))
                 camera.start_acquisition()
 
-            old = ctx.region
+            old = ctx.region, ctx.pixel_format
+            new = region or ctx.region, pixel_format or ctx.pixel_format
             with stream_lock:
                 grabber.pause()
                 grabber.take()              # a buffer of the old stream goes with it
                 try:
-                    rebuild(region)
+                    rebuild(*new)
                 except Exception as e:
-                    print(f"Region {region} failed ({e}); back to {old}")
-                    rebuild(old)
+                    print(f"{new[1]} {new[0]} failed ({e}); back to {old[1]} {old[0]}")
+                    rebuild(*old)
                 ctx.region = tuple(camera.get_region())
+                ctx.pixel_format = camera.get_pixel_format_as_string()
                 width, height = ctx.region[2:]
+                decode = ctx.decode = Decoder(ctx.pixel_format)
                 ctx.stream, ctx.width, ctx.height = stream, width, height
                 recorder.width, recorder.height = width, height
+                recorder.depth = int(decode.max_value).bit_length()
                 grabber.resume(stream)
-            print(f"Region: {width}x{height} at ({ctx.region[0]}, {ctx.region[1]})")
+            print(f"Region: {width}x{height} at ({ctx.region[0]}, {ctx.region[1]}), {ctx.pixel_format}")
 
-        controller = Controller(camera, apply_trigger, change_roi)
+        controller = Controller(camera, apply_trigger, reconfigure)
         controller.start()
         recorder = Recorder(
             lambda raw: decode.raw(raw, width, height), width, height,     # follows a new ROI
@@ -1543,7 +1674,8 @@ def main(argv=None):
                             decode=decode, is_veye=is_veye, width=width, height=height,
                             pixel_format=pixel_format, exp_min=exp_min, exp_max=exp_max,
                             gain_min=gain_min, gain_max=gain_max, stream_lock=stream_lock,
-                            region=tuple(camera.get_region()), sensor=(sensor_w, sensor_h))
+                            region=tuple(camera.get_region()), sensor=(sensor_w, sensor_h),
+                            available=available)
         app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
         signal.signal(signal.SIGINT, lambda *_: app.quit())     # Ctrl+C in the terminal
         win = MainWindow(ctx)
