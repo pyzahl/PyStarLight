@@ -26,6 +26,10 @@ camera = ""
 # Personal API key from https://nova.astrometry.net (My Profile). Keep it private.
 api_key = ""
 url = "https://nova.astrometry.net/api/"
+# "auto": a local astrometry.net (solve-field + index files) when installed, else nova
+# (needs api_key); "local" or "nova" to force one. Local is offline and needs index files
+# covering quads of ~10-100 % of the field width (apt: astrometry-data-2mass-*)
+solver = "auto"
 timeout_s = 900
 auto_solve = true          # load the cached solution (<movie>.wcs.fit) on open; new solves only with key p
 stack_frames = 16          # frames median-stacked for the solve (more stars, no cosmic rays)

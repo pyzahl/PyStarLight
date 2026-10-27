@@ -22,6 +22,8 @@ PyOTE source: `../py-ote`. PySyzygos (formerly PyOccult; sites, local Gaia extra
   `PYSTARLIGHT_CONFIG=none`. When adding config keys, add them to `config_template.toml` (defaults
   merge in) and, if useful, to the private file without touching existing values.
 - Uploads to nova.astrometry.net are private (`public = false`); PyMovie's client defaulted to public.
+- Plate solving runs offline when `solve-field` + index files are installed (the Pi has 2MASS
+  4202-4219, fields ~12' to degrees; `[astrometry] solver`, CAPTURE.md "Offline plate solving").
 - Exploring ideas is welcome ("tinkering"); AI/ML denoising or centring is explicitly deferred.
 
 ## Layout (`src/pystarlight/`)
@@ -42,7 +44,7 @@ PyOTE source: `../py-ote`. PySyzygos (formerly PyOccult; sites, local Gaia extra
 | `plot.py` | publication figures (`style`, `summary`, panels) |
 | `stacking.py` | registered field stack (`stack_field`, `attach_wcs`, `save_field_stack` → FITS + annotated SVG/PNG/PDF), `remove_hot_pixels`; `self_dark` is opt-in only (fails for small drift) |
 | `viewer.py` | `pystarlight-view`: matplotlib GUI (keys, zoom views, live updates, plate solve, identification) |
-| `capture/` | capture on the Raspberry Pi 5, `uv run pystarlight-camera` (extras `camera`, `aravis`): `app.py` command line + wiring, `gui.py` Qt GUI via `qt.py` (PySide6 in the venv, PyQt5 with system Python), `cameras.py` backends (Aravis, VEYE MV-MIPI `veye_mvcam.py`) + `CameraSession`, `decode.py`, `timing.py` (GPS pulse stamping, VEYE calibration), `acquisition.py` (Grabber, Controller), `recorder.py` (thread, `repair`), `ravf_writer.py` (default, as ASTRID) / `ser_writer.py` (`.times` sidecar), `stacker.py` (live stack aligned on the stars -> FITS), `gps_ublox.py`. Plate solve of a stack: `wcs/solve_stack.py`. `capture/` itself imports nothing else from the package (only the solve does), so `python3 src/pystarlight/camera.py` still runs with the Pi's system Python. Recordings survive crashes; `--repair FILE` finishes them |
+| `capture/` | capture on the Raspberry Pi 5, `uv run pystarlight-camera` (extras `camera`, `aravis`): `app.py` command line + wiring, `gui.py` Qt GUI via `qt.py` (PySide6 in the venv, PyQt5 with system Python), `cameras.py` backends (Aravis, VEYE MV-MIPI `veye_mvcam.py`) + `CameraSession`, `decode.py`, `timing.py` (GPS pulse stamping, VEYE calibration), `acquisition.py` (Grabber, Controller), `recorder.py` (thread, `repair`), `ravf_writer.py` (default, as ASTRID) / `ser_writer.py` (`.times` sidecar), `stacker.py` (live stack aligned on the stars -> FITS), `gps_ublox.py`, `review.py` (player `pystarlight-review`: timing check, frame status, stack & solve a frame range; the camera's "Review last clip" starts it). Plate solve of a stack: `wcs/solve_stack.py`. `capture/` itself imports nothing else from the package (only the solve does), so `python3 src/pystarlight/camera.py` still runs with the Pi's system Python. Recordings survive crashes; `--repair FILE` finishes them |
 
 `ocr.py`, `wcs/manual.py`, `wcs/astrometry_client.py` are kept close to PyMovie's files and
 excluded from ruff, so upstream fixes diff cleanly. Don't reformat them.

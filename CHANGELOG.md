@@ -11,9 +11,16 @@ uses [Semantic Versioning](https://semver.org/).
   stack on nova.astrometry.net (`--focal-mm` for the scale hint): RA/Dec of the field centre,
   field size, orientation, alt/az, the brightest stars with names, circled on the stack.
   Standalone: `python -m pystarlight.wcs.solve_stack STACK.fits`.
+- Review player `pystarlight-review` (and "Review last clip" in the camera app): frames with UTC,
+  step and per-frame RAVF status, timing problems (dropped / irregular / sequence gaps) with a
+  clickable step plot, stack & plate solve of a frame range, optionally saved as the movie's
+  plate solution for pystarlight-view.
 - Capture runs in the uv venv: `uv run pystarlight-camera`, extras `camera` (PySide6, pyserial)
   and `aravis` (PyGObject); the GUI supports PySide6 and PyQt5.
 - `solve_astrometry_net(downsample=...)`.
+- Offline plate solving with a local astrometry.net (`solve-field` + index files): used
+  automatically when installed (`[astrometry] solver = "auto" | "local" | "nova"`), for the
+  viewer, `solve_movie` and the stack solve (`wcs.solve.solve_local`).
 - Capture: RAVF recording (the format ASTRID writes), now the default (`--record-format`, GUI
   "Format"); header with camera, Pi, GPS position, timing accuracy and source, rolling-shutter
   line time, ROI and trigger; per-frame exposure, GPS fix and sequence.
@@ -46,6 +53,9 @@ uses [Semantic Versioning](https://semver.org/).
   so they no longer hide "wrote ... -summary" and other messages.
 
 ### Fixed
+- Capture GUI: '&' in the "Stack & plate solve" title showed as an underline marker.
+- Star names on coarse plate scales: the SIMBAD search radius is now 2 px when that is more
+  than 10" (wide-field stacks named only 2 of 5 bright stars).
 - Capture: Ctrl+C during start-up (before the window was up) was ignored and left the app
   running.
 - Global mode failed with KeyError for apertures without a role (since the SG-fit option).

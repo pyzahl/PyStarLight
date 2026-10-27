@@ -1,5 +1,6 @@
 """WCS: two-star solution and WCS-file target placement against a known TAN projection."""
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -163,3 +164,63 @@ def test_solve_movie_hint_options(tmp_path, monkeypatch, opts, scale):
         solve.solve_movie(str(p), cfg, log=lambda m: None)
     expect = solve.plate_scale(343.0, 5.02, 320) if scale == 'site' else scale
     assert sent['scale_arcsec'] == (pytest.approx(expect) if expect else None)
+
+
+# ---------------------------------------------------------------------------- local solve-field
+
+def fake_solve_field(tmp_path, monkeypatch, wcs_file=None):
+    """A 'solve-field' on PATH that records its arguments and writes `wcs_file` to --wcs
+    (none: prints 'Did not solve'). The astrometry.net config points at one fake index file."""
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    args_file = tmp_path / 'args.txt'
+    script = bin_dir / 'solve-field'
+    script.write_text(f'''#!/bin/sh
+echo "$@" > {args_file}
+while [ $# -gt 0 ]; do [ "$1" = "--wcs" ] && out="$2"; shift; done
+''' + (f'cp {wcs_file} "$out"\necho "Field center: (RA,Dec) = (273.0, 22.0) deg."\n' if wcs_file
+       else 'echo "Did not solve (or no WCS file was written)."\n'))
+    script.chmod(0o755)
+    monkeypatch.setenv('PATH', f'{bin_dir}{os.pathsep}' + os.environ['PATH'])
+    idx = tmp_path / 'index'
+    idx.mkdir()
+    (idx / 'index-4208.fits').write_bytes(b'')
+    cfg = tmp_path / 'astrometry.cfg'
+    cfg.write_text(f'cpulimit 300\nadd_path {idx}\nautoindex\n')
+    from pystarlight.wcs import solve
+    monkeypatch.setattr(solve, 'ASTROMETRY_CFG', str(cfg))
+    return args_file
+
+
+def test_local_solver_used_and_given_hints(tmp_path, monkeypatch):
+    from astropy.io import fits
+
+    from pystarlight.wcs import solve
+    truth = tmp_path / 'truth.wcs'
+    fits.PrimaryHDU(header=make_wcs().to_header()).writeto(truth)
+    args_file = fake_solve_field(tmp_path, monkeypatch, truth)
+    assert solve.local_solver_available()
+    logs = []
+    path, job = solve.solve_astrometry_net(np.ones((48, 64), np.float32), workdir=str(tmp_path / 'w'),
+                                           scale_arcsec=2.0, scale_err_pct=10, center=(273.0, 22.0),
+                                           downsample=2, return_job=True, log=logs.append)
+    assert job is None and Path(path).exists()               # local: no astrometry.net job
+    w = load_wcs(path)
+    assert np.allclose(w.wcs.crval, [273.0, 22.0])
+    args = args_file.read_text().split()
+    assert args[args.index('--scale-low') + 1] == '1.8000'
+    assert args[args.index('--scale-high') + 1] == '2.2000'
+    assert args[args.index('--ra') + 1] == '273.000000' and args[args.index('--downsample') + 1] == '2'
+    assert any('Field center' in m for m in logs)
+
+
+def test_local_solver_failure_and_nova_choice(tmp_path, monkeypatch):
+    from pystarlight.wcs import solve
+    fake_solve_field(tmp_path, monkeypatch, None)
+    with pytest.raises(RuntimeError, match='could not solve'):
+        solve.solve_astrometry_net(np.ones((48, 64), np.float32), workdir=str(tmp_path / 'w'),
+                                   log=lambda m: None)
+    # solver = nova never runs solve-field (and needs the API key, none here)
+    with pytest.raises(ValueError, match='API key'):
+        solve.solve_astrometry_net(np.ones((48, 64), np.float32), workdir=str(tmp_path / 'w'),
+                                   solver='nova', log=lambda m: None)

@@ -20,6 +20,7 @@ The code is the `src/pystarlight/capture/` package (`uv run pystarlight-camera`)
 | `recorder.py` | Recorder thread; `repair` of interrupted recordings |
 | `stacker.py` | live stacking aligned on the stars, FITS writer |
 | `qt.py` | Qt binding: PySide6 (venv) or PyQt5 (system Python) |
+| `review.py` | review player `pystarlight-review` (needs the full package) |
 | `ravf_writer.py` | RAVF writer (as ASTRID writes), frame scan, repair |
 | `ser_writer.py` | SER v3 writer, one UTC timestamp per frame, `.times` sidecar, repair |
 | `gps_ublox.py` | u-blox GPS: NMEA status, timepulse rate (UBX-CFG-TP5), optional QMC5883L/HMC5883L compass |
@@ -174,7 +175,9 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
   and names (astrometry.net annotations, then SIMBAD), circled on the stack.
 - **Focal length** (`--focal-mm`) gives the plate-scale hint with the sensor's pixel size (IMX178:
   2.4 µm, `--pixel-um` otherwise): 24 mm -> 20.6"/px, a 17.6° x 11.8° field. 0 = blind solve.
-- The API key comes from `[astrometry] api_key` in `pystarlight.toml`, as for the viewer.
+- **Solver**: a local astrometry.net when installed (offline, see "Offline plate solving"), else
+  nova.astrometry.net with `[astrometry] api_key` from `pystarlight.toml`
+  (`[astrometry] solver = "auto" | "local" | "nova"`).
 - **Alignment** (`capture/stacker.py`): without tracking the sky drifts ~15"/s x cos(dec), i.e.
   ~0.5 px/s at 24 mm (measured: 6 px in a 12.8 s stack). Each frame is aligned to the first by
   phase correlation of "star maps" (2x downsampled, median-filtered against hot pixels, minus a
@@ -191,9 +194,67 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
   a running stack goes on in the background, and **Show stack** brings the stack and its marked
   stars back. The stack is auto-stretched (background black, brightest 0.05 % white); live
   frames are shown as they are, with the display gamma only.
-- First sky test (2026-10-26, 24 mm lens, trees in the lower half): 16 x 0.8 s at 24 dB, full
-  frame; the brightest stars come out round (FWHM ~3 px). The solve itself is untested on
-  this Pi: its config has no API key yet.
+- First sky test (2026-10-27, 24 mm lens, trees in the lower half): 4 x 0.8 s at 24 dB, full
+  frame, solved offline in 7.8 s: centre RA 22h34m27s Dec +46°12' (Lacerta), 17.34° x 11.64°,
+  20.37"/px (nominal 20.6"), north 102° from up; the five brightest stars named by SIMBAD
+  (α Lac, 1 Lac, 5 Lac, HD 211073, ο And; V 3.6-4.5).
+
+## Review player
+
+`uv run pystarlight-review FILE` (`capture/review.py`), or **Review last clip** in the camera
+app's Recording box (starts it as its own process, on the file just recorded; with the system
+Python it uses the repo's `.venv`). Reads RAVF, SER, ADV/AAV, AVI and FITS folders
+(`open_movie`, also unfinished recordings).
+
+- **Frame**: number, UTC, step to the previous frame against the typical step, the problem at
+  this frame, and for RAVF the frame header: sequence number, exposure, GPS satellites, fix,
+  leap-second status. Other formats show their per-frame status (ADV) if any.
+- **File**: size, depth, frames, duration, typical step / fps, problem count, the whole header.
+- **Step plot** below the image: the step of every frame over the file (min/max per pixel
+  column), red ticks at problems, yellow line at the current frame; click or drag to jump.
+- **Problems**: `check_timing` on the time stamps (dropped, duplicated, backwards, irregular,
+  missing) plus RAVF sequence gaps (dropped by the camera link or the recorder queue).
+  `n` / `b` jump to the next / previous one.
+- **Stack & plate solve** of a frame range (`[` / `]` set from / to at the current frame, `s`
+  starts): `LiveStacker` (aligned on the stars) -> `<movie>_f<a>-<b>_..._stack<n>.fits` next to
+  the movie -> `solve_fits` (local solver or nova) -> centre, field, alt/az, named stars circled on
+  the stack. Focal length and pixel size come from `--focal-mm` / `--pixel-um`, the camera model
+  in the file, or the config's default site. **Save as the movie's plate solution** writes
+  `<movie>.wcs.fit`, `.wcs.json` (stack_start = the range start) and `.stars.json` as
+  pystarlight-view caches them, so the viewer uses that solution.
+- Keys: Space play/pause, Left/Right, PgUp/PgDn (10), Home/End, `n`/`b`, `[`/`]`, `s`, `c` or
+  `Esc` back to the frames, `q`.
+- Times are kept as float64 Unix seconds (0.24 µs resolution), enough for review; the files keep
+  their ns stamps.
+- Tested 2026-10-27 on a 20-frame RAVF clip made from the 24 mm sky stack with one dropped and
+  one late frame: both found (frame 8: time gap + sequence +2; frame 14: +200 ms), frames 0-15
+  stacked (drift -7.0, +2.3 px; built in -6.75, +2.25) and solved offline as before; the saved
+  solution loads through `solve_movie` / `field_stars`.
+
+## Offline plate solving (local astrometry.net)
+
+Installed on the Pi (2026-10-27): `astrometry.net` 0.93 (`solve-field`) and the 2MASS index
+files 4202-4219 (`sudo apt install astrometry-data-2mass-02 ... -07 astrometry-data-2mass-08-19`,
+9.7 GB in `/usr/share/astrometry`, downloaded at install time). The index files must cover quads
+of about 10-100 % of the field width; 4202-4219 = quads 4'-2000', i.e. fields from ~12' to many
+degrees. For fields under ~10' add `astrometry-data-2mass-01` (9 GB) and `-00` (14 GB).
+Tycho-2 (`astrometry-data-tycho2-*`) starts at 22' quads and is too sparse for <= 1° fields.
+
+`solve_astrometry_net` (viewer key `p`, `solve_movie`, the stack solve) uses it automatically
+(`[astrometry] solver = "auto"`): `solve_local` runs `solve-field` with the same hints (scale
++-`scale_err_pct`, centre, downsampling) and gives the same WCS file. There is no job id, so no
+astrometry.net annotations: star names come from SIMBAD (network) only. The SIMBAD search radius
+is 10", or 2 px on coarse scales (`identify.simbad_radius`).
+
+Synthetic tests (Gaia DR3 G < 15 near Deneb, the owner's plate scales, 2026-10-27):
+
+| setup | field | with scale hint | blind | centre error |
+|---|---|---|---|---|
+| IMX178 @ 343 mm, 1.44"/px, 3088 x 2064 | 74' x 50' | 6.3 s | 59 s | 0.12" |
+| ASTRID IMX296 @ 343 mm, 2.07"/px | 50' x 38' | 6.2 s | 120 s | 0.25" |
+| ROI 1280 x 720 @ 1.44"/px | 31' x 17' | 8.0 s | 32 s | 0.04" |
+
+So give the focal length (scale hint): 5-20x faster.
 
 ## Recording formats
 

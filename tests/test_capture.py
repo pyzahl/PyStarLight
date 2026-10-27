@@ -169,3 +169,48 @@ def test_pulse_stamper_and_exposure_start():
     assert exposure_start(0, pulse, 8000, 1000, True, 30_120_000) == \
         pulse + 996_700 + 30_120_000 - 8_000_000 + 330_000
     assert exposure_start(pulse, None, 8000, None, False) == pulse - 8_000_000
+
+
+# ---------------------------------------------------------------------------
+# Review player: time stamps, problems (no GUI)
+# ---------------------------------------------------------------------------
+def test_review_timing_and_problems(tmp_path):
+    pytest.importorskip("ravf")
+    from pystarlight.capture.review import load_timing, problems
+    imgs = frames(8)
+    path = tmp_path / "gaps.ravf"
+    w = ravf_writer.RavfWriter(str(path), W, H, 12, {})
+    fid, t = 0, T0
+    for i, img in enumerate(imgs):
+        if i == 3:
+            fid, t = fid + 2, t + 2 * 100_000_000     # two frames dropped
+        if i == 6:
+            t += 40_000_000                            # late frame
+        w.write(img, t, {"frame_id": fid, "exposure_ns": 20_000_000, "satellites": 7, "fix": 3,
+                         "almanac": 0})
+        fid, t = fid + 1, t + 100_000_000
+    w.close()
+    times, info = load_timing(str(path))
+    assert len(times) == 8 and times[0] == pytest.approx(T0 / 1e9)
+    assert [d["sequence"] for d in info] == [0, 1, 2, 5, 6, 7, 8, 9]
+    assert info[0]["satellites"] == 7 and info[0]["fix"] == 3 and info[0]["exposure_ms"] == 20.0
+    flags, rep = problems(times, info)
+    assert rep.step == pytest.approx(0.1, abs=1e-6)       # float64 Unix seconds: ~0.24 us
+    assert set(flags) == {3, 6}
+    assert "2 frame(s) missing" in flags[3] and "2 frame(s) dropped" in flags[3]
+    assert flags[6] == "irregular step"
+
+
+def test_review_timing_ser(tmp_path):
+    from pystarlight.capture.review import load_timing, problems
+    path = tmp_path / "a.ser"
+    record(ser_writer.SerWriter, path, frames(5))
+    times, info = load_timing(str(path))
+    np.testing.assert_allclose(np.diff(times), 0.1, atol=1e-6)
+    assert problems(times, info)[0] == {}
+
+
+def test_review_command():
+    from pystarlight.capture.gui import review_command
+    cmd = review_command("/data/x.ravf")
+    assert cmd[1:] == ["-m", "pystarlight.capture.review", "/data/x.ravf"]

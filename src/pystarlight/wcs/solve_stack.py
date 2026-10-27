@@ -83,8 +83,9 @@ def solve_stack(image: np.ndarray, header: dict, n_stars: int = 5, workdir: str 
                 use_simbad: bool = True, site: Optional[dict] = None,
                 log: Callable[[str], None] = print,
                 cancel: Optional[threading.Event] = None) -> dict:
-    """Solve `image` on nova.astrometry.net (API key: [astrometry] in the config) and describe
-    the field; see the module doc. Blocks for up to the config's timeout: use a thread."""
+    """Solve `image` with astrometry.net (local solve-field, or nova with the API key from
+    [astrometry] in the config: see solve_astrometry_net) and describe the field; see the
+    module doc. Blocks for up to the config's timeout: use a thread."""
     from ..config import load
     from ..config import site as get_site
     cfg = load()

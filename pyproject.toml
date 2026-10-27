@@ -57,6 +57,7 @@ aravis = ["PyGObject>=3.42,<3.51"]
 pystarlight-view = "pystarlight.viewer:main"
 pystarlight-config = "pystarlight.config:main"
 pystarlight-camera = "pystarlight.capture.app:main"
+pystarlight-review = "pystarlight.capture.review:main"
 
 [dependency-groups]
 test = ["pytest>=8", "pytest-cov>=5", "matplotlib>=3.5"]

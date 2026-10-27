@@ -10,8 +10,11 @@ pixel_aspect is pixel width / height (1.0 for square pixels; analog video often 
 
 from __future__ import annotations
 
+import glob
 import math
 import os
+import shutil
+import subprocess
 import threading
 import time
 import warnings
@@ -108,8 +111,13 @@ def solve_astrometry_net(image: np.ndarray, api_key: Optional[str] = None, workd
                          scale_arcsec: Optional[float] = None, scale_err_pct: float = 20.0,
                          center: Optional[tuple[float, float]] = None, radius_deg: float = 2.0,
                          public: Optional[bool] = None, dest: Optional[str] = None,
-                         return_job: bool = False, downsample: Optional[int] = None):
-    """Upload a prepared frame to nova.astrometry.net and wait for the solution.
+                         return_job: bool = False, downsample: Optional[int] = None,
+                         solver: Optional[str] = None):
+    """Plate-solve a prepared frame with astrometry.net: uploaded to nova.astrometry.net, or with
+    a local installation (solve-field + index files, see solve_local).
+
+    solver: 'nova', 'local' or 'auto' (local when installed with index files, else nova);
+    default: [astrometry] solver in the config. Local solves give no job id (no annotations).
 
     Returns the path of the downloaded WCS FITS file (``dest``, default
     workdir/wcs-<frame_num>.fit). Blocks while polling: run it in a worker thread.
@@ -125,8 +133,13 @@ def solve_astrometry_net(image: np.ndarray, api_key: Optional[str] = None, workd
 
     from ..config import load
     acfg = load()['astrometry']
-    api_key = api_key or acfg['api_key']
     timeout = timeout or acfg['timeout_s']
+    solver = solver or acfg.get('solver', 'auto')
+    if solver == 'local' or (solver == 'auto' and local_solver_available()):
+        path = solve_local(image, workdir, frame_num, timeout, log, cancel, scale_arcsec,
+                           scale_err_pct, center, radius_deg, dest, downsample)
+        return (path, None) if return_job else path
+    api_key = api_key or acfg['api_key']
     public = acfg.get('public', False) if public is None else public
     if not api_key:
         raise ValueError('no astrometry.net API key: set [astrometry] api_key in your config')
@@ -190,6 +203,99 @@ def solve_astrometry_net(image: np.ndarray, api_key: Optional[str] = None, workd
         out.write(f.read())
     log(f'Wrote WCS solution to {dest}')
     return (dest, int(job_id)) if return_job else dest
+
+
+# ---------------------------------------------------------------------------- local astrometry.net
+
+ASTROMETRY_CFG = '/etc/astrometry.cfg'
+# solve-field output lines worth passing on to the log
+_LOCAL_LOG = ('solved with index', 'Field center', 'Field size', 'Field rotation', 'Did not solve',
+              'pixel scale')
+
+
+def local_index_dirs(cfg_path: Optional[str] = None) -> list[str]:
+    """Directories searched for index files ('add_path' lines of the astrometry.net config)."""
+    try:
+        with open(cfg_path or ASTROMETRY_CFG) as f:
+            return [ln.split()[1] for ln in f if ln.split()[:1] == ['add_path'] and len(ln.split()) > 1]
+    except OSError:
+        return []
+
+
+def local_index_files(cfg_path: Optional[str] = None) -> list[str]:
+    return sorted(f for d in local_index_dirs(cfg_path)
+                  for f in glob.glob(os.path.join(d, '**', 'index-*.fits'), recursive=True))
+
+
+def local_solver_available() -> bool:
+    """solve-field installed and at least one index file found."""
+    return shutil.which('solve-field') is not None and bool(local_index_files())
+
+
+def solve_local(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0,
+                timeout: float = 300.0, log: Callable[[str], None] = print,
+                cancel: Optional[threading.Event] = None,
+                scale_arcsec: Optional[float] = None, scale_err_pct: float = 20.0,
+                center: Optional[tuple[float, float]] = None, radius_deg: float = 2.0,
+                dest: Optional[str] = None, downsample: Optional[int] = None) -> str:
+    """Plate-solve with a local astrometry.net (Debian: apt install astrometry.net plus index
+    files, e.g. astrometry-data-2mass-02 .. -08-19 for 4' and larger quads). Offline; the
+    index files must cover quads of ~10-100 % of the field width. Returns the WCS file path."""
+    from astropy.io import fits
+    os.makedirs(workdir, exist_ok=True)
+    img_path = os.path.join(workdir, f'frame-{frame_num}-img.fit')
+    fits.writeto(img_path, np.asarray(image, dtype=np.float32), overwrite=True)
+    dest = dest or os.path.join(workdir, f'wcs-{frame_num}.fit')
+    if os.path.exists(dest):
+        os.remove(dest)                     # a stale solution must not pass for a new one
+    cmd = ['solve-field', img_path, '--overwrite', '--no-plots', '--dir', workdir,
+           '--wcs', dest, '--new-fits', 'none', '--corr', 'none', '--match', 'none',
+           '--rdls', 'none', '--index-xyls', 'none', '--temp-axy', '--crpix-center',
+           '--cpulimit', str(int(timeout))]
+    if scale_arcsec:
+        err = scale_err_pct / 100.0
+        cmd += ['--scale-units', 'arcsecperpix', '--scale-low', f'{scale_arcsec * (1 - err):.4f}',
+                '--scale-high', f'{scale_arcsec * (1 + err):.4f}']
+    if center is not None:
+        cmd += ['--ra', f'{center[0]:.6f}', '--dec', f'{center[1]:.6f}', '--radius', f'{radius_deg:g}']
+    if downsample:
+        cmd += ['--downsample', str(int(downsample))]
+    log(f'Solving locally (solve-field, {len(local_index_files())} index files)')
+    tail = []
+
+    def reader(proc):
+        for line in proc.stdout:
+            line = line.rstrip()
+            if line.strip():
+                tail[:] = (tail + [line.strip()])[-5:]
+            if any(k in line for k in _LOCAL_LOG):
+                log(line.strip())
+
+    t0 = time.monotonic()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    th = threading.Thread(target=reader, args=(proc,), daemon=True)
+    th.start()
+    try:
+        while proc.poll() is None:
+            if cancel is not None and cancel.wait(0.2):
+                raise InterruptedError('cancelled')
+            if cancel is None:
+                time.sleep(0.2)
+            if time.monotonic() - t0 > timeout + 30:
+                raise TimeoutError('local astrometry.net did not finish in time')
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        th.join(2)
+    if not os.path.exists(dest):
+        raise RuntimeError('local astrometry.net could not solve the image'
+                           + (f' ({tail[-1]})' if tail else ''))
+    log(f'Wrote WCS solution to {dest} ({time.monotonic() - t0:.1f} s)')
+    return dest
 
 
 def load_wcs(path: str):

@@ -122,8 +122,9 @@ def _annotations(job_id, annotations, log):
 
 
 def name_star(s: FieldStar, wcs, annotations: list, use_simbad: bool = True,
-              match_px: float = 5.0, log=print) -> FieldStar:
-    """Fill RA/Dec, and name/IDs/V from astrometry.net annotations and SIMBAD."""
+              match_px: float = 5.0, log=print, radius_arcsec: float = 10.0) -> FieldStar:
+    """Fill RA/Dec, and name/IDs/V from astrometry.net annotations and SIMBAD (searched within
+    radius_arcsec; wide fields need more than the default, see simbad_radius)."""
     s.ra, s.dec = (float(v) for v in wcs.all_pix2world(s.x, s.y, 0))
     near = [a for a in annotations if a['x'] is not None and a['names']
             and math.hypot(a['x'] - s.x, a['y'] - s.y) <= match_px]
@@ -135,7 +136,7 @@ def name_star(s: FieldStar, wcs, annotations: list, use_simbad: bool = True,
         s.source = 'astrometry.net'
     if use_simbad:
         try:
-            hit = simbad_lookup(s.ra, s.dec)
+            hit = simbad_lookup(s.ra, s.dec, radius_arcsec)
         except Exception as e:
             log(f'SIMBAD lookup failed: {e}')
             hit = None
@@ -149,13 +150,22 @@ def name_star(s: FieldStar, wcs, annotations: list, use_simbad: bool = True,
     return s
 
 
+def simbad_radius(wcs) -> float:
+    """SIMBAD search radius for a solution: 10", or 2 pixels on coarse scales (a 24 mm lens:
+    20"/px, where peak fit and solution are good to a pixel or so)."""
+    from astropy.wcs.utils import proj_plane_pixel_scales
+    scale = float(np.mean(proj_plane_pixel_scales(wcs.celestial))) * 3600.0
+    return max(10.0, 2.0 * scale)
+
+
 def identify(image: np.ndarray, wcs, n: int = 3, job_id: Optional[int] = None,
              annotations: Optional[list] = None, use_simbad: bool = True,
              match_px: float = 5.0, log=print) -> list[FieldStar]:
     """Brightest n stars of the (stacked) image with RA/Dec, and names where available."""
     stars = brightest_stars(image, n)
     ann = _annotations(job_id, annotations, log)
-    return [name_star(s, wcs, ann, use_simbad, match_px, log) for s in stars]
+    radius = simbad_radius(wcs)
+    return [name_star(s, wcs, ann, use_simbad, match_px, log, radius) for s in stars]
 
 
 def identify_positions(image: np.ndarray, wcs, positions: dict, search: float = 8.0,
@@ -179,7 +189,7 @@ def identify_positions(image: np.ndarray, wcs, positions: dict, search: float = 
         else:
             st = FieldStar(float(x), float(y), float('nan'), float('nan'), False)
         log(f'looking up {name}')
-        out[name] = name_star(st, wcs, ann, use_simbad, log=log)
+        out[name] = name_star(st, wcs, ann, use_simbad, log=log, radius_arcsec=simbad_radius(wcs))
     return out
 
 

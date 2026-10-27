@@ -6,11 +6,15 @@ LUT) and talks to the camera through the Controller thread; see app.py for the t
 Keys: e/E exposure -/+, g/G gain -/+, d/D gamma -/+, t software trigger, r record on/off,
 q quit.
 """
+import importlib.util
 import os
+import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -35,6 +39,16 @@ from .timing import (
 EXP_STEPS = 1000            # exposure slider resolution (log scale)
 GAIN_STEPS = 10             # gain slider: 0.1 dB per step
 GAMMA_MIN, GAMMA_MAX = 0.1, 4.0
+
+
+def review_command(path):
+    """Command line that opens `path` in the review player (pystarlight.capture.review): this
+    interpreter when the full package is importable (uv run), else the repo's .venv."""
+    module = ["-m", "pystarlight.capture.review", str(path)]
+    if importlib.util.find_spec("pystarlight") is not None:
+        return [sys.executable, *module]
+    venv = Path(__file__).resolve().parents[3] / ".venv" / "bin" / "python"
+    return [str(venv), *module] if venv.exists() else None
 
 
 class ImageView(QtWidgets.QWidget):
@@ -244,7 +258,8 @@ class CollapsibleBox(QtWidgets.QWidget):
 
     def _title(self):
         folded = not self.button.isChecked() and self.summary
-        self.button.setText(f"{self.title}  —  {self.summary}" if folded else self.title)
+        text = f"{self.title}  —  {self.summary}" if folded else self.title
+        self.button.setText(text.replace("&", "&&"))        # '&' would mark a shortcut
 
 
 def grid_box(title):
@@ -816,11 +831,27 @@ class MainWindow(QtWidgets.QMainWindow):
         g.addWidget(self.frames_spin, 7, 2, 1, 2)
         g.addWidget(self.rec_button, 8, 0, 1, 4)
         g.addWidget(self.rec_info, 9, 0, 1, 4)
+        self.review_button = QtWidgets.QPushButton("Review last clip")
+        self.review_button.setToolTip("open the last recording in the review player (time "
+                                      "stamps, frame status, stack & plate solve)")
+        self.review_button.clicked.connect(self.review_last)
+        self.review_button.setEnabled(False)
+        g.addWidget(self.review_button, 10, 0, 1, 4)
         self.rec_widgets = [self.dir_edit, browse, self.format_combo, self.observer_edit,
                             self.telescope_edit,
                             self.start_now, self.start_at, self.start_time, next_min,
                             self.dur_check, self.dur_spin, self.frames_check, self.frames_spin]
         return box
+
+    def review_last(self):
+        path = self.c.recorder.last_path
+        cmd = review_command(path) if path else None
+        if cmd is None:
+            self.last_saved = ("the review player needs the full package: run "
+                               "'uv run pystarlight-review FILE'")
+            return
+        print("Review: " + " ".join(cmd))
+        subprocess.Popen(cmd, start_new_session=True)       # own process: capture goes on
 
     def browse_dir(self):
         d = QtWidgets.QFileDialog.getExistingDirectory(self, "Recording folder",
@@ -1011,6 +1042,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # ---- recording ----
         for w in self.rec_widgets:
             w.setEnabled(not busy)
+        self.review_button.setEnabled(bool(rec.last_path) and rec.state == "idle")
         if rec.state == "recording":
             self.rec_button.setText("■  Stop recording  (r)")
             self.rec_button.setStyleSheet("background: #c62828; color: white; font-weight: bold;")
@@ -1205,7 +1237,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.solve_thread = None
 
         self.solve_cancel = cancel
-        self.solve_log = "submitting to nova.astrometry.net..."
+        self.solve_log = "plate solving..."
         self.solve_thread = threading.Thread(target=work, daemon=True)
         self.solve_thread.start()
 

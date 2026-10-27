@@ -16,6 +16,7 @@ minimal FITS writer (float32 image + header cards).
 import os
 import queue
 import threading
+import time
 from datetime import datetime, timezone
 
 import cv2
@@ -62,7 +63,9 @@ def display_stretch(img, max_value):
     as integers 0..max_value (the GUI's gamma LUT then applies)."""
     sample = img[::4, ::4]
     lo, hi = np.percentile(sample, (50, 99.95))
-    scale = max_value / max(hi - lo, 1e-6)
+    if hi - lo < 1.0:                   # flat (e.g. saturated) image: show it as it is
+        return np.clip(img, 0, max_value).astype(np.uint16)
+    scale = max_value / (hi - lo)
     return np.clip((img - lo) * scale, 0, max_value).astype(np.uint16)
 
 
@@ -212,9 +215,10 @@ class LiveStacker(threading.Thread):
             self.shift = (dx, dy)
             self.count += 1
             self.version += 1
-            if self.first_ns is None:
-                self.first_ns = exposure_ns
-            self.last_ns = exposure_ns
+            if exposure_ns is not None:         # None: the frame has no time stamp
+                if self.first_ns is None:
+                    self.first_ns = exposure_ns
+                self.last_ns = exposure_ns
             self.exposure_s += info.get("exposure_ns", 0) / 1e9
             done = self.count >= self.target
         if done:
@@ -223,12 +227,15 @@ class LiveStacker(threading.Thread):
     def _finish(self):
         img = self.preview()
         m = self.meta
-        stamp = datetime.fromtimestamp(self.first_ns / 1e9, timezone.utc).strftime("%Y%m%dT%H%M%S")
+        t0 = self.first_ns if self.first_ns is not None else time.time_ns()
+        stamp = datetime.fromtimestamp(t0 / 1e9, timezone.utc).strftime("%Y%m%dT%H%M%S")
         os.makedirs(self.out_dir, exist_ok=True)
         path = os.path.join(self.out_dir, f"{self.name}_{stamp}Z_stack{self.count}.fits")
-        hdr = [("IMAGETYP", "Light"), ("DATE-OBS", iso_utc(self.first_ns), "UTC, first frame start"),
-               ("DATE-END", iso_utc(self.last_ns), "UTC, last frame start"),
-               ("EXPTIME", round(self.exposure_s, 6), "s, sum of the frames"),
+        hdr = [("IMAGETYP", "Light")]
+        if self.first_ns is not None:
+            hdr += [("DATE-OBS", iso_utc(self.first_ns), "UTC, first frame start"),
+                    ("DATE-END", iso_utc(self.last_ns), "UTC, last frame start")]
+        hdr += [("EXPTIME", round(self.exposure_s, 6), "s, sum of the frames"),
                ("NCOMBINE", self.count, "frames averaged"),
                ("ALIGNED", bool(self.align), "frames aligned on the stars"),
                ("DRIFTX", round(self.shift[0], 2), "px, last frame vs first"),
