@@ -4,8 +4,8 @@ Frames come from the rp1-cfe V4L2 capture node (mmap streaming). Exposure, gain 
 rate go straight to the camera's own I2C registers: the driver's V4L2 exposure/gain
 controls are placeholders for libcamera and never reach the sensor.
 
-Only the subset of Aravis.Camera / Aravis.Stream / Aravis.Buffer used by camera.py is
-implemented.
+Only the subset of Aravis.Camera / Aravis.Stream / Aravis.Buffer used by the capture app is
+implemented, plus the backend extras described in cameras.py.
 """
 import ctypes
 import fcntl
@@ -349,7 +349,7 @@ def _run(*cmd):
 
 
 def find_cameras():
-    """VEYE cameras bound to the veye_mvcam driver, in camera.py's camera-list format."""
+    """VEYE cameras bound to the veye_mvcam driver, in cameras.find_cameras' list format."""
     cams = []
     for name_file in sorted(glob.glob("/sys/class/video4linux/v4l-subdev*/name")):
         with open(name_file) as f:
@@ -379,6 +379,9 @@ def find_cameras():
 
 
 class Camera:
+    kind = "veye"
+    success = SUCCESS
+
     def __init__(self, info):
         self.info = info
         self.entity = info["entity"]
@@ -471,6 +474,10 @@ class Camera:
 
     def set_gain_auto(self, mode):
         self.regs.write(REG_GAIN_MODE, int(mode))
+
+    def set_manual(self):
+        self.set_exposure_time_auto(0)
+        self.set_gain_auto(0)
 
     def _max_fps(self):
         return self.regs.read(REG_MAX_FPS) / 100.0
@@ -627,6 +634,9 @@ class Camera:
         else:
             self.set_exposure_time(self.exposure_us or self.get_exposure_time())
         return self.stream
+
+    def close_stream(self, stream):
+        stream.close()
 
     def get_payload(self):
         return self.stream.payload

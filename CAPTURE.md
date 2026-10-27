@@ -1,16 +1,28 @@
 # Capture on the Raspberry Pi 5 with GPS-timed frames
 
-`src/pystarlight/camera.py` is a live viewer and SER recorder for the Raspberry Pi 5. It drives a
+`src/pystarlight/camera.py` starts a live viewer and recorder (RAVF or SER) for the Raspberry Pi 5. It drives a
 VEYE MV-MIPI camera on a CSI port, or any Aravis (GenICam USB3/GigE) camera. A u-blox GPS can
 trigger the camera, so that each frame belongs to a known UTC instant. These notes describe the
 hardware, how to run the program, how it works, and the timing measurements behind its timestamps.
 
-| file | what |
+The code is the `src/pystarlight/capture/` package (`uv run pystarlight-camera`);
+`src/pystarlight/camera.py` launches it with the system Python.
+
+| file (`capture/`) | what |
 |---|---|
-| `camera.py` | PyQt5 GUI, threads, trigger modes, time stamping |
+| `app.py` | command line, wiring of camera, threads, GPS and GUI, shutdown |
+| `gui.py` | PyQt5 GUI: image view, control panel, status |
+| `cameras.py` | camera backends behind one interface (`AravisCamera`, VEYE) and `CameraSession`: pixel format, region, trigger, stream, reconfigure, exposure-start time stamps |
 | `veye_mvcam.py` | VEYE MV-MIPI camera through the `veye_mvcam` kernel driver: I2C registers, media pipeline, V4L2 buffers; the same interface as an Aravis camera |
+| `decode.py` | pixel formats, unpacking of packed 10/12-bit buffers |
+| `timing.py` | GPS pulse stamping (`PulseStamper`), VEYE timing constants, exposure-start formula |
+| `acquisition.py` | Grabber and Controller threads |
+| `recorder.py` | Recorder thread; `repair` of interrupted recordings |
+| `stacker.py` | live stacking aligned on the stars, FITS writer |
+| `qt.py` | Qt binding: PySide6 (venv) or PyQt5 (system Python) |
+| `ravf_writer.py` | RAVF writer (as ASTRID writes), frame scan, repair |
+| `ser_writer.py` | SER v3 writer, one UTC timestamp per frame, `.times` sidecar, repair |
 | `gps_ublox.py` | u-blox GPS: NMEA status, timepulse rate (UBX-CFG-TP5), optional QMC5883L/HMC5883L compass |
-| `ser_recorder.py` | SER v3 writer thread, one UTC timestamp per frame |
 
 ## Hardware (the owner's rig)
 
@@ -28,32 +40,44 @@ hardware, how to run the program, how it works, and the timing measurements behi
 
 ## Running it
 
-The program uses system packages that the PyStarLight venv can't provide: `gi` and Aravis are
-only available for the system Python 3.11. Install them with:
+The app runs in the repo's uv venv, like the rest of PyStarLight:
 
 ```bash
-sudo apt install python3-gi gir1.2-aravis-0.8 python3-pyqt5 python3-opencv python3-serial \
-                 python3-numpy v4l-utils
+sudo apt install libgirepository1.0-dev libcairo2-dev gir1.2-aravis-0.8 v4l-utils   # once
+uv sync --extra all --extra camera --extra aravis                                    # once
+uv run pystarlight-camera                                          # free run, full frame
+uv run pystarlight-camera --trigger gps --gps-rate 10 --exposure 20
+uv run pystarlight-camera --trigger gps --gps-rate 30 --roi 904,672,1280,720 --exposure 5
+uv run pystarlight-camera --trigger gps --record-start 23:40:00 --record-duration 60
+uv run pystarlight-camera --exposure 800 --gain 24 --focal-mm 24       # sky: stack + plate solve (s)
+uv run pystarlight-camera --list                                   # cameras found
+uv run pystarlight-camera --record-format ser                      # SER instead of RAVF
+uv run pystarlight-camera --repair ~/data/*.ravf                   # finish crashed recordings
 ```
 
-Run it as a file, not as `python -m pystarlight.camera`. Importing the package pulls in
-scikit-image, astropy and so on, which the system Python doesn't have. When run as a file, it
-imports its helper modules from the same folder.
-
-```bash
-python3 src/pystarlight/camera.py                                    # free run, full frame
-python3 src/pystarlight/camera.py --trigger gps --gps-rate 10 --exposure 20
-python3 src/pystarlight/camera.py --trigger gps --gps-rate 30 --roi 904,672,1280,720 --exposure 5
-python3 src/pystarlight/camera.py --trigger gps --record-start 23:40:00 --record-duration 60
-python3 src/pystarlight/camera.py --list                             # cameras found
-```
+- Extras: `camera` = PySide6 (Qt GUI) + pyserial (GPS) + astroquery (star names); `aravis` =
+  PyGObject for Aravis (GenICam USB3/GigE) cameras, built against the system's GObject
+  introspection (hence the apt dev packages; Aravis itself is the system library). VEYE cameras
+  need only `camera`.
+- Version pins, both because Raspberry Pi OS bookworm is older than the newest wheels:
+  - PySide6 < 6.8.1 on aarch64: newer aarch64 wheels need glibc 2.39, bookworm has 2.36.
+    PyQt5 has no aarch64 wheels at all.
+  - PyGObject < 3.51: newer needs girepository-2.0 (GLib 2.80), bookworm has 2.74.
+- The GUI works with PySide6 or PyQt5 (`capture/qt.py`; `PYSTARLIGHT_QT=pyqt5` forces PyQt5).
+  The venv's opencv-python (pulled in by `ravf`) points Qt at its own bundled Qt5 plugins, which
+  breaks PySide6; `fix_cv2_qt_env()` undoes that before the QApplication is made.
+- Without uv, the Pi's system Python still works (no plate solve: that needs the full package):
+  `sudo apt install python3-gi gir1.2-aravis-0.8 python3-pyqt5 python3-opencv python3-serial
+  python3-numpy`, then `python3 src/pystarlight/camera.py ...` (same options). Run as a file,
+  the launcher imports `capture` as a top-level package from its own folder, skipping the rest of
+  PyStarLight (scikit-image etc.).
 
 - `--exposure` is in **milliseconds**.
 - `--pps [RATE]` is an old alias for `--trigger gps --gps-rate RATE`.
 - `--gps-port none` runs without a GPS. The trigger pulses must then arrive at the selected rate on
   their own.
 - See `--help` for the rest: gain, gamma, ROI, pixel format, trigger edge and delay, observer and
-  telescope for the SER header.
+  telescope for the file header.
 
 ## The GUI
 
@@ -64,7 +88,7 @@ python3 src/pystarlight/camera.py --list                             # cameras f
 | **Sensor region (ROI)** | x / y / w / h boxes, **Select** (then drag a rectangle on the image; shown in yellow until applied), **Apply**, **Full sensor**; current region |
 | **Trigger** | **GPS trigger** checkbox (off = free run, or the `--trigger hw/sw` mode), **GPS frame rate** 30 / 20 / 15 / 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1 / 0.5 fps, **Trigger delay** (ms), **y-trigger row** (VEYE, GPS mode; see below), warnings (exposure longer than the pulse period, rate too high for the camera, pulses skipped because of the delay, no fix), missed pulses |
 | **GPS** | UTC, fix, satellites (used / tracked / in view), DOP, position, altitude, timepulse rate, exposure start of the newest frame, its trigger pulse, pulse → frame delay, rolling-shutter line time, heading if a compass is found |
-| **Recording** | folder, observer, telescope, start **Now** or **At UTC** (with "next min"), stop after N s and/or N frames; Record button (orange = armed / Cancel, red = recording / Stop), frame count, elapsed time, countdown, last file saved |
+| **Recording** | folder, format (RAVF / SER), observer, telescope, start **Now** or **At UTC** (with "next min"), stop after N s and/or N frames; Record button (orange = armed / Cancel, red = recording / Stop), frame count, elapsed time, countdown, last file saved |
 | status bar | exposure, gain, camera and display fps, lost frames, bad buffers, restarts, frame ID, trigger count / lost, sensor position and raw value under the mouse |
 
 Keys: `e/E` exposure, `g/G` gain, `d/D` gamma, `r` record / stop, `t` software trigger (in `sw`
@@ -101,7 +125,7 @@ mode), `q` quit.
   only the newest frame for display, undecoded.
 - **Controller** applies exposure, gain, trigger and trigger-delay changes off the GUI thread. Register writes and
   stream restarts are slow.
-- **Recorder** decodes frames and writes the SER file.
+- **Recorder** decodes frames and writes the RAVF or SER file.
 - **Gps** reads the serial port.
 - The Qt main thread renders: debayer, then downscale to the view size, then the gamma lookup table.
 
@@ -137,9 +161,73 @@ mode), `q` quit.
   begins with the frame of exactly that pulse. "Stop after 10 s" at 2 fps gives exactly 20 frames.
 - In free run they refer to the exposure start.
 
-## Timestamps: what the SER file holds
+## Stack & plate solve
 
-Each SER timestamp is the **exposure start of row 0**. The IMX178 has a rolling shutter, so **row y
+For finding out where the camera points: the **Stack & plate solve** panel (key `s`) averages a
+number of frames, aligned on the stars, shows the stack instead of the live frames, saves it as
+FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
+(`pystarlight.wcs.solve_stack`, which uses `solve_astrometry_net`, `orientation` and `identify`).
+
+- Result in the panel (and `<stack>.solve.json`, `<stack>.wcs.fit` next to the FITS): RA/Dec of
+  the field centre, field size, plate scale, north direction, mirroring, altitude/azimuth of the
+  centre (needs a GPS fix or a default site in the config), and the brightest stars with RA/Dec
+  and names (astrometry.net annotations, then SIMBAD), circled on the stack.
+- **Focal length** (`--focal-mm`) gives the plate-scale hint with the sensor's pixel size (IMX178:
+  2.4 µm, `--pixel-um` otherwise): 24 mm -> 20.6"/px, a 17.6° x 11.8° field. 0 = blind solve.
+- The API key comes from `[astrometry] api_key` in `pystarlight.toml`, as for the viewer.
+- **Alignment** (`capture/stacker.py`): without tracking the sky drifts ~15"/s x cos(dec), i.e.
+  ~0.5 px/s at 24 mm (measured: 6 px in a 12.8 s stack). Each frame is aligned to the first by
+  phase correlation of "star maps" (2x downsampled, median-filtered against hot pixels, minus a
+  blurred background against sky glow and tree silhouettes, clipped above the noise, Hann
+  window). Tested to ~0.3 px on synthetic fields with a static dark "tree" and hot pixels.
+  Frames whose correlation is too weak keep the last shift (counted as "not aligned").
+- The stacker takes the next frame whenever it is free, so on a fast stream it stacks every k-th
+  frame. The stack FITS header has DATE-OBS (first frame), EXPTIME (sum), NCOMBINE, DRIFTX/Y,
+  XPIXSZ, FOCALLEN, GAINDB, ROI offset and, with a GPS fix, SITELAT/SITELONG/SITEELEV.
+- Standalone: `uv run python -m pystarlight.wcs.solve_stack STACK.fits [--stars 5] [--scale S]`.
+- ROI and depth are locked while a stack runs.
+- First sky test (2026-10-26, 24 mm lens, trees in the lower half): 16 x 0.8 s at 24 dB, full
+  frame; the brightest stars come out round (FWHM ~3 px). The solve itself is untested on
+  this Pi: its config has no API key yet.
+
+## Recording formats
+
+**RAVF** (default, `--record-format ravf`) is the Raw Astro Video Format that ASTRID writes, read
+by PyMovie and PyStarLight. `ravf_writer.py` writes the same bytes as the `ravf` package (which
+isn't needed on the Pi).
+- Every frame has its own 101-byte header: a magic number, its exposure start and duration (ns
+  since 2010-01-01 UTC), GPS satellites and fix status, and a sequence number counted from the
+  camera's frame ID (gaps = dropped frames).
+- Pixels are 16-bit with their raw values (12 bit stays 0..4095); the user entry
+  `IMAGE-BIT-DEPTH` gives the depth. 8-bit data is stored as 16-bit too, because the `ravf`
+  reader rejects its own 8-bit format (and debayers its "unpacked 12-bit" one unconditionally).
+- Header metadata: camera model, vendor and serial, Pi model, gain, exposure, GPS position,
+  observer, telescope, `FRAME-TIMING-ACCURACY` (0.1 ms: GPS on the calibrated IMX178 at 12 bit,
+  5 ms: GPS otherwise, 2 ms: Pi clock), and user entries `TIMESTAMP-SOURCE`, `ROW-TIME-NS`
+  (rolling-shutter line time), `ROI-X`/`ROI-Y`, `TRIGGER`, `TRIGGER-DELAY-NS`.
+- GPS fields per frame: only set for GPS-stamped frames (fix status 3, almanac 0 while the GPS
+  has a fix); free-run frames carry fix 0, because their time comes from the Pi clock.
+
+**SER** (`--record-format ser`) keeps its timestamps in a trailer after the last frame.
+
+**Crash safety.** Both writers update the header's frame count and `fsync` to disk every
+second.
+- An interrupted RAVF file has no index (`OFFSET-INDEX` 0). Every frame carries its own magic and
+  time stamp, so the index can be rebuilt by walking the frames.
+- An interrupted SER file would lose all its timestamps, so while recording they also go to a
+  sidecar `<file>.ser.times` (the same int64 ticks), deleted when the file is closed.
+- PyStarLight's reader opens both kinds of interrupted file as they are, read-only: RAVF by
+  scanning the frames, SER with the sidecar's timestamps. Both warn.
+- `--repair FILE ...` (or `python3 -m pystarlight.capture.recorder FILE ...`) finishes them in
+  place: it drops a partial last frame, appends the RAVF index or SER trailer, fixes the header
+  and deletes the sidecar. PyMovie and other readers can then open them. Complete files are left
+  alone.
+- Tested 2026-10-26 by `kill -9` during 10 fps recordings: 80 RAVF and 77 SER frames, all
+  readable before and after repair, with timestamps.
+
+## Timestamps: what the recordings hold
+
+Each frame's timestamp is the **exposure start of row 0**. The IMX178 has a rolling shutter, so **row y
 starts y × 14.33 µs later**: 29.6 ms down to the last of 2064 rows. For an object at row y, add
 that offset.
 
@@ -160,7 +248,7 @@ that offset.
   delay is 0.9967 × the setting (`VEYE_DELAY_SCALE`). That's 3 ms at a 970 ms delay.
 - The constants are `VEYE_FREE_LEAD_NS`, `VEYE_TRIGGER_OFFSET_NS`, `VEYE_LINE_NS` and
   `VEYE_DELAY_SCALE` in
-  `camera.py`, measured on this IMX178. For other cameras (Aravis, other VEYE models) nothing is
+  `capture/timing.py`, measured on this IMX178. For other cameras (Aravis, other VEYE models) nothing is
   measured, and the code falls back to frame start − exposure, or the pulse + delay.
 
 ### How the timing was measured (2026-10-25)
@@ -274,8 +362,8 @@ every other pulse once that's exceeded; watch `lost` in the status bar.
 
 - Calibrate the row-0 constants for other ROIs and pixel formats. They were measured at full frame,
   Y12; the formulas use the current frame period, so they should carry over, but that is unchecked.
-- Write the rolling-shutter line time and the timing method into the SER file. SER has no field for
-  it; a sidecar JSON next to the file would work.
+- The rolling-shutter line time and the timing method are in the RAVF header (`ROW-TIME-NS`,
+  `TIMESTAMP-SOURCE`). SER has no field for them.
 - Wire the compass and calibrate it, if a heading is useful.
 - A `pystarlight-camera` entry point would need a `camera` extra (PyQt5, pyserial); gi/Aravis
   remain system-only.

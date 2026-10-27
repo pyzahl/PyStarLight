@@ -21,6 +21,7 @@ import glob
 import os
 import re
 import threading
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -173,14 +174,29 @@ class SerReader(MovieReader):
             self.dtype = np.dtype('<u2' if little_endian == 0 else '>u2')
         self.frame_bytes = width * height * self.planes * self.bytes_per_pixel
 
+        # Unfinished recording of PyStarLight's capture app (crash): no trailer yet, the
+        # timestamps are in the '.times' sidecar, the header count may lag behind the frames
+        sidecar = self.path + '.times'
+        self.recovered = os.path.exists(sidecar)
+        if self.recovered:
+            ticks = np.fromfile(sidecar, dtype='<i8')
+            count = min(len(ticks),
+                        (os.path.getsize(self.path) - SER_HEADER_SIZE) // self.frame_bytes)
+            self._count = count
+            self.ticks = ticks[:count]
+            n_ts = count
+            warnings.warn(f'{self.path}: unfinished recording, {count} frames with the '
+                          'timestamps of its .times sidecar', stacklevel=2)
+
         self._data = np.memmap(self.path, dtype=self.dtype, mode='r', offset=SER_HEADER_SIZE,
                                shape=(count, height, width, self.planes))
 
-        # Optional trailer: one int64 UTC tick count per frame
-        trailer_at = SER_HEADER_SIZE + count * self.frame_bytes
-        n_ts = (os.path.getsize(self.path) - trailer_at) // 8
-        self.ticks = (np.fromfile(self.path, dtype='<i8', count=n_ts, offset=trailer_at)
-                      if n_ts > 0 else np.zeros(0, dtype='<i8'))
+        if not self.recovered:
+            # Optional trailer: one int64 UTC tick count per frame
+            trailer_at = SER_HEADER_SIZE + count * self.frame_bytes
+            n_ts = (os.path.getsize(self.path) - trailer_at) // 8
+            self.ticks = (np.fromfile(self.path, dtype='<i8', count=n_ts, offset=trailer_at)
+                          if n_ts > 0 else np.zeros(0, dtype='<i8'))
 
         self.metadata = dict(
             FileID=text(0, 14), LuID=lu_id, ColorID=color_id, LittleEndian=little_endian,
@@ -310,11 +326,31 @@ class AdvReader(MovieReader):
 # --------------------------------------------------------------------------- RAVF
 
 class RavfReader(MovieReader):
+    """RAVF via the ravf package. A recording that was never finished (crash, power loss:
+    no index, OFFSET-INDEX 0) is read by rebuilding the index from the frames, without
+    changing the file (`capture.recorder.repair` finishes it in place); `recovered` is True."""
+
     def __init__(self, path: str):
         from ravf import RavfReader as _Ravf
+        from ravf.ravf_header import RavfHeader
+        from ravf.ravf_index import RavfIndex
+
+        from .capture import ravf_writer
         self.path = str(path)
         self._fh = open(self.path, 'rb')
-        self._r = _Ravf(self._fh)
+        self.recovered = not ravf_writer.is_finished(self._fh)
+        if self.recovered:
+            self._fh.seek(0)
+            self._r = _Ravf.__new__(_Ravf)
+            self._r.header = RavfHeader.deserialize(self._fh)
+            self._r.index = RavfIndex()
+            for offset, start in ravf_writer.scan_frames(self._fh):
+                self._r.index.add_frame(offset, start)
+            warnings.warn(f'{self.path}: unfinished recording, {self._r.frame_count()} '
+                          'complete frames recovered (no index)', stacklevel=2)
+        else:
+            self._fh.seek(0)
+            self._r = _Ravf(self._fh)
         self.metadata = {k: v for k, v in self._r.metadata()}
         self.timestamps = self._r.timestamps()
 

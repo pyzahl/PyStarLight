@@ -108,7 +108,7 @@ def solve_astrometry_net(image: np.ndarray, api_key: Optional[str] = None, workd
                          scale_arcsec: Optional[float] = None, scale_err_pct: float = 20.0,
                          center: Optional[tuple[float, float]] = None, radius_deg: float = 2.0,
                          public: Optional[bool] = None, dest: Optional[str] = None,
-                         return_job: bool = False):
+                         return_job: bool = False, downsample: Optional[int] = None):
     """Upload a prepared frame to nova.astrometry.net and wait for the solution.
 
     Returns the path of the downloaded WCS FITS file (``dest``, default
@@ -118,7 +118,9 @@ def solve_astrometry_net(image: np.ndarray, api_key: Optional[str] = None, workd
     scale_arcsec: expected plate scale (see plate_scale()); makes solving much faster.
     center: (ra, dec) in degrees if roughly known, searched within radius_deg.
     public: whether astrometry.net may show the image publicly (default: config, False).
-    return_job: return (path, job id); the job id gives access to astrometry.net's annotations."""
+    return_job: return (path, job id); the job id gives access to astrometry.net's annotations.
+    downsample: let astrometry.net shrink the image by this factor before finding stars
+    (large frames; the solution is still for the full image)."""
     from astropy.io import fits
 
     from ..config import load
@@ -149,6 +151,8 @@ def solve_astrometry_net(image: np.ndarray, api_key: Optional[str] = None, workd
         hints['scale_units'] = 'degwidth'
     if center is not None:
         hints.update(center_ra=center[0], center_dec=center[1], radius=radius_deg)
+    if downsample:
+        hints['downsample_factor'] = int(downsample)
     up = c.upload(img_path, **hints)
     if up is None:
         raise astrometry_client.RequestError('astrometry.net did not accept the image')

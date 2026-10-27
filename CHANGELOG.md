@@ -7,6 +7,20 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Capture: live stacking aligned on the stars (key `s`, `--stack-frames`) and plate solve of the
+  stack on nova.astrometry.net (`--focal-mm` for the scale hint): RA/Dec of the field centre,
+  field size, orientation, alt/az, the brightest stars with names, circled on the stack.
+  Standalone: `python -m pystarlight.wcs.solve_stack STACK.fits`.
+- Capture runs in the uv venv: `uv run pystarlight-camera`, extras `camera` (PySide6, pyserial)
+  and `aravis` (PyGObject); the GUI supports PySide6 and PyQt5.
+- `solve_astrometry_net(downsample=...)`.
+- Capture: RAVF recording (the format ASTRID writes), now the default (`--record-format`, GUI
+  "Format"); header with camera, Pi, GPS position, timing accuracy and source, rolling-shutter
+  line time, ROI and trigger; per-frame exposure, GPS fix and sequence.
+- Capture: recordings survive a crash or power loss. Both formats sync to disk every second;
+  SER timestamps also go to a `.times` sidecar until the file is closed. `--repair FILE ...`
+  finishes interrupted files in place. The RAVF and SER readers open unfinished recordings as
+  they are (frame scan / sidecar), with a warning.
 - Alternative peak fit for global mode (`analysis.savgol_fit`, viewer checkbox "SG fit"):
   2-D Savitzky-Golay smoothing, then an axis-aligned 2-D Gaussian fit (`fit_peak_savgol`);
   photometry circles sit on each star's fitted centre where the fit is good, else on the
@@ -15,6 +29,9 @@ uses [Semantic Versioning](https://semver.org/).
   aperture on the displayed frame, without moving apertures; shown in the zoom views and status.
 
 ### Changed
+- Capture code split into the `pystarlight.capture` package (GUI, camera backends + session,
+  decoding, timing, threads, recorder, file writers); `camera.py` is now a launcher with the same
+  command line.
 - Automatic photometry radius is `[analysis] radius_fwhm` x median FWHM (default 1.5 as
   before), so it follows the seeing; ~0.85 gives the best SNR for faint, sky-limited targets.
   Minimum radius 1.5 px (was 2.0).
@@ -29,6 +46,8 @@ uses [Semantic Versioning](https://semver.org/).
   so they no longer hide "wrote ... -summary" and other messages.
 
 ### Fixed
+- Capture: Ctrl+C during start-up (before the window was up) was ignored and left the app
+  running.
 - Global mode failed with KeyError for apertures without a role (since the SG-fit option).
 
 ## [0.1.0] - 2026-10-11

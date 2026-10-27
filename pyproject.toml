@@ -42,10 +42,21 @@ ravf = ["ravf>=1.0.1"]
 catalog = ["astroquery>=0.4.6"]
 plot = ["matplotlib>=3.5"]
 all = ["starlight-photometry[adv,ravf,catalog,plot]"]
+# capture app (pystarlight-camera, Raspberry Pi 5): Qt GUI (PySide6 has aarch64 wheels, PyQt5
+# has none) and the GPS serial port. VEYE cameras need nothing more.
+# (newer PySide6 aarch64 wheels need glibc 2.39; Raspberry Pi OS bookworm has 2.36)
+camera = ["PySide6-Essentials>=6.5,<6.8.1; platform_machine == 'aarch64'",
+          "PySide6-Essentials>=6.5; platform_machine != 'aarch64'",
+          "pyserial>=3.5", "starlight-photometry[catalog]"]
+# Aravis (GenICam USB3/GigE) cameras: PyGObject, built against the system's GObject
+# introspection (apt: libgirepository1.0-dev libcairo2-dev gir1.2-aravis-0.8); 3.51+ needs
+# girepository-2.0 (GLib 2.80), newer than Debian 12 / Raspberry Pi OS bookworm has
+aravis = ["PyGObject>=3.42,<3.51"]
 
 [project.scripts]
 pystarlight-view = "pystarlight.viewer:main"
 pystarlight-config = "pystarlight.config:main"
+pystarlight-camera = "pystarlight.capture.app:main"
 
 [dependency-groups]
 test = ["pytest>=8", "pytest-cov>=5", "matplotlib>=3.5"]

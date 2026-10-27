@@ -42,7 +42,7 @@ PyOTE source: `../py-ote`. PySyzygos (formerly PyOccult; sites, local Gaia extra
 | `plot.py` | publication figures (`style`, `summary`, panels) |
 | `stacking.py` | registered field stack (`stack_field`, `attach_wcs`, `save_field_stack` → FITS + annotated SVG/PNG/PDF), `remove_hot_pixels`; `self_dark` is opt-in only (fails for small drift) |
 | `viewer.py` | `pystarlight-view`: matplotlib GUI (keys, zoom views, live updates, plate solve, identification) |
-| `camera.py` | capture on the Raspberry Pi 5: PyQt5 live view + SER recorder for VEYE MV-MIPI (`veye_mvcam.py`) and Aravis cameras; GPS trigger (`gps_ublox.py`: u-blox timepulse rate, NMEA status); `ser_recorder.py` writes SER. Needs system `gi`/Aravis, PyQt5, pyserial (not in the package deps); run as a file on the Pi: `python3 src/pystarlight/camera.py` (importing the package needs scikit-image etc.) |
+| `capture/` | capture on the Raspberry Pi 5, `uv run pystarlight-camera` (extras `camera`, `aravis`): `app.py` command line + wiring, `gui.py` Qt GUI via `qt.py` (PySide6 in the venv, PyQt5 with system Python), `cameras.py` backends (Aravis, VEYE MV-MIPI `veye_mvcam.py`) + `CameraSession`, `decode.py`, `timing.py` (GPS pulse stamping, VEYE calibration), `acquisition.py` (Grabber, Controller), `recorder.py` (thread, `repair`), `ravf_writer.py` (default, as ASTRID) / `ser_writer.py` (`.times` sidecar), `stacker.py` (live stack aligned on the stars -> FITS), `gps_ublox.py`. Plate solve of a stack: `wcs/solve_stack.py`. `capture/` itself imports nothing else from the package (only the solve does), so `python3 src/pystarlight/camera.py` still runs with the Pi's system Python. Recordings survive crashes; `--repair FILE` finishes them |
 
 `ocr.py`, `wcs/manual.py`, `wcs/astrometry_client.py` are kept close to PyMovie's files and
 excluded from ruff, so upstream fixes diff cleanly. Don't reformat them.
@@ -54,6 +54,8 @@ uv sync --extra all                                  # repo venv (.venv, Python 
 uv run --group test pytest -q                        # current libs; PyMovie parity tests skip
 uvx ruff check                                       # lint (line length 110)
 uv run pystarlight-view OTEVideo/<run>/<run>.ravf    # viewer (owner's data)
+uv sync --extra all --extra camera --extra aravis     # on the Pi: capture app too
+uv run pystarlight-camera                            # capture app (CAPTURE.md)
 ```
 
 Parity tests against PyMovie's own code run in PyMovie's venv, with pytest/tomli on a helper
