@@ -92,7 +92,7 @@ uv run pystarlight-camera --repair ~/data/*.ravf                   # finish cras
 | status bar | exposure, gain, camera and display fps, lost frames, bad buffers, restarts, frame ID, trigger count / lost, sensor position and raw value under the mouse |
 
 Keys: `e/E` exposure, `g/G` gain, `d/D` gamma, `r` record / stop, `t` software trigger (in `sw`
-mode), `q` quit.
+mode), `s` stack, `c` or `Esc` continue the live view after a stack, `q` quit.
 
 - The panel sits beside the image with a draggable divider. The **GPS** section folds away (click
   its title), leaving one line: fix, satellites, UTC. The divider position and the fold are
@@ -186,6 +186,11 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
   XPIXSZ, FOCALLEN, GAINDB, ROI offset and, with a GPS fix, SITELAT/SITELONG/SITEELEV.
 - Standalone: `uv run python -m pystarlight.wcs.solve_stack STACK.fits [--stars 5] [--scale S]`.
 - ROI and depth are locked while a stack runs.
+- While the stack is shown, a banner at the bottom of the image says so ("STACK 12/16",
+  "... - solved"). **Continue live view** (button, key `c` or `Esc`) goes back to the live frames;
+  a running stack goes on in the background, and **Show stack** brings the stack and its marked
+  stars back. The stack is auto-stretched (background black, brightest 0.05 % white); live
+  frames are shown as they are, with the display gamma only.
 - First sky test (2026-10-26, 24 mm lens, trees in the lower half): 16 x 0.8 s at 24 dB, full
   frame; the brightest stars come out round (FWHM ~3 px). The solve itself is untested on
   this Pi: its config has no API key yet.

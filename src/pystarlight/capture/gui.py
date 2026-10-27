@@ -63,6 +63,7 @@ class ImageView(QtWidgets.QWidget):
         self.marks = []             # [(x0, y0, x1, y1, QColor)] to draw (image pixels)
         self.hline = None           # (row, QColor): a dashed line across the image
         self.circles = []           # [(x, y, radius, text, QColor)]: stars (image pixels)
+        self.banner = ""            # shown at the bottom (e.g. while the stack is displayed)
         self.cursor_img = None      # image point under the mouse
 
     def reset_view(self):
@@ -145,6 +146,12 @@ class ImageView(QtWidgets.QWidget):
         if self.zoom > 1.0:
             p.setPen(QtCore.Qt.yellow)
             p.drawText(8, 18, f"zoom {self.zoom:.1f}×  (double-click: fit)")
+        if self.banner:
+            r = p.fontMetrics().boundingRect(self.banner).adjusted(-8, -4, 8, 4)
+            r.moveBottomLeft(QtCore.QPoint(8, self.height() - 8))
+            p.fillRect(r, QtGui.QColor(21, 101, 192, 200))
+            p.setPen(QtCore.Qt.white)
+            p.drawText(r, QtCore.Qt.AlignCenter, self.banner)
         p.end()
 
     def wheelEvent(self, e):
@@ -324,6 +331,8 @@ class MainWindow(QtWidgets.QMainWindow):
                         ("r", self.on_record_button),
                         ("t", self.software_trigger),
                         ("s", self.on_stack_button),
+                        ("c", self.continue_live),
+                        ("Esc", self.continue_live),
                         ("q", self.close)):
             QShortcut(QtGui.QKeySequence(key), self, fn)
 
@@ -1119,7 +1128,15 @@ class MainWindow(QtWidgets.QMainWindow):
         for w in (self.stack_button, self.solve_button, self.stack_show):
             buttons.addWidget(w)
         g.addLayout(buttons, 4, 0, 1, 3)
-        g.addWidget(self.stack_info, 5, 0, 1, 3)
+        self.live_button = QtWidgets.QPushButton("▶  Continue live view  (c)")
+        self.live_button.setMinimumHeight(32)
+        self.live_button.setStyleSheet("font-weight: bold;")
+        self.live_button.setToolTip("back to the live frames; a running stack goes on, the "
+                                    "stack and its solution stay ('Show stack' brings them back)")
+        self.live_button.clicked.connect(self.continue_live)
+        self.live_button.setVisible(False)
+        g.addWidget(self.live_button, 5, 0, 1, 3)
+        g.addWidget(self.stack_info, 6, 0, 1, 3)
         self.on_focal(self.c.focal_mm)
         return box
 
@@ -1144,11 +1161,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_stack_show(self, on):
         self.stack_seen = -1
+        self.live_button.setVisible(on)
         if not on:
             self.view.circles = []
+            self.view.banner = ""
         else:
             self.show_solution_marks()
         self.redraw = True
+
+    def continue_live(self):
+        """Back to the live frames (the stack keeps running if it is, and stays shown-able)."""
+        self.stack_show.setChecked(False)
 
     def on_solve_button(self):
         if self.solve_thread is not None:
@@ -1228,6 +1251,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.show_solution_marks()
         if text != self.stack_info.text():
             self.stack_info.setText(text)
+        banner = ""
+        if self.stack_show.isChecked():
+            banner = (f"STACK {st.count}/{st.target}" if st.state == "stacking" else
+                      f"STACK {st.count} frames" + (" - solved" if sol is not None
+                                                     and self.solved_path == st.path else ""))
+            banner += "   ·   c: continue live view"
+        if banner != self.view.banner:
+            self.view.banner = banner
+            self.view.update()
         centre = sol["center"] if sol else None
         self.stack_box.set_summary(f"RA {centre['ra_hms']} Dec {centre['dec_dms']}" if centre else
                                    f"stacking {st.count}/{st.target}" if st.state == "stacking"
