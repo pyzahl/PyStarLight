@@ -8,6 +8,8 @@ viewer (`pystarlight-view`) for marking stars; results open in PyOTE.
 Most of the processing is derived from [PyMovie](https://github.com/bob-anderson-ok/pymovie) 4.2.8
 by Bob Anderson, and tests check that it gives the same numbers.
 
+Additional tools: player for video+info review, experimental GPS time stamping video recorder for RPi MIPI cameras (veye,...) with hardware trigger and M8N GPS module.
+
 ## Install
 
 ```bash
