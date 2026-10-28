@@ -1,4 +1,4 @@
-# PyStarLight
+# PyStarLight <img src="src/pystarlight/pystarlight_logo.svg" alt="" width="96" align="right">
 
 Light curves from occultation videos, as a Python library: movie readers for every common
 format, frame timestamps (embedded or read from a VTI overlay), star tracking through wind-shake

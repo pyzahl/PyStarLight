@@ -30,3 +30,8 @@ pystarlight.toml
 # Local observation data sets
 CZ-Data
 DarkLight
+
+# scratch output of local test runs
+.wcs-work/
+czfringilla*
+*.code-workspace
