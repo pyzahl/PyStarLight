@@ -5,7 +5,8 @@ time stamps and per-frame status, stack a frame range and plate-solve it.
 
 The camera app's "Review last clip" button starts it on the file just recorded.
 
-  - Image: the frame (auto-stretched or display gamma), zoom/pan as in the camera app.
+  - Image: the frame, levels auto (zscale, optionally per frame) or manual black / white
+    point as in pystarlight-view, display gamma, zoom/pan as in the camera app.
   - Timing: UTC of every frame, the step to the previous one against the typical step, a plot
     of the steps over the whole file (click to jump; red: problems), dropped / duplicated /
     irregular frames (timestamps.timing.check_timing); RAVF also sequence-number gaps,
@@ -16,7 +17,7 @@ The camera app's "Review last clip" button starts it on the file just recorded.
     pystarlight-view (<movie>.wcs.fit, .wcs.json, .stars.json).
 
 Keys: Space play/pause, Left/Right frame, PgUp/PgDn 10 frames, Home/End, n/b next/previous
-problem, [ / ] stack range from/to here, s stack & solve, c back to the frames, q quit.
+problem, [ / ] stack range from/to here, a auto levels, s stack & solve, c back to the frames, q quit.
 """
 import argparse
 import json
@@ -34,10 +35,11 @@ from .cameras import pixel_um
 from .gui import CollapsibleBox, ImageView, grid_box
 from .qt import QShortcut, QtCore, QtGui, QtWidgets, Signal, event_pos, exec_app, fix_cv2_qt_env
 from .ravf_writer import FRAME_HEAD, ravf_to_unix
-from .stacker import LiveStacker, display_stretch
+from .stacker import LiveStacker
 
 TICKS_UNIX_EPOCH = 621355968000000000      # .NET ticks at 1970-01-01T00:00:00Z (SER)
 FIX_NAMES = {0: "no fix", 1: "time kept", 2: "time fix", 3: "time + position"}
+DISPLAY_STEPS = 4095                       # black..white in this many steps before the gamma LUT
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +116,12 @@ def problems(times, info):
                     else f"sequence step {gaps[r]}")
             out[int(r) + 1] = out.get(int(r) + 1, "") + ("; " if int(r) + 1 in out else "") + text
     return dict(sorted(out.items())), rep
+
+
+def zscale(img):
+    """IRAF zscale display limits (as pystarlight-view): faint stars without burning out the sky."""
+    from astropy.visualization import ZScaleInterval
+    return ZScaleInterval().get_limits(np.asarray(img, np.float32))
 
 
 def utc_text(t):
@@ -314,7 +322,7 @@ class ReviewWindow(QtWidgets.QMainWindow):
                         ("n", lambda: self.next_problem(1)), ("b", lambda: self.next_problem(-1)),
                         ("[", lambda: self.from_spin.setValue(self.index)),
                         ("]", lambda: self.to_spin.setValue(self.index)),
-                        ("s", self.on_stack_button), ("c", self.show_frames),
+                        ("s", self.on_stack_button), ("a", self.auto_levels), ("c", self.show_frames),
                         ("Esc", self.show_frames), ("q", self.close)):
             QShortcut(QtGui.QKeySequence(key), self, fn)
         if path:
@@ -329,16 +337,36 @@ class ReviewWindow(QtWidgets.QMainWindow):
         return box
 
     def make_display_box(self):
+        """Levels as in pystarlight-view: auto (zscale) or manual black / white point, auto
+        optionally per frame; display gamma on top."""
         box, g = grid_box("Display")
-        self.stretch_check = QtWidgets.QCheckBox("Auto stretch", checked=True)
-        self.stretch_check.setToolTip("background to black, brightest 0.05 % to white")
-        self.stretch_check.toggled.connect(self.redraw)
+        self.levels_auto, self.per_frame = True, False
+        self.lo, self.hi = 0.0, 1.0
+        self.lo_slider, self.hi_slider = (QtWidgets.QSlider(QtCore.Qt.Horizontal) for _ in range(2))
+        self.lo_spin, self.hi_spin = (QtWidgets.QDoubleSpinBox(decimals=0, minimum=-1e7, maximum=1e7,
+                                                               keyboardTracking=False)
+                                      for _ in range(2))
+        self.lo_slider.valueChanged.connect(lambda v: self.on_level(v, None))
+        self.hi_slider.valueChanged.connect(lambda v: self.on_level(None, v))
+        self.lo_spin.valueChanged.connect(lambda v: self.on_level(v, None))
+        self.hi_spin.valueChanged.connect(lambda v: self.on_level(None, v))
+        for row, (name, slider, spin) in enumerate((("Black", self.lo_slider, self.lo_spin),
+                                                    ("White", self.hi_slider, self.hi_spin))):
+            g.addWidget(QtWidgets.QLabel(name), row, 0)
+            g.addWidget(slider, row, 1)
+            g.addWidget(spin, row, 2)
+        auto_b = QtWidgets.QPushButton("Auto  (a)")
+        auto_b.setToolTip("zscale levels of the shown image; back to automatic levels")
+        auto_b.clicked.connect(self.auto_levels)
+        self.per_frame_check = QtWidgets.QCheckBox("per frame")
+        self.per_frame_check.setToolTip("automatic levels: recompute them on every frame")
+        self.per_frame_check.toggled.connect(self.on_per_frame)
         self.gamma_spin = QtWidgets.QDoubleSpinBox(decimals=2, minimum=0.1, maximum=4.0,
-                                                   singleStep=0.1, value=1.0)
+                                                   singleStep=0.1, value=1.0, prefix="gamma ")
         self.gamma_spin.valueChanged.connect(self.redraw)
-        g.addWidget(self.stretch_check, 0, 0)
-        g.addWidget(QtWidgets.QLabel("Gamma"), 0, 1)
-        g.addWidget(self.gamma_spin, 0, 2)
+        g.addWidget(auto_b, 2, 0)
+        g.addWidget(self.per_frame_check, 2, 1)
+        g.addWidget(self.gamma_spin, 2, 2)
         return box
 
     def make_stack_box(self):
@@ -442,6 +470,10 @@ class ReviewWindow(QtWidgets.QMainWindow):
         threading.Thread(target=self._load_timing, args=(self.path,), daemon=True).start()
         self.index = -1
         self.goto(0)
+        if self.levels_auto:
+            self.auto_levels()
+        else:
+            self.set_levels(self.lo, self.hi, manual=True, reset_range=True)
 
     def _load_timing(self, path):
         def progress(done, total):
@@ -538,7 +570,10 @@ class ReviewWindow(QtWidgets.QMainWindow):
         self.img = self.mv.read(i).image
         self.show_frame_info()
         if not self.show_check.isChecked():
-            self.redraw()
+            if self.per_frame and self.levels_auto:
+                self.set_levels(*zscale(self.img), manual=False)
+            else:
+                self.redraw()
 
     def step(self, k, wrap=True):
         if self.mv is None:
@@ -597,17 +632,73 @@ class ReviewWindow(QtWidgets.QMainWindow):
             F["status"].setText("-")
 
     # ---- display ----
-    def redraw(self, *_):
-        img = self.stack_view if self.show_check.isChecked() and self.stack_view is not None \
+    def shown_image(self):
+        return self.stack_view if self.show_check.isChecked() and self.stack_view is not None \
             else self.img
+
+    @staticmethod
+    def useful_range(img, lo, hi):
+        """Levels slider range: the useful part of the histogram, not up to saturated stars."""
+        p_lo, p_hi = (float(v) for v in np.percentile(img[::4, ::4], (0.1, 99.9)))
+        span = max(hi - lo, 1.0)
+        return min(p_lo, lo), max(p_hi, hi + 4 * span)
+
+    def set_levels(self, lo, hi, manual=True, reset_range=False):
+        """Black / white point. manual=False: set by auto levels. reset_range: slider range
+        from the shown image (else it only grows)."""
+        self.lo, self.hi = float(lo), float(max(hi, lo + 1.0))
+        if manual:
+            self.levels_auto = False
+        smin, smax = self.lo_slider.minimum(), self.lo_slider.maximum()
+        img = self.shown_image()
+        if reset_range and img is not None:
+            smin, smax = self.useful_range(img, self.lo, self.hi)
+        smin, smax = int(np.floor(min(smin, self.lo))), int(np.ceil(max(smax, self.hi)))
+        for slider in (self.lo_slider, self.hi_slider):
+            slider.blockSignals(True)
+            slider.setRange(smin, smax)
+            slider.blockSignals(False)
+        for w, v in ((self.lo_slider, round(self.lo)), (self.hi_slider, round(self.hi)),
+                     (self.lo_spin, self.lo), (self.hi_spin, self.hi)):
+            w.blockSignals(True)
+            w.setValue(v)
+            w.blockSignals(False)
+        self.redraw()
+
+    def auto_levels(self):
+        """zscale levels of the shown image; back to automatic mode."""
+        img = self.shown_image()
+        self.levels_auto = True
+        if img is not None:
+            self.set_levels(*zscale(img), manual=False, reset_range=True)
+
+    def on_level(self, lo, hi):
+        """User moved a black / white slider or spin box: manual levels."""
+        lo = self.lo if lo is None else float(lo)
+        hi = self.hi if hi is None else float(hi)
+        if hi <= lo:                        # keep black below white
+            if hi == self.hi:
+                hi = lo + 1.0
+            else:
+                lo = hi - 1.0
+        self.set_levels(lo, hi, manual=True)
+
+    def on_per_frame(self, on):
+        self.per_frame = on
+        if on:
+            self.auto_levels()
+
+    def redraw(self, *_):
+        img = self.shown_image()
         if img is None:
             return
-        max_value = (1 << self.depth()) - 1
-        if self.stretch_check.isChecked() or img.dtype.kind == "f":
-            img = display_stretch(np.asarray(img, np.float32), max_value)
+        lo, hi = self.lo, max(self.hi, self.lo + 1e-6)
+        disp = np.clip((np.asarray(img, np.float32) - lo) * (DISPLAY_STEPS / (hi - lo)),
+                       0, DISPLAY_STEPS).astype(np.uint16)
         g = self.gamma_spin.value()
-        lut = np.round(255.0 * (np.arange(max_value + 1, dtype=np.float32) / max_value) ** (1 / g))
-        self.view.render(img, lut.astype(np.uint8))
+        lut = np.round(255.0 * (np.arange(DISPLAY_STEPS + 1, dtype=np.float32) / DISPLAY_STEPS)
+                       ** (1 / g))
+        self.view.render(disp, lut.astype(np.uint8))
 
     # ---- stack & solve ----
     def on_stack_button(self):
@@ -709,7 +800,10 @@ class ReviewWindow(QtWidgets.QMainWindow):
         else:
             self.view.circles = []
             self.view.banner = ""
-        self.redraw()
+        if self.levels_auto:
+            self.auto_levels()
+        else:
+            self.redraw()
 
     def show_frames(self):
         self.show_check.setChecked(False)
@@ -731,7 +825,10 @@ class ReviewWindow(QtWidgets.QMainWindow):
             self.stack_seen = st.version
             mean = st.preview()
             self.stack_view = mean
-            self.redraw()
+            if self.levels_auto:
+                self.set_levels(*zscale(mean), manual=False, reset_range=st.version <= 1)
+            else:
+                self.redraw()
         text = self.job_log
         if running and st is not None and st.state == "stacking":
             text = f"stacking {st.count}/{st.target}" + (

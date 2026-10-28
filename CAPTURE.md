@@ -240,6 +240,32 @@ of about 10-100 % of the field width; 4202-4219 = quads 4'-2000', i.e. fields fr
 degrees. For fields under ~10' add `astrometry-data-2mass-01` (9 GB) and `-00` (14 GB).
 Tycho-2 (`astrometry-data-tycho2-*`) starts at 22' quads and is too sparse for <= 1° fields.
 
+Install (Debian / Raspberry Pi OS). Pick the index sets whose quads are about 1/4 to 1x the
+field width (the field: pixels x plate scale):
+
+```bash
+sudo apt-get install astrometry.net                                    # solve-field
+sudo apt-get install astrometry-data-2mass-08-19                       # quads 30'-2000'
+sudo apt-get install astrometry-data-2mass-04 astrometry-data-2mass-05 \
+                     astrometry-data-2mass-06 astrometry-data-2mass-07   # quads 8'-30'
+sudo apt-get install astrometry-data-2mass-02 astrometry-data-2mass-03   # quads 4'-8'
+```
+
+| package | quads | for fields of about |
+|---|---|---|
+| `astrometry-data-2mass-00` / `-01` | 2'-2.8' / 2.8'-4' | 2'-16' (14 / 9 GB) |
+| `astrometry-data-2mass-02` / `-03` | 4'-5.6' / 5.6'-8' | 4'-30' |
+| `astrometry-data-2mass-04` / `-05` | 8'-11' / 11'-16' | 8'-1° (`-05`: 0.64 GB) |
+| `astrometry-data-2mass-06` / `-07` | 16'-22' / 22'-30' | 16'-2° |
+| `astrometry-data-2mass-08-19` | 30'-2000' | 30' and larger |
+
+The packages download the index files at install time into `/usr/share/astrometry`
+(`add_path` in `/etc/astrometry.cfg`); nothing else to configure. Examples: ASTRID on the APO107
+(2.07"/px, 50' x 38') solves with `-05` ... `-08-19`; a C14 with a 0.4x reducer (f ~1564 mm,
+~1.2"/px, 816 x 620 px = 16' x 12') needs `-02` ... `-05`: with only `-08-19` installed
+`solve-field` fails ("Did not solve"), as every quad is larger than the field. Check what is
+installed with `uv run python -c "from pystarlight.wcs.solve import local_index_files as f; print(f())"`.
+
 `solve_astrometry_net` (viewer key `p`, `solve_movie`, the stack solve) uses it automatically
 (`[astrometry] solver = "auto"`): `solve_local` runs `solve-field` with the same hints (scale
 +-`scale_err_pct`, centre, downsampling) and gives the same WCS file. There is no job id, so no

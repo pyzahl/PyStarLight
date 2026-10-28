@@ -22,6 +22,23 @@ uv sync --group dev
 uv run pytest
 ```
 
+## The tools
+
+Three programs, each started with `uv run` from the clone (after `uv sync` with the extras
+shown):
+
+| program | what | start |
+|---|---|---|
+| `pystarlight-view` | matplotlib viewer: mark target / reference stars, plate-solve, run the photometry, export for PyOTE (see [Getting started](#getting-started)) | `uv sync --extra all`<br>`uv run pystarlight-view FILE` |
+| `pystarlight-camera` | capture on the Raspberry Pi 5: live view, GPS-timed RAVF / SER recording, live stack + plate solve | `uv sync --extra all --extra camera --extra aravis`<br>`uv run pystarlight-camera` |
+| `pystarlight-review` | Qt player for a recording: frames, time stamp check (dropped / irregular frames), stack & plate-solve a frame range | `uv sync --extra all --extra camera`<br>`uv run pystarlight-review FILE` |
+
+`FILE` is any supported recording (`.ravf .ser .adv .aav .avi .mov` or a FITS folder).
+The camera and the [review player](CAPTURE.md#review-player) are described in
+[CAPTURE.md](CAPTURE.md), including
+[offline plate solving](CAPTURE.md#offline-plate-solving-local-astrometrynet) with a local
+astrometry.net. `uv run pystarlight-config` manages the private config (next section).
+
 ## Getting started
 
 ### 1. Install and configure (once)
@@ -58,6 +75,10 @@ in the background (private upload; result cached as `<movie>.wcs.fit`, loaded au
 when the movie is opened again; nothing is uploaded without `p`). Burnt-in timestamp rows are
 blanked first; an ADV file's own RA/Dec is used as the field-centre hint, and the site's
 plate-scale hint only for recordings made at the site.
+With a local astrometry.net (`sudo apt-get install astrometry.net` plus the
+`astrometry-data-2mass-*` index files matching your field, see
+[Offline plate solving](CAPTURE.md#offline-plate-solving-local-astrometrynet)) the solve runs
+offline instead.
 The cursor readout then shows RA/Dec, an N/E compass is drawn, and the line below the status
 gives the plate scale, the direction of north and whether the image is mirrored.
 
