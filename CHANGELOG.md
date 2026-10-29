@@ -7,6 +7,11 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Capture: per-sensor timing profiles for VEYE cameras (`timing.SensorTiming`): the measured
+  IMX178 model, and an assumed (not yet measured) Sony Pregius global-shutter model for the
+  IMX265M / IMX264M / IMX296M / IMX287M (exposure starts at the trigger, all rows at once,
+  readout overlapping the next exposure). GUI, y-trigger, missed-pulse model and RAVF header
+  follow the profile.
 - Capture: GPS-mode frame stamps use GPS UTC only (`GpsClock`): the Pi's monotonic clock is
   anchored on the 1 Hz timepulse with UBX NAV-TIMEUTC (leap seconds known) and kept by the
   trigger pulses, with drift tracking; no NTP. Re-anchors on every rate change and before every

@@ -27,7 +27,6 @@ from .stacker import display_stretch
 from .timing import (
     GPS_RATES,
     LAG_EXTRA_NS,
-    VEYE_CALIBRATED_BITS,
     PulseStamper,
     onset_delay_us,
     parse_rate,
@@ -35,7 +34,6 @@ from .timing import (
     pulses_per_frame,
     rate_str,
     utc_str,
-    veye_line_ns,
 )
 
 EXP_STEPS = 1000            # exposure slider resolution (log scale)
@@ -716,12 +714,13 @@ class MainWindow(QtWidgets.QMainWindow):
                  and st.rate == self.selected_rate and st.ready))
 
     def predicted_lag_ns(self):
-        """Frame start after the trigger pulse: VEYE frame period + ~3 ms (measured on an
-        IMX178); elsewhere just a guess (exposure + 3 ms)."""
+        """Frame start after the trigger pulse: by the VEYE sensor's timing (IMX178, measured:
+        frame period + ~3 ms); elsewhere just a guess (exposure + 3 ms)."""
         c = self.c
         delay = c.trigger_delay_ns()
         if c.is_veye:
-            return c.camera.frame_period_ns() + LAG_EXTRA_NS + delay
+            return c.timing.frame_lag_ns(c.camera.frame_period_ns(),
+                                         c.controller.exposure_us * 1000, delay)
         return c.controller.exposure_us * 1000 + LAG_EXTRA_NS + delay
 
     def on_trigger_mode(self, initial=False):
@@ -808,20 +807,22 @@ class MainWindow(QtWidgets.QMainWindow):
         c = self.c
         if not (c.is_veye and self.mode() == "gps" and self.ytrig_check.isChecked()):
             return None
-        line = veye_line_ns(format_bits(c.pixel_format))
+        line = c.timing.line(format_bits(c.pixel_format))
         # for the selected rate, also while anchoring at 1 Hz: the delay stays short and
         # the camera is not restarted twice
         return onset_delay_us(self.ytrig_spin.value(), float(self.gps_rate()),
-                              c.camera.frame_period_ns(), c.controller.exposure_us * 1000, line)
+                              c.camera.frame_period_ns(), c.controller.exposure_us * 1000, line,
+                              c.timing)
 
     def follow_y_trigger(self, busy=False):
         """Keeps the delay on the y-trigger row as exposure, region, depth and rate change
         (not while recording: each change restarts the camera)."""
         us = self.y_trigger_delay_us()
         self.view.hline = None if us is None else (self.ytrig_spin.value(), QtGui.QColor("#ff9100"))
-        # dotted: rows whose exposure ends / starts on the pulse (the edge is spread between)
-        line = veye_line_ns(format_bits(self.c.pixel_format))
-        self.view.hspan = round(self.c.controller.exposure_us * 1000 / 2 / line)
+        # dotted: rows whose exposure ends / starts on the pulse (the edge is spread between;
+        # global shutter: no spread, all rows expose together)
+        line = self.c.timing.line(format_bits(self.c.pixel_format))
+        self.view.hspan = round(self.c.controller.exposure_us * 1000 / 2 / line) if line else 0
         self.view.update()
         if us is not None and not busy and abs(us - (self.c.trigger_delay_us or 0)) > 1:
             self.delay_spin.setValue(round(us) / 1000)  # -> on_delay
@@ -868,15 +869,23 @@ class MainWindow(QtWidgets.QMainWindow):
         if not c.is_veye:
             return
         bits = format_bits(c.pixel_format)
-        line = veye_line_ns(bits)
-        cal = bits in VEYE_CALIBRATED_BITS
+        line = c.timing.line(bits)
+        cal = c.timing.calibrated(bits)
         lab = self.gps_labels["rows"]
+        if c.timing.global_shutter:
+            lab.setText("global shutter: all rows expose together"
+                        + ("" if cal else " - timing not measured"))
+            lab.setStyleSheet("" if cal else "color: #e65100;")
+            lab.setToolTip(f"{c.timing.name}: recorded time stamps are the exposure start"
+                           + ("" if cal else "; the trigger-to-exposure offset is assumed, "
+                              "not measured (LED test, CAPTURE.md)"))
+            return
         lab.setText(f"row y +y×{line / 1000:.2f} µs ({c.height * line / 1e6:.1f} ms to the last row)"
                     + ("" if cal else " - estimate"))
         lab.setStyleSheet("" if cal else "color: #e65100;")
         lab.setToolTip("recorded time stamps are the exposure start of row 0"
-                       + ("" if cal else f"; timing measured for 12 bit only, {bits} bit "
-                          "stamps may be off by a few ms"))
+                       + ("" if cal else f"; {c.timing.name}: timing not measured at {bits} "
+                          "bit, stamps may be off by a few ms"))
 
     # ---- panel: recording ----
     def make_record_box(self):
@@ -1130,18 +1139,21 @@ class MainWindow(QtWidgets.QMainWindow):
                             f"the pulse period {1000 / rate:.0f} ms.</b>")
             elif c.is_veye:
                 delay_ns = c.trigger_delay_ns()
-                n = pulses_per_frame(rate, c.camera.frame_period_ns(), delay_ns)
+                n = pulses_per_frame(rate, c.camera.frame_period_ns(), delay_ns, c.timing)
                 if stamper is not None:
                     stamper.stride = n
                 if n > 1 and delay_ns < 1e9 / rate / 2:
-                    fmax = 1e9 / (2 * c.camera.frame_period_ns() + LAG_EXTRA_NS)
+                    fmax = 1e9 / c.timing.busy_ns(c.camera.frame_period_ns(), 0)
                     info.append(f"<b style='color:#d33'>The camera follows only ~{fmax:.0f} fps "
                                 f"here; use a smaller ROI or a lower rate.</b>")
                 elif n > 1:
                     info.append(f"The delay runs past the next pulse: the camera takes every "
                                 f"{n}. pulse ({rate / n:g} fps).")
-                if ytrig:
-                    line = veye_line_ns(format_bits(c.pixel_format))
+                line = c.timing.line(format_bits(c.pixel_format))
+                if ytrig and not line:
+                    info.append("y-trigger: timepulse in the middle of the exposure (global "
+                                "shutter: every row)")
+                elif ytrig:
                     info.append(f"y-trigger: timepulse mid-exposure on row {self.ytrig_spin.value()}; "
                                 f"the edge spans ~{exp_ms * 1e6 / line:.0f} rows between the dotted "
                                 f"lines (first lit row: upper line; shorter exposure: sharper)")

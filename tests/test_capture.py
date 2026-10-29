@@ -173,6 +173,33 @@ def test_pulse_stamper_and_exposure_start():
     assert exposure_start(pulse, None, 8000, None, False) == pulse - 8_000_000
 
 
+def test_sensor_timing_profiles():
+    from pystarlight.capture.timing import (
+        IMX178,
+        SONY_GLOBAL,
+        onset_delay_us,
+        pulses_per_frame,
+        sensor_timing,
+    )
+    assert sensor_timing("MV-MIPI-IMX178M") is IMX178
+    assert sensor_timing("MV-MIPI-IMX265M") is SONY_GLOBAL
+    other = sensor_timing("MV-MIPI-SC130M")
+    assert not other.calibrated(12) and not other.global_shutter
+    pulse = 1_792_000_000 * 10**9
+    # IMX178 unchanged: busy 2 periods + 3 ms (full frame: 15 fps with no delay, not 20)
+    assert pulses_per_frame(15, 30_120_000, 0) == 1
+    assert pulses_per_frame(20, 30_120_000, 0) == 2
+    # Sony global shutter: exposure starts at the trigger, all rows; readout overlaps the next
+    # exposure, so ~video rate (55 fps full frame: 18.2 ms)
+    g = SONY_GLOBAL
+    assert g.line(12) == 0
+    assert exposure_start(0, pulse, 8000, 1000, True, 18_200_000, g) == pulse + 1_000_000
+    assert g.frame_lag_ns(18_200_000, 8_000_000, 0) == 9_000_000
+    assert pulses_per_frame(50, 18_200_000, 0, g) == 1
+    # y-trigger: pulse in the middle of the exposure, whatever the row
+    assert onset_delay_us(500, 10, 18_200_000, 8_000_000, 0, g) == pytest.approx(96_000)
+
+
 S0 = 1_792_000_000 * 10**9       # a whole UTC second (ns)
 TRUE_OFF = S0 - 5_000 * 10**9    # UTC - CLOCK_MONOTONIC (the truth)
 LAG = 33_000_000                 # pulse -> frame start

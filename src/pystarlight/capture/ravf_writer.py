@@ -161,7 +161,7 @@ def header_entries(width, height, depth, meta):
         # user entries
         ["IMAGE-BIT-DEPTH", UINT8, depth],
         ["TIMESTAMP-SOURCE", UTF8, m("timestamp_source", "")],
-        ["TIMESTAMP-ROW", UTF8, "exposure start of image row 0"],
+        ["TIMESTAMP-ROW", UTF8, m("timestamp_row") or "exposure start of image row 0"],
         ["ROW-TIME-NS", UINT32, int(m("row_time_ns") or 0)],     # rolling shutter, 0: unknown
         ["ROI-X", UINT32, int(m("roi_x") or 0)],
         ["ROI-Y", UINT32, int(m("roi_y") or 0)],

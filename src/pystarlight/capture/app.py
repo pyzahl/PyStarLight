@@ -32,7 +32,7 @@ from .decode import format_bits
 from .recorder import RECORD_FORMATS, Recorder
 from .recorder import main as repair_main
 from .stacker import LiveStacker
-from .timing import VEYE_CALIBRATED_BITS, parse_rate, rate_str, veye_line_ns
+from .timing import parse_rate, rate_str
 
 
 def rate_arg(text):
@@ -203,6 +203,9 @@ def main(argv=None):
                 "vendor": camera.get_vendor_name(),
                 "serial": cam_info.get("serial", ""),
                 "sensor": camera.get_model_name().split("-")[-1] if s.is_veye else "",
+                "timestamp_row": ("exposure start (global shutter: all rows)"
+                                  if s.is_veye and s.timing.global_shutter
+                                  else "exposure start of image row 0"),
                 "pixel_format": s.pixel_format,
                 "hardware": hardware_name(),
                 "gain_db": s.controller.gain_db,
@@ -216,9 +219,9 @@ def main(argv=None):
                                      "Pi clock (NTP)"),
                 # measured on the IMX178 at 12 bit to ~0.1 ms; NTP ~1 ms; else unknown
                 "timing_accuracy_ns": (100_000 if gps_stamped and s.is_veye
-                                       and bits in VEYE_CALIBRATED_BITS else
+                                       and s.timing.calibrated(bits) else
                                        5_000_000 if gps_stamped else 2_000_000),
-                "row_time_ns": veye_line_ns(bits) if s.is_veye else 0,
+                "row_time_ns": s.timing.line(bits) if s.is_veye else 0,
             }
             if gps is not None and gps.lat is not None:
                 info.update(latitude=gps.lat, longitude=gps.lon, altitude=gps.alt or 0.0)

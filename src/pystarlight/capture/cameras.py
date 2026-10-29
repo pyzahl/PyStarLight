@@ -20,11 +20,12 @@ import threading
 
 from . import veye_mvcam
 from .decode import FORMATS_BY_BITS, Decoder
-from .timing import exposure_start, trigger_delay_ns
+from .timing import IMX178, exposure_start, sensor_timing, trigger_delay_ns
 
 # Smallest region the Pi's CSI-2 pipeline streams from a VEYE IMX178 (Y12): lower ones fail at
 # STREAMON with EPIPE (measured; height 316 fails, 320 works). The sensor always reads full-width
-# rows (veye_mvcam crops x in software), so any width works (8 measured; 368 failed before that)
+# rows (veye_mvcam crops x in software), so any width works (8 measured; 368 failed before that).
+# Other VEYE models: not measured, the same limit assumed
 VEYE_MIN_ROI = (8, 320)
 # pixel pitch (um) by sensor, for the plate-scale hint of a stack (--pixel-um overrides)
 PIXEL_UM = {"IMX178": 2.4, "IMX296": 3.45, "IMX264": 3.45, "IMX265": 3.45, "IMX287": 6.9,
@@ -159,6 +160,8 @@ class CameraSession:
     def __init__(self, camera, n_buffers=16, trigger_edge="rising", trigger_delay_us=None):
         self.camera = camera
         self.is_veye = camera.kind == "veye"
+        # how the camera times its exposures (VEYE: by sensor; others: not modelled)
+        self.timing = sensor_timing(camera.get_model_name()) if self.is_veye else IMX178
         self.n_buffers = n_buffers
         self.trigger_edge = trigger_edge
         self.trigger_delay_us = trigger_delay_us    # camera units (µs); the GUI changes it
@@ -297,13 +300,14 @@ class CameraSession:
 
     # ---- timing ----
     def trigger_delay_ns(self):
-        return trigger_delay_ns(self.trigger_delay_us, self.is_veye)
+        return trigger_delay_ns(self.trigger_delay_us, self.is_veye, self.timing)
 
     def exposure_start(self, frame_ns, pulse_ns):
         """Row-0 exposure start (UTC ns) of a frame, see timing.exposure_start."""
         return exposure_start(frame_ns, pulse_ns, self.controller.exposure_us,
                               self.trigger_delay_us, self.is_veye,
-                              self.camera.frame_period_ns() if self.is_veye else None)
+                              self.camera.frame_period_ns() if self.is_veye else None,
+                              self.timing)
 
     def stop(self):
         if self.acquiring:

@@ -485,6 +485,43 @@ Other measurements:
   It counts **only while streaming**.
 - "High-speed trigger" mode (register 0x0404 = 2) gave no higher trigger rate than mode 1.
 
+### Other VEYE models: IMX265M (global shutter)
+
+The timing model is chosen by sensor (`timing.sensor_timing`, `CameraSession.timing`):
+
+| profile | models | status |
+|---|---|---|
+| `IMX178` | MV-MIPI-IMX178M | measured (12 bit; 10 / 8 bit estimated) |
+| `SONY_GLOBAL` | IMX265M, IMX264M, IMX296M, IMX287M (Sony Pregius global shutter) | **assumed, not measured** |
+| IMX178 model, uncalibrated | any other VEYE MV model | guess |
+
+What the Sony global-shutter profile assumes until it is measured:
+- All rows expose together: no row offset (`ROW-TIME-NS = 0`, `TIMESTAMP-ROW` says "global
+  shutter"), and the GUI's dotted y-trigger lines and row label change accordingly. The
+  y-trigger then simply puts the pulse in the middle of the exposure.
+- GPS trigger: the exposure **starts** at the trigger + delay (offset 0), unlike the IMX178, which
+  holds the exposure until about a frame period after the trigger. Frame start about 1 ms after
+  the exposure ends. The delay register is taken as exact (the IMX178's 0.9967 is not assumed).
+- Free run: the frame starts when the exposure ends (lead 0).
+- Trigger rate: VEYE's manual says Sony global-shutter sensors overlap the readout of one frame
+  with the next exposure in trigger mode, reaching "almost the same external trigger frame rate as
+  in video streaming mode" (IMX265M: 55 fps at 2064 × 1544). So the camera is taken to be busy for
+  one frame period + 0.5 ms after a trigger (IMX178: two frame periods + 3 ms). That also means
+  much less dead time between exposures: the exposure can fill most of the pulse period.
+- Recordings say `FRAME-TIMING-ACCURACY` 5 ms (uncalibrated) instead of 0.1 ms.
+- Not modelled either: the smallest region (the IMX178's 320 rows is assumed) and the x-offset
+  firmware bug (x is cropped in software anyway, which works on any model).
+
+**Measuring it** (the same LED setup, `--gps-pulse-ms 1`): with a global shutter the LED doesn't
+form a band; it is lit in a frame when the 1 ms flash overlaps that frame's exposure, and its
+brightness is the overlap. Sweep the trigger delay (y-trigger off) in 0.1 ms steps at a short
+exposure (e.g. 2 ms) and note where the LED starts and stops being lit: the flash starts at the
+pulse, so the delays give the exposure start and end relative to the pulse. Then set the profile's
+`trigger_offset_ns` (and `lag_extra_ns`, from the "Pulse → frame" readout) in `timing.py`, add the
+depth to `calibrated_bits`, and check the delay scale with a long delay (one pulse period later).
+To measure the dead time, raise the exposure towards the pulse period at a rate near the maximum
+and watch for frames where a flash at the end of the period goes missing.
+
 ## Limits
 
 **Highest usable trigger rate** ≈ 1 / (2 × frame period + 3 ms + exposure margin). The camera drops

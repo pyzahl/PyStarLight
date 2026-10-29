@@ -6,6 +6,7 @@ that instant (PulseStamper). Which pulse it was comes from GpsClock (GPS UTC onl
 GPS, from the Pi's clock (NTP).
 """
 import collections
+import dataclasses
 import re
 import threading
 import time
@@ -64,9 +65,77 @@ def rate_str(rate):
     return f"{float(rate):.6g} fps ({1000 / float(rate):.6g} ms)"
 
 
-def veye_line_ns(bits):
-    """Rolling-shutter line time of a VEYE IMX178 at this bit depth."""
-    return VEYE_LINE_NS.get(bits, VEYE_LINE_NS[12])
+@dataclasses.dataclass(frozen=True)
+class SensorTiming:
+    """How a VEYE MV camera times its exposures, by sensor (CAPTURE.md "Timestamps").
+
+    holds_to_period: in trigger mode the exposure is held so that it ends about one frame period
+    after the trigger (IMX178, measured); else it starts at the trigger (+ delay + offset).
+    busy_periods: frame periods the camera is busy after a trigger, so later triggers are lost
+    (rolling shutter: 2, "half the video rate"; Sony global shutter: 1, its readout overlaps the
+    next exposure, per VEYE's manual).
+    """
+    name: str
+    global_shutter: bool
+    line_ns: dict               # bits -> row-to-row exposure start, ns (global shutter: none)
+    calibrated_bits: tuple      # depths whose timing was measured (empty: none, estimates)
+    free_lead_ns: int           # free run: exposure start = frame start - exposure - this
+    trigger_offset_ns: int      # GPS trigger: see exposure_start()
+    holds_to_period: bool
+    delay_scale: float          # real trigger delay / register value
+    busy_periods: int
+    busy_extra_ns: int          # ... plus this
+    lag_extra_ns: int           # frame start after the trigger, beyond the model
+
+    def line(self, bits):
+        """Rolling-shutter line time at this depth (0: global shutter)."""
+        if self.global_shutter:
+            return 0
+        return self.line_ns.get(bits, self.line_ns[12])
+
+    def calibrated(self, bits):
+        return bits in self.calibrated_bits
+
+    def frame_lag_ns(self, period_ns, exp_ns, delay_ns):
+        """CSI-2 frame start after the trigger pulse (delay_ns: real trigger delay)."""
+        if self.holds_to_period:
+            return period_ns + self.lag_extra_ns + delay_ns
+        return delay_ns + self.trigger_offset_ns + exp_ns + self.lag_extra_ns
+
+    def busy_ns(self, period_ns, delay_ns):
+        """After a trigger the camera ignores triggers for this long."""
+        return delay_ns + self.busy_periods * period_ns + self.busy_extra_ns
+
+
+# IMX178M: measured (12 bit; 10/8 bit line times estimated), see the constants above
+IMX178 = SensorTiming("IMX178", False, VEYE_LINE_NS, VEYE_CALIBRATED_BITS, VEYE_FREE_LEAD_NS,
+                      VEYE_TRIGGER_OFFSET_NS, True, VEYE_DELAY_SCALE, 2, LAG_EXTRA_NS,
+                      LAG_EXTRA_NS)
+# Sony Pregius global shutter (IMX265M, IMX264M, IMX296M, IMX287M): NOT measured. All rows
+# expose together; trigger mode overlaps readout and the next exposure (VEYE manual), so the
+# camera follows triggers at about its video frame rate. Assumed until the LED test: exposure
+# starts at the trigger (+ delay), frame start ~1 ms after the exposure ends, delay register
+# exact, free-run frame start at the exposure end.
+SONY_GLOBAL = SensorTiming("Sony Pregius global shutter", True, {}, (), 0, 0, False, 1.0, 1,
+                           500_000, 1_000_000)
+SONY_GLOBAL_SENSORS = ("IMX265", "IMX264", "IMX296", "IMX287", "IMX273", "IMX250", "IMX252")
+
+
+def sensor_timing(model):
+    """Timing profile of a VEYE camera from its model name (e.g. 'MV-MIPI-IMX265M')."""
+    m = model.upper()
+    if "IMX178" in m:
+        return IMX178
+    if any(s in m for s in SONY_GLOBAL_SENSORS):
+        return SONY_GLOBAL
+    # other VEYE models: the IMX178 model as a guess, uncalibrated
+    return dataclasses.replace(IMX178, name=f"{model} (IMX178 model, not measured)",
+                               calibrated_bits=())
+
+
+def veye_line_ns(bits, sensor=IMX178):
+    """Rolling-shutter line time at this bit depth (0: global shutter)."""
+    return sensor.line(bits)
 
 
 def parse_utc(text):
@@ -89,38 +158,43 @@ def utc_str(ns, digits=3):
     return t.strftime("%H:%M:%S.%f")[:9 + digits] if digits else t.strftime("%H:%M:%S")
 
 
-def trigger_delay_ns(delay_us, is_veye):
+def trigger_delay_ns(delay_us, is_veye, sensor=IMX178):
     """The real delay from trigger pulse to exposure; the setting is in camera µs."""
     d = (delay_us or 0) * 1000
-    return d * VEYE_DELAY_SCALE if is_veye else d
+    return d * sensor.delay_scale if is_veye else d
 
 
-def onset_delay_us(row, rate, period_ns, exp_ns, line_ns):
+def onset_delay_us(row, rate, period_ns, exp_ns, line_ns, sensor=IMX178):
     """VEYE trigger delay (camera µs) that centres image row `row`'s exposure on the next
-    timepulse, i.e. on the GPS LED switching on. Row y starts exposing at pulse + delay +
-    (frame period - exposure) + VEYE_TRIGGER_OFFSET_NS + y * line."""
-    lead = period_ns - exp_ns + VEYE_TRIGGER_OFFSET_NS + row * line_ns + exp_ns / 2
-    return (-lead) % (1e9 / rate) / VEYE_DELAY_SCALE / 1000
+    timepulse, i.e. on the GPS LED switching on. IMX178: row y starts exposing at pulse +
+    delay + (frame period - exposure) + VEYE_TRIGGER_OFFSET_NS + y * line."""
+    lead = sensor.trigger_offset_ns + row * line_ns + exp_ns / 2
+    if sensor.holds_to_period:
+        lead += period_ns - exp_ns
+    return (-lead) % (1e9 / rate) / sensor.delay_scale / 1000
 
 
-def pulses_per_frame(rate, period_ns, delay_ns):
-    """VEYE: a trigger that comes while the camera is busy (its delay + about two frame periods
-    + 3 ms after the last trigger) is lost, so the camera takes every n-th pulse."""
-    return int((delay_ns + 2 * period_ns + LAG_EXTRA_NS) * rate / 1e9) + 1
+def pulses_per_frame(rate, period_ns, delay_ns, sensor=IMX178):
+    """VEYE: a trigger that comes while the camera is busy (IMX178: its delay + about two frame
+    periods + 3 ms after the last trigger) is lost, so the camera takes every n-th pulse."""
+    return int(sensor.busy_ns(period_ns, delay_ns) * rate / 1e9) + 1
 
 
-def exposure_start(frame_ns, pulse_ns, exposure_us, delay_us, is_veye, period_ns=None):
+def exposure_start(frame_ns, pulse_ns, exposure_us, delay_us, is_veye, period_ns=None,
+                   sensor=IMX178):
     """Row-0 exposure start (UTC ns): from the trigger pulse when GPS-triggered (exact, no Pi
-    clock), else from the frame-start time (Pi clock). period_ns: the VEYE frame period.
-    Cameras other than VEYE: not measured; assumes frame start - exposure, or the pulse
-    (+ delay)."""
+    clock), else from the frame-start time (Pi clock). period_ns: the VEYE frame period;
+    sensor: its timing profile. Cameras other than VEYE: not measured; assumes frame start -
+    exposure, or the pulse (+ delay)."""
     exp_ns = exposure_us * 1000
     if pulse_ns is None:
-        return int(frame_ns - exp_ns - (VEYE_FREE_LEAD_NS if is_veye else 0))
-    pulse_ns += int(trigger_delay_ns(delay_us, is_veye))
-    if is_veye:
-        return int(pulse_ns + period_ns - exp_ns + VEYE_TRIGGER_OFFSET_NS)
-    return pulse_ns
+        return int(frame_ns - exp_ns - (sensor.free_lead_ns if is_veye else 0))
+    pulse_ns += int(trigger_delay_ns(delay_us, is_veye, sensor))
+    if not is_veye:
+        return pulse_ns
+    if sensor.holds_to_period:
+        return int(pulse_ns + period_ns - exp_ns + sensor.trigger_offset_ns)
+    return int(pulse_ns + sensor.trigger_offset_ns)
 
 
 def pi_minus_mono_ns():
