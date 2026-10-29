@@ -66,6 +66,11 @@ uses [Semantic Versioning](https://semver.org/).
   so they no longer hide "wrote ... -summary" and other messages.
 
 ### Fixed
+- Capture (VEYE): the frame period used for GPS stamps and the y-trigger could keep another bit
+  depth's value after a depth change (stale cached register, and a frame-rate register faster
+  than the sensor can read out); 12-bit stamps on a small region were up to ~1.2 ms early. The
+  register is re-read after each new stream and the IMX178 12-bit period is floored at its
+  readout limit.
 - Capture GUI: '&' in the "Stack & plate solve" title showed as an underline marker.
 - Star names on coarse plate scales: the SIMBAD search radius is now 2 px when that is more
   than 10" (wide-field stacks named only 2 of 5 bright stars).

@@ -51,6 +51,12 @@ UNSUPPORTED = 0xFFFFFFFF
 GAIN_MAX_DB = 48.0          # the camera clamps manual gain here (read back on IMX178M)
 MAX_EXPOSURE_GUESS_S = 1.9    # longest exposure seen on these cameras (IMX178M: 1.88 s)
 FPS_MIN = 0.01              # register resolution (the camera clamps further, 0.1 fps on IMX178M)
+# IMX178M at 12 bit: readout-limited frame period = rows x line + this (measured: 30.12 ms at
+# full frame, 10.85 ms at 1280x720). The frame-rate register and its maximum can keep a faster
+# value from another bit depth (seen: 174 fps at 448 rows in 8, 10 and 12 bit, where 12 bit
+# reads out in 6.96 ms); the camera then runs at its readout limit, not at the register.
+IMX178_LINE_NS_12 = 14_330
+IMX178_READOUT_EXTRA_NS = 540_000
 
 MODELS = {
     662: "MV-MIPI-IMX296M", 376: "MV-MIPI-IMX178M", 304: "MV-MIPI-SC130M",
@@ -401,7 +407,7 @@ class Camera:
         self.region = (0, 0, self.sensor_w, self.sensor_h)
         self.fixed_fps = None       # None: frame rate follows the exposure time
         self.exposure_us = None     # last requested exposure (the read-back may be clipped)
-        self.fps_reg = None         # last frame-rate register value written (1/100 fps)
+        self.fps_reg = None         # frame-rate register value in force (1/100 fps; None: read it)
         self.max_exposure_us = None
         self.stream = None
 
@@ -479,8 +485,17 @@ class Camera:
         self.set_exposure_time_auto(0)
         self.set_gain_auto(0)
 
+    def _readout_period_ns(self):
+        """Shortest frame period the sensor can read out (rows x line + overhead), where it is
+        measured (IMX178M, 12 bit); else None."""
+        if self.info["model"] != "MV-MIPI-IMX178M" or FORMATS[self.pixel_format][0] != 2:
+            return None
+        return self.region[3] * IMX178_LINE_NS_12 + IMX178_READOUT_EXTRA_NS
+
     def _max_fps(self):
-        return self.regs.read(REG_MAX_FPS) / 100.0
+        fps = self.regs.read(REG_MAX_FPS) / 100.0
+        floor = self._readout_period_ns()
+        return fps if floor is None else min(fps, 1e9 / floor)
 
     def _write_fps(self, fps):
         # round down: the frame period must not end up shorter than the exposure
@@ -497,6 +512,7 @@ class Camera:
         """
         cur = self.regs.read(REG_FPS)
         if value == cur:
+            self.fps_reg = cur      # the camera may have set it itself (new format / region)
             return
         streaming = self.stream is not None and self.stream.streaming
         if streaming:
@@ -516,10 +532,13 @@ class Camera:
             self.stream.start()
 
     def frame_period_ns(self):
-        """Expected time between frames when free-running (from the last frame rate set)."""
+        """Expected time between frames when free-running (from the frame-rate register; it
+        is re-read after every new stream, since the camera clamps it to the format's and
+        region's maximum by itself)."""
         if self.fps_reg is None:
             self.fps_reg = self.regs.read(REG_FPS)
-        return 1e11 / self.fps_reg
+        floor = self._readout_period_ns()
+        return max(1e11 / self.fps_reg, floor or 0)
 
     def set_frame_rate(self, fps):
         self.fixed_fps = fps
@@ -628,6 +647,7 @@ class Camera:
         _, _, bits, fourcc, _ = FORMATS[self.pixel_format]
         x, y, w, h = self.region
         self.stream = Stream(self.video_dev, self.sensor_w, h, fourcc, bits, n_buffers, x, w)
+        self.fps_reg = None         # the camera may have changed it with the format / region
         # max frame rate depends on the ROI and format just applied
         if self.fixed_fps is not None:
             self._write_fps(self.fixed_fps)

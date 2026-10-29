@@ -507,6 +507,13 @@ every other pulse once that's exceeded; watch `lost` in the status bar.
   the gain while keeping 4× finer steps than 8 bit. Packed and unpacked variants (Y10P / Y10) run
   at the same speed. The GPS trigger limit improves in the same proportion (estimated, full
   frame: about 15.8 / 18.5 / 18.9 fps).
+- **The frame-rate register can't be trusted after a depth change** (seen 2026-10-28, 448-row
+  region): it read 174 fps in 8, 10 and 12 bit, but 12 bit reads out in 6.96 ms (144 fps), so
+  the camera ran at that limit while the stamps assumed 5.75 ms: about 1.2 ms (84 rows) early.
+  For the IMX178 at 12 bit the frame period now has a floor at the readout limit,
+  rows × 14.33 µs + 0.54 ms (30.12 ms full frame, 10.86 ms at 720 rows), and faster rates are
+  never written. 8 and 10 bit have no such floor (their line times are estimates); in that
+  test the register's 5.75 ms fitted 10 bit to a row, and 8 bit to 11 rows.
 - **Timing is calibrated for 12 bit only.** For 10 and 8 bit, the line time is estimated from the
   minimum frame period (12.13 and 11.80 µs; frame period = rows × line + about 0.5 ms, which fits
   the 12-bit numbers at full frame and at 1280 × 720). The row-0 offsets are assumed unchanged.
