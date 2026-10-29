@@ -30,7 +30,7 @@ class Grabber(threading.Thread):
         # expected spacing when free-running (None: don't check, e.g. triggered).
         self.frame_period_ns = None
         # PulseStamper while GPS-triggered (None: free run etc.); the recorder then starts
-        # and stops by pulse time
+        # and stops by pulse time (by the Pi clock while the stamper returns no pulse)
         self.stamper = None
         # exposure_start(frame_ns, pulse_ns or None) -> row-0 exposure start (UTC ns), the
         # time stamp written to the recording
@@ -116,8 +116,9 @@ class Grabber(threading.Thread):
             stamper = self.stamper
             pulse = None
             if stamper is not None:
-                pulse = stamper(frame_ns)
-                if stamper is last_stamper and last_pulse is not None:
+                pulse = stamper(frame_ns)       # None: GPS clock not anchored yet (Pi clock)
+                if (stamper is last_stamper and last_pulse is not None and pulse is not None
+                        and stamper.settled):   # not while the rate changes
                     gap = pulse - last_pulse
                     if gap > (stamper.stride + 0.5) * stamper.period_ns:
                         self.missed += round(gap / stamper.period_ns) - stamper.stride

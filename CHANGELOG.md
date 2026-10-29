@@ -7,6 +7,16 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Capture: GPS-mode frame stamps use GPS UTC only (`GpsClock`): the Pi's monotonic clock is
+  anchored on the 1 Hz timepulse with UBX NAV-TIMEUTC (leap seconds known) and kept by the
+  trigger pulses, with drift tracking; no NTP. Re-anchors on every rate change and before every
+  GPS recording (Record waits until the stamps are exact; a set start time anchors 20 s ahead).
+- Capture: GPS rate typed in the GUI or `--gps-rate` as fps or period (`1.5`, `250ms`, `2s`), 1.5 fps
+  in the list; rates that aren't whole Hz go to the GPS as a µs period with the pulse phase from
+  UBX TIM-TP. Rate changes stamp on both pulse grids until the GPS confirms.
+- Capture: `--gps-pulse-ms` (timepulse length, for LED timing checks).
+- Capture: the y-trigger line can be dragged; dotted lines mark where the exposure-smeared LED edge
+  begins and ends.
 - Capture: live stacking aligned on the stars (key `s`, `--stack-frames`) and plate solve of the
   stack on nova.astrometry.net (`--focal-mm` for the scale hint): RA/Dec of the field centre,
   field size, orientation, alt/az, the brightest stars with names, circled on the stack.
@@ -36,6 +46,9 @@ uses [Semantic Versioning](https://semver.org/).
   aperture on the displayed frame, without moving apertures; shown in the zoom views and status.
 
 ### Changed
+- Capture: VEYE GPS-trigger timing offset 0.33 → 0.51 ms (re-measured with a 1 ms LED flash, see
+  CAPTURE.md); GPS stamps recorded before are about 0.18 ms early. The timepulse is set on the
+  UTC grid explicitly; non-whole-Hz rates are no longer aligned by the GPS (TIM-TP instead).
 - Capture code split into the `pystarlight.capture` package (GUI, camera backends + session,
   decoding, timing, threads, recorder, file writers); `camera.py` is now a launcher with the same
   command line.

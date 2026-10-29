@@ -30,13 +30,16 @@ from .timing import (
     VEYE_CALIBRATED_BITS,
     PulseStamper,
     onset_delay_us,
+    parse_rate,
     parse_utc,
     pulses_per_frame,
+    rate_str,
     utc_str,
     veye_line_ns,
 )
 
 EXP_STEPS = 1000            # exposure slider resolution (log scale)
+REANCHOR_LEAD_NS = 20 * 10**9   # set start time: anchor on GPS UTC this long before
 GAIN_STEPS = 10             # gain slider: 0.1 dB per step
 GAMMA_MIN, GAMMA_MAX = 0.1, 4.0
 
@@ -58,6 +61,7 @@ class ImageView(QtWidgets.QWidget):
 
     changed = Signal()                       # view moved: render again
     selected = Signal(int, int, int, int)    # x0, y0, x1, y1 (image pixels)
+    hline_moved = Signal(int)                # the dashed line was dragged to this row
     MAX_ZOOM = 64.0
 
     def __init__(self):
@@ -65,6 +69,7 @@ class ImageView(QtWidgets.QWidget):
         self.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Ignored)
         self.setMinimumSize(320, 240)
         self.setMouseTracking(True)
+        self.setFocusPolicy(QtCore.Qt.ClickFocus)  # clicking the image ends typing in a field
         self.zoom = 1.0             # 1: the whole image fits
         self.center = None          # image point at the view centre (None: image centre)
         self.img_size = None        # (w, h) of the frame shown
@@ -73,9 +78,11 @@ class ImageView(QtWidgets.QWidget):
         self.map = None
         self.select_mode = False
         self.drag = None            # ("pan", start pos, start centre) / ("select", image point)
+                                    # / ("hline", row): dragging the dashed line
         self.band = None            # rectangle being dragged (image pixels)
         self.marks = []             # [(x0, y0, x1, y1, QColor)] to draw (image pixels)
         self.hline = None           # (row, QColor): a dashed line across the image
+        self.hspan = 0              # rows above/below it: dotted lines (0: none)
         self.circles = []           # [(x, y, radius, text, QColor)]: stars (image pixels)
         self.banner = ""            # shown at the bottom (e.g. while the stack is displayed)
         self.cursor_img = None      # image point under the mouse
@@ -143,11 +150,20 @@ class ImageView(QtWidgets.QWidget):
             p.drawRect(QtCore.QRectF(QtCore.QPointF(*a), QtCore.QPointF(*b)))
         if self.hline is not None:
             row, color = self.hline
+            if self.drag is not None and self.drag[0] == "hline":
+                row = self.drag[1]              # (the status timer resets self.hline)
             pen = QtGui.QPen(color, 1, QtCore.Qt.DashLine)
             pen.setCosmetic(True)
             p.setPen(pen)
             a, b = self.to_screen(0, row + 0.5), self.to_screen(self.img_size[0], row + 0.5)
             p.drawLine(QtCore.QPointF(*a), QtCore.QPointF(*b))
+            if self.hspan:
+                pen.setStyle(QtCore.Qt.DotLine)
+                p.setPen(pen)
+                for r in (row - self.hspan, row + self.hspan):
+                    if 0 <= r < self.img_size[1]:
+                        a, b = self.to_screen(0, r + 0.5), self.to_screen(self.img_size[0], r + 0.5)
+                        p.drawLine(QtCore.QPointF(*a), QtCore.QPointF(*b))
         for x, y, r, text, color in self.circles:
             pen = QtGui.QPen(color, 2)
             pen.setCosmetic(True)
@@ -179,10 +195,18 @@ class ImageView(QtWidgets.QWidget):
         self.zoom = new
         self.changed.emit()
 
+    def _near_hline(self, pos):
+        """True if the screen point is within a few pixels of the dashed line."""
+        if self.hline is None:
+            return False
+        return abs(pos.y() - self.to_screen(0, self.hline[0] + 0.5)[1]) <= 5
+
     def mousePressEvent(self, e):
         if self.map is None or e.button() != QtCore.Qt.LeftButton:
             return
-        if self.select_mode:
+        if self._near_hline(event_pos(e)):
+            self.drag = ("hline", self.hline[0])
+        elif self.select_mode:
             self.drag = ("select", self.to_image(event_pos(e)))
         else:
             W, H = self.img_size
@@ -193,8 +217,13 @@ class ImageView(QtWidgets.QWidget):
             return
         self.cursor_img = self.to_image(event_pos(e))
         if self.drag is None:
+            near = self._near_hline(event_pos(e))
+            self.setCursor(QtCore.Qt.SizeVerCursor if near else QtCore.Qt.ArrowCursor)
             return
-        if self.drag[0] == "pan" and self.zoom > 1.0:
+        if self.drag[0] == "hline":
+            self.drag = ("hline", int(min(max(self.cursor_img[1], 0), self.img_size[1] - 1)))
+            self.update()
+        elif self.drag[0] == "pan" and self.zoom > 1.0:
             s = self._fit() * self.zoom
             d = event_pos(e) - self.drag[1]
             self.center = (self.drag[2][0] - d.x() / s, self.drag[2][1] - d.y() / s)
@@ -209,6 +238,8 @@ class ImageView(QtWidgets.QWidget):
             W, H = self.img_size
             x0, y0, x1, y1 = self.band
             self.selected.emit(int(max(0, x0)), int(max(0, y0)), int(min(W, x1)), int(min(H, y1)))
+        if self.drag is not None and self.drag[0] == "hline":
+            self.hline_moved.emit(self.drag[1])
         self.drag, self.band = None, None
         self.update()
 
@@ -285,6 +316,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.gps_busy = False               # timepulse rate being set (worker thread)
         self.gps_msg = ""
         self.last_exposure = None
+        self.clock_seen = False             # GPS clock anchored (poll: then set the rate)
+        # record pressed in GPS mode: anchor on GPS UTC again first, then arm the recorder
+        # ({"args": arm() arguments, "begin_ns": when to start anchoring, "anchoring": bool})
+        self.pending_rec = None
         self.last_saved = ""
         self.stack_seen = -1                # stacker.version shown
         self.stack_img = None               # stretched stack for the view
@@ -303,6 +338,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.view = ImageView()
         self.view.changed.connect(self.on_view_changed)
         self.view.selected.connect(self.on_roi_selected)
+        self.view.hline_moved.connect(self.on_hline_moved)
         panel = QtWidgets.QWidget()
         col = QtWidgets.QVBoxLayout(panel)
         col.addWidget(self.make_camera_box())
@@ -592,9 +628,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.base_mode = self.args.trigger if self.args.trigger in ("hw", "sw") else "free"
         self.gps_check = QtWidgets.QCheckBox(f"GPS trigger  (off: {base})")
         self.gps_check.setChecked(self.args.trigger == "gps")
-        self.rate_combo = QtWidgets.QComboBox()
+        # a list of rates, or type one: fps ("1.5") or the pulse period ("250 ms", "2 s")
+        self.rate_combo = QtWidgets.QComboBox(editable=True)
+        self.rate_combo.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
         self.rate_combo.addItems([f"{r} fps" for r in GPS_RATES])
-        self.rate_combo.setCurrentIndex(GPS_RATES.index(self.args.gps_rate))
+        self.rate_combo.setToolTip("GPS trigger rate: pick one, or type fps (e.g. 1.5) or the "
+                                   "pulse period (e.g. 250 ms, 2 s) and press Enter. Rates that "
+                                   "are not whole fps become a period in whole µs.")
+        text = self.args.gps_rate
+        self.selected_rate = parse_rate(text)
+        self.rate_combo.setEditText(text if any(ch.isalpha() for ch in text) else f"{text} fps")
+        self.rate_error = ""
         self.trig_button = QtWidgets.QPushButton("Software trigger (t)")
         self.trig_button.clicked.connect(self.software_trigger)
         self.trig_info = QtWidgets.QLabel(wordWrap=True)
@@ -620,7 +664,8 @@ class MainWindow(QtWidgets.QMainWindow):
         g.addWidget(self.trig_button, 4, 0, 1, 2)
         g.addWidget(self.trig_info, 5, 0, 1, 2)
         self.gps_check.toggled.connect(lambda _: self.on_trigger_mode())
-        self.rate_combo.currentIndexChanged.connect(lambda _: self.on_rate())
+        self.rate_combo.activated.connect(lambda _: self.on_rate_text())
+        self.rate_combo.lineEdit().editingFinished.connect(self.on_rate_text)
         self.delay_spin.valueChanged.connect(self.on_delay)
         self.ytrig_check.toggled.connect(lambda _: self.follow_y_trigger())
         self.ytrig_spin.valueChanged.connect(lambda _: self.follow_y_trigger())
@@ -630,7 +675,45 @@ class MainWindow(QtWidgets.QMainWindow):
         return "gps" if self.gps_check.isChecked() else self.base_mode
 
     def gps_rate(self):
-        return GPS_RATES[self.rate_combo.currentIndex()]
+        """The selected GPS trigger rate (Fraction, fps)."""
+        return self.selected_rate
+
+    def on_rate_text(self):
+        """A rate picked or typed (Enter, or the box lost focus). Focus goes back to the image
+        so the one-letter hotkeys work again instead of being typed into the box."""
+        text = self.rate_combo.currentText()
+        self.view.setFocus()
+        try:
+            rate = parse_rate(text)
+        except ValueError as e:
+            self.rate_error = str(e)
+            self.rate_combo.setEditText(rate_str(self.selected_rate).split(" (")[0])
+            return
+        self.rate_error = ""
+        if not any(ch.isalpha() for ch in text):
+            self.rate_combo.setEditText(f"{text.strip()} fps")
+        changed = rate != self.selected_rate
+        self.selected_rate = rate
+        if changed and self.mode() == "gps" and self.c.gps is not None:
+            self.reanchor()             # every rate change: 1 Hz, anchor, then the new rate
+        else:
+            self.on_rate()
+
+    def reanchor(self):
+        """Anchor the GPS clock again: the timepulse goes to 1 Hz until it is anchored, then
+        (status timer) to the selected rate."""
+        self.c.gps.clock.reset()
+        self.clock_seen = False
+        self.on_rate()
+
+    def timing_ready(self):
+        """GPS trigger: anchored and stamping exactly at the selected rate."""
+        c = self.c
+        st = c.grabber.stamper
+        return (c.gps is None or
+                (c.gps.clock.anchored and not c.gps.clock.suspect and not self.gps_busy
+                 and c.gps.tp_rate == self.selected_rate and st is not None
+                 and st.rate == self.selected_rate and st.ready))
 
     def predicted_lag_ns(self):
         """Frame start after the trigger pulse: VEYE frame period + ~3 ms (measured on an
@@ -650,6 +733,9 @@ class MainWindow(QtWidgets.QMainWindow):
                                      if c.is_veye and mode == "free" else None)
         self.trig_button.setVisible(mode == "sw")
         if mode == "gps":
+            if c.gps is not None and c.gps.clock.stale():
+                c.gps.clock.reset()         # anchor (again) on GPS UTC
+            c.grabber.stamper = None        # a new one for the current rate
             self.on_rate()
         else:
             c.grabber.stamper = None
@@ -660,31 +746,49 @@ class MainWindow(QtWidgets.QMainWindow):
         gps = self.c.gps
         if gps is None:
             return Fraction(self.gps_rate())
-        return Fraction(gps.tp_rate).limit_denominator(1000) if gps.tp_rate else Fraction(1)
+        return Fraction(gps.tp_rate) if gps.tp_rate else Fraction(1)
+
+    def wanted_rate(self):
+        """The selected rate, or 1 Hz until the GPS clock is anchored."""
+        gps = self.c.gps
+        if gps is not None and not gps.clock.anchored:
+            return Fraction(1)
+        return Fraction(self.gps_rate())
 
     def on_rate(self):
+        """GPS trigger: stamp the pulses as they come; ask the GPS for the wanted rate. The
+        stamper stays across the change (it takes either rate until the GPS confirms)."""
         c = self.c
-        if self.mode() == "gps":
-            c.grabber.stamper = PulseStamper(self.pulse_rate(), self.predicted_lag_ns())
+        clock = c.gps.clock if c.gps is not None else None
+        if self.mode() == "gps" and c.grabber.stamper is None:
+            c.grabber.stamper = PulseStamper(self.pulse_rate(), self.predicted_lag_ns(), clock)
             c.grabber.missed = 0
         self.last_exposure = c.controller.exposure_us
-        rate = Fraction(self.gps_rate())
-        if c.gps is None or self.gps_busy or rate == self.pulse_rate():
+        rate = self.wanted_rate()
+        # tp_rate None: the GPS is untouched (or left at another rate by a crash): set it
+        if (c.gps is None or self.gps_busy or self.mode() != "gps"
+                or (rate == self.pulse_rate() and c.gps.tp_rate is not None)):
             return
+        stamper = c.grabber.stamper
+        stamper.change_rate(rate)
 
         def work():
             ok = False
             try:
-                ok = c.gps.set_timepulse(float(rate))
+                ok = c.gps.set_timepulse(rate)
                 self.gps_msg = "" if ok else "GPS rejected the timepulse setting (NAK)"
             except Exception as e:
                 self.gps_msg = f"GPS: {e}"
+            if ok:
+                stamper.rate_confirmed()
+            else:
+                stamper.cancel_change()
             self.gps_busy = False
-            if ok:      # stamp at the new rate (and catch up if the selection changed)
+            if ok:      # catch up if the selection changed meanwhile
                 QtCore.QMetaObject.invokeMethod(self, "on_rate_later", QtCore.Qt.QueuedConnection)
 
         self.gps_busy = True
-        self.gps_msg = f"setting GPS timepulse to {rate} Hz..."
+        self.gps_msg = f"setting GPS timepulse to {rate_str(rate)}..."
         threading.Thread(target=work, daemon=True).start()
 
     @Slot()
@@ -695,8 +799,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.c.trigger_delay_us = ms * 1000             # camera units (µs)
         if self.mode() != "free":
             self.c.controller.request("delay", self.c.trigger_delay_us)
-        if self.mode() == "gps":
-            self.on_rate()                              # new pulse-to-frame lag
+        stamper = self.c.grabber.stamper
+        if self.mode() == "gps" and stamper is not None:
+            stamper.lag_ns = self.predicted_lag_ns()    # new pulse-to-frame lag
 
     def y_trigger_delay_us(self):
         """The delay that puts the timepulse on the y-trigger row (None: off or not GPS)."""
@@ -704,7 +809,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if not (c.is_veye and self.mode() == "gps" and self.ytrig_check.isChecked()):
             return None
         line = veye_line_ns(format_bits(c.pixel_format))
-        return onset_delay_us(self.ytrig_spin.value(), float(self.pulse_rate()),
+        # for the selected rate, also while anchoring at 1 Hz: the delay stays short and
+        # the camera is not restarted twice
+        return onset_delay_us(self.ytrig_spin.value(), float(self.gps_rate()),
                               c.camera.frame_period_ns(), c.controller.exposure_us * 1000, line)
 
     def follow_y_trigger(self, busy=False):
@@ -712,9 +819,18 @@ class MainWindow(QtWidgets.QMainWindow):
         (not while recording: each change restarts the camera)."""
         us = self.y_trigger_delay_us()
         self.view.hline = None if us is None else (self.ytrig_spin.value(), QtGui.QColor("#ff9100"))
+        # dotted: rows whose exposure ends / starts on the pulse (the edge is spread between)
+        line = veye_line_ns(format_bits(self.c.pixel_format))
+        self.view.hspan = round(self.c.controller.exposure_us * 1000 / 2 / line)
         self.view.update()
         if us is not None and not busy and abs(us - (self.c.trigger_delay_us or 0)) > 1:
             self.delay_spin.setValue(round(us) / 1000)  # -> on_delay
+
+    def on_hline_moved(self, row):
+        """The y-trigger line was dragged in the image."""
+        if self.ytrig_spin.isEnabled():
+            self.ytrig_spin.setValue(row)       # -> follow_y_trigger -> new delay
+        self.follow_y_trigger()                 # (locked: the line goes back)
 
     def software_trigger(self):
         if self.mode() == "sw":
@@ -729,6 +845,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.gps_labels = {}
         rows = [("utc", "UTC (GPS)"), ("fix", "Fix"), ("sats", "Satellites"), ("dop", "DOP"),
                 ("pos", "Position"), ("alt", "Altitude"), ("pulse", "Timepulse"),
+                ("clock", "Time base"),
                 ("stamp", "Exposure start"), ("pulse_t", "Trigger pulse"),
                 ("lag", "Pulse → frame"), ("rows", "Rolling shutter")]
         if self.c.compass is not None:
@@ -866,6 +983,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_record_button(self):
         rec = self.c.recorder
+        if self.pending_rec is not None:        # cancel while anchoring
+            self.pending_rec = None
+            return
         if rec.state != "idle":
             rec.stop()
             return
@@ -877,9 +997,33 @@ class MainWindow(QtWidgets.QMainWindow):
             start = parse_utc(self.start_time.time().toString("HH:mm:ss"))
             start_ns = int(start.timestamp()) * 10**9
             print(f"Recording armed for {start.isoformat()}")
-        rec.arm(start_ns, self.dur_spin.value() if self.dur_check.isChecked() else None,
+        args = (start_ns, self.dur_spin.value() if self.dur_check.isChecked() else None,
                 self.frames_spin.value() if self.frames_check.isChecked() else None)
+        if self.mode() == "gps" and self.c.gps is not None:
+            # every recording: anchor on GPS UTC again (~5 s), 20 s before a set start time
+            begin = time.time_ns() if start_ns is None else start_ns - REANCHOR_LEAD_NS
+            self.pending_rec = {"args": args, "begin_ns": begin, "anchoring": False}
+        else:
+            rec.arm(*args)
         self.on_status_timer()
+
+    def follow_pending_record(self):
+        """Status timer: start anchoring when due; arm the recorder once the stamps are ready."""
+        p = self.pending_rec
+        if p is None:
+            return
+        if self.mode() != "gps":
+            self.pending_rec = None
+        elif not p["anchoring"]:
+            if time.time_ns() >= p["begin_ns"]:
+                p["anchoring"] = True
+                self.reanchor()
+        elif self.timing_ready():
+            self.pending_rec = None
+            start_ns = p["args"][0]
+            if start_ns is not None and start_ns < time.time_ns():
+                print("GPS anchoring took past the start time: recording starts now")
+            self.c.recorder.arm(*p["args"])
 
     # ---- timers ----
     def on_frame_timer(self):
@@ -949,6 +1093,13 @@ class MainWindow(QtWidgets.QMainWindow):
         if stamper is not None and c.controller.exposure_us != self.last_exposure:
             self.last_exposure = c.controller.exposure_us
             stamper.lag_ns = self.predicted_lag_ns()
+        self.follow_pending_record()
+        # GPS clock just anchored (at 1 Hz): go to the selected rate (not while recording)
+        anchored = c.gps is not None and c.gps.clock.anchored
+        if anchored != self.clock_seen and not (anchored and rec.state != "idle"):
+            self.clock_seen = anchored
+            if anchored and mode == "gps":
+                self.on_rate()
 
         # ---- camera ----
         peak = int(self.img.max()) if self.img is not None else 0
@@ -958,7 +1109,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_stack_box()
 
         # ---- trigger ----
-        busy = rec.state != "idle"
+        busy = rec.state != "idle" or self.pending_rec is not None
         self.gps_check.setEnabled(not busy)
         self.rate_combo.setEnabled(not busy and mode == "gps" and not self.gps_busy)
         self.follow_y_trigger(busy)
@@ -991,17 +1142,31 @@ class MainWindow(QtWidgets.QMainWindow):
                                 f"{n}. pulse ({rate / n:g} fps).")
                 if ytrig:
                     line = veye_line_ns(format_bits(c.pixel_format))
-                    info.append(f"y-trigger: timepulse on row {self.ytrig_spin.value()}; the "
-                                f"edge spans ~{exp_ms * 1e6 / line:.0f} rows (shorter exposure: "
-                                f"sharper)")
+                    info.append(f"y-trigger: timepulse mid-exposure on row {self.ytrig_spin.value()}; "
+                                f"the edge spans ~{exp_ms * 1e6 / line:.0f} rows between the dotted "
+                                f"lines (first lit row: upper line; shorter exposure: sharper)")
             if c.gps is None:
                 info.append("No GPS: the trigger pulses must come at this rate by themselves.")
             elif not c.gps.has_fix():
                 info.append("<b style='color:#d33'>No GPS fix: no timepulses.</b>")
+            if c.gps is not None and not c.gps.clock.anchored:
+                info.append("<b style='color:#e65100'>Anchoring to GPS UTC at 1 Hz (stamps: Pi "
+                            "clock until then)</b>")
+            elif c.gps is not None and c.gps.clock.suspect:
+                info.append(f"<b style='color:#d33'>{c.gps.clock.message}</b>")
             if c.grabber.missed:
                 info.append(f"missed pulses: {c.grabber.missed}")
+            if stamper is not None and stamper.off_grid:
+                info.append(f"frames off the pulse grid: {stamper.off_grid}")
+            if stamper is not None and stamper.grid_moved:
+                info.append(f"<b style='color:#d33'>TIM-TP pulses off the grid: "
+                            f"{stamper.grid_moved}</b>")
+            if Fraction(self.gps_rate()).denominator != 1:
+                info.append(f"{rate_str(self.gps_rate())}: pulse phase from TIM-TP")
         if self.gps_msg:
             info.append(self.gps_msg)
+        if self.rate_error:
+            info.append(f"<b style='color:#d33'>{self.rate_error}</b>")
         self.trig_info.setText("<br>".join(info))
         self.trig_info.setVisible(bool(info))
 
@@ -1023,7 +1188,10 @@ class MainWindow(QtWidgets.QMainWindow):
             h = c.compass.heading()
             L["heading"].setText(f"{h:.0f}° magnetic (uncalibrated)" if h is not None else "-")
         if c.grabber.exp_ns is not None:
-            L["stamp"].setText(utc_str(c.grabber.exp_ns) + ("  GPS" if stamper else "  Pi clock"))
+            L["stamp"].setText(utc_str(c.grabber.exp_ns) + (
+                "  Pi clock" if c.grabber.pulse_ns is None else
+                "  GPS UTC" if stamper is not None and stamper.clock is not None else
+                "  pulse, Pi clock"))
         L["pulse_t"].setText(utc_str(c.grabber.pulse_ns) if c.grabber.pulse_ns is not None else "-")
         L["lag"].setText(f"{stamper.last_lag_ns / 1e6:.1f} ms"
                          if stamper is not None and stamper.last_lag_ns is not None else "-")
@@ -1052,6 +1220,16 @@ class MainWindow(QtWidgets.QMainWindow):
                     + f"<br>{os.path.basename(rec.path or '')}")
             if rec.stop_ns:
                 text += f"<br>stops at {utc_str(rec.stop_ns, 0)} UTC"
+        elif self.pending_rec is not None:
+            self.rec_button.setText("Cancel  (r)")
+            self.rec_button.setStyleSheet("background: #ef6c00; color: white; font-weight: bold;")
+            p = self.pending_rec
+            if p["anchoring"]:
+                text = (f"<b>Anchoring to GPS UTC</b> (1 Hz), then {rate_str(self.selected_rate)}"
+                        f"; recording starts when the stamps are ready")
+            else:
+                text = (f"<b>Armed</b>: anchoring to GPS UTC at {utc_str(p['begin_ns'], 0)} UTC "
+                        f"(in {(p['begin_ns'] - time.time_ns()) / 1e9:.0f} s)")
         elif rec.state == "armed":
             self.rec_button.setText("Cancel  (r)")
             self.rec_button.setStyleSheet("background: #ef6c00; color: white; font-weight: bold;")

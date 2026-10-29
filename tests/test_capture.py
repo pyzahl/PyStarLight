@@ -1,14 +1,16 @@
 """Capture recording formats: RAVF / SER writers, crash recovery, repair, recorder thread."""
+import calendar
 import os
 import shutil
+import struct
 import time
 
 import numpy as np
 import pytest
 
 from pystarlight import movie
-from pystarlight.capture import ravf_writer, recorder, ser_writer
-from pystarlight.capture.timing import PulseStamper, exposure_start
+from pystarlight.capture import ravf_writer, recorder, ser_writer, timing
+from pystarlight.capture.timing import GpsClock, PulseStamper, exposure_start
 
 T0 = 1_792_000_000 * 10**9 + 123_456_000        # a UTC time in 2026, Unix ns
 W, H = 40, 24
@@ -165,10 +167,172 @@ def test_pulse_stamper_and_exposure_start():
     st = PulseStamper("10", lag_ns=33_000_000)
     pulse = 1_792_000_000 * 10**9 + 300_000_000
     assert st(pulse + 34_000_000) == pulse
-    # VEYE GPS: pulse + 0.9967 x delay + (period - exposure) + 0.33 ms
+    # VEYE GPS: pulse + 0.9967 x delay + (period - exposure) + 0.51 ms
     assert exposure_start(0, pulse, 8000, 1000, True, 30_120_000) == \
-        pulse + 996_700 + 30_120_000 - 8_000_000 + 330_000
+        pulse + 996_700 + 30_120_000 - 8_000_000 + 510_000
     assert exposure_start(pulse, None, 8000, None, False) == pulse - 8_000_000
+
+
+S0 = 1_792_000_000 * 10**9       # a whole UTC second (ns)
+TRUE_OFF = S0 - 5_000 * 10**9    # UTC - CLOCK_MONOTONIC (the truth)
+LAG = 33_000_000                 # pulse -> frame start
+BURST = 80_000_000               # epoch -> start of the GPS message burst
+
+
+def anchored_stamper(monkeypatch, pi_error_ns=400_000_000):
+    """A 1 Hz stamper with a GpsClock, anchored on 4 seconds of pulses and GPS labels. The Pi
+    clock is off by pi_error_ns: GPS stamps must not depend on it."""
+    monkeypatch.setattr(timing, "pi_minus_mono_ns", lambda: TRUE_OFF + pi_error_ns)
+    clock = GpsClock()
+    st = PulseStamper(1, LAG, clock)
+    out = []
+    for k in range(4):
+        pulse_mono = S0 + k * 10**9 - TRUE_OFF
+        out.append(st(pulse_mono + LAG + 50_000 + TRUE_OFF + pi_error_ns))
+        clock.label(pulse_mono + BURST, S0 + k * 10**9 + 1234)
+    return st, clock, out
+
+
+def test_gps_clock_anchors_without_pi_clock(monkeypatch):
+    st, clock, out = anchored_stamper(monkeypatch)
+    assert out[:3] == [None, None, None]       # 3 labelled seconds before anchoring
+    assert clock.anchored and not clock.suspect
+    assert out[3] == S0 + 3 * 10**9
+    assert abs(clock.burst_lag_ns - BURST) < 100_000
+    frame = S0 + 4 * 10**9 - TRUE_OFF + LAG + TRUE_OFF + 400_000_000
+    assert st(frame) == S0 + 4 * 10**9
+
+
+def test_gps_clock_needs_consistent_seconds(monkeypatch):
+    monkeypatch.setattr(timing, "pi_minus_mono_ns", lambda: TRUE_OFF)
+    clock = GpsClock()
+    st = PulseStamper(1, LAG, clock)
+    for k in range(4):                          # GPS seconds skip: no anchoring
+        pulse_mono = S0 + k * 10**9 - TRUE_OFF
+        st(pulse_mono + LAG + TRUE_OFF)
+        clock.label(pulse_mono + BURST, S0 + 2 * k * 10**9)
+    assert not clock.anchored
+    clock.reset()
+    for k in range(4):                          # bursts too late after the pulse: no anchoring
+        pulse_mono = S0 + k * 10**9 - TRUE_OFF
+        st(pulse_mono + LAG + TRUE_OFF)
+        clock.label(pulse_mono + 700_000_000, S0 + k * 10**9)
+    assert not clock.anchored
+
+
+def test_gps_clock_anchors_on_every_other_pulse(monkeypatch):
+    monkeypatch.setattr(timing, "pi_minus_mono_ns", lambda: TRUE_OFF)
+    clock = GpsClock()
+    st = PulseStamper(1, LAG, clock)
+    for k in range(8):                          # long trigger delay: a frame every 2nd pulse
+        pulse_mono = S0 + k * 10**9 - TRUE_OFF
+        if k % 2 == 0:
+            st(pulse_mono + LAG + TRUE_OFF)
+        clock.label(pulse_mono + BURST, S0 + k * 10**9)
+    assert clock.anchored
+    assert st(S0 + 8 * 10**9 + LAG) == S0 + 8 * 10**9
+
+
+def test_gps_clock_flags_wrong_second(monkeypatch):
+    st, clock, _ = anchored_stamper(monkeypatch)
+    for k in range(4, 7):                       # GPS now names the next second: inconsistent
+        clock.label(S0 + k * 10**9 - TRUE_OFF + BURST, S0 + (k + 1) * 10**9)
+    assert clock.suspect and clock.stale()
+
+
+def test_rate_change_stamps_both_grids_then_new(monkeypatch):
+    st, clock, _ = anchored_stamper(monkeypatch, pi_error_ns=0)
+    pi = TRUE_OFF                               # frame_ns = mono + pi (Pi clock right here)
+
+    def frame(utc_pulse):
+        return utc_pulse - TRUE_OFF + LAG + pi
+
+    st.change_rate(30)
+    t5 = S0 + 5 * 10**9
+    assert st(frame(t5)) == t5                  # old 1 Hz pulse
+    p = t5 + (7 * 10**9 + 15) // 30              # GPS already switched: 7/30 s later
+    assert st(frame(p)) == p
+    assert not st.settled
+    st.rate_confirmed(t5 + 300_000_000 - TRUE_OFF)
+    q = t5 + 12 * 10**9 // 30                    # 400 ms: after the ACK
+    assert st(frame(q)) == q and st.settled and st.rates == [30]
+    assert st.off_grid == 0
+    st.cancel_change()
+    assert st.rates == [30]
+
+
+def test_gps_clock_follows_pi_clock_drift(monkeypatch):
+    st, clock, _ = anchored_stamper(monkeypatch, pi_error_ns=0)
+    st.change_rate(30)
+    st.rate_confirmed(S0 + 4 * 10**9 - TRUE_OFF)
+    drift = 30e-6                               # the Pi's monotonic clock runs 30 ppm fast
+    t_anchor = S0 + 3 * 10**9
+    for i in range(30 * 300):                   # 5 minutes at 30 Hz
+        utc = S0 + 5 * 10**9 + (i * 10**9 + 15) // 30
+        mono = utc - TRUE_OFF + round((utc - t_anchor) * drift)
+        assert st(mono + LAG + TRUE_OFF) == utc
+    assert abs(clock.drift + drift) < 1e-6        # offset UTC - Pi falls
+    assert st.off_grid == 0
+
+
+def test_parse_rate():
+    from fractions import Fraction
+
+    from pystarlight.capture.timing import parse_rate, rate_str
+    assert parse_rate("30") == parse_rate("30 fps") == parse_rate("30Hz") == 30
+    assert parse_rate("250 ms") == parse_rate("0.25 s") == 4
+    assert parse_rate("1.5") == parse_rate("666.667 ms") == Fraction(10**6, 666_667)
+    assert parse_rate("0,5") == parse_rate("2 s") == Fraction(1, 2)
+    assert rate_str(parse_rate("1.5")) == "1.5 fps (666.667 ms)"
+    assert rate_str(30) == "30 fps"
+    for bad in ("", "fast", "0", "5 ms", "2 min", "120 s"):
+        with pytest.raises(ValueError):
+            parse_rate(bad)
+
+
+def test_non_whole_hz_rate_takes_grid_from_tim_tp(monkeypatch):
+    from pystarlight.capture.timing import parse_rate
+    st, clock, _ = anchored_stamper(monkeypatch, pi_error_ns=0)
+    rate = parse_rate("1.5")
+    period = 666_667_000
+    st.change_rate(rate)
+    st.rate_confirmed(S0 + 4 * 10**9 - TRUE_OFF)
+    origin = S0 + 4 * 10**9 + 123_456_789          # the GPS's own phase for this period
+
+    def frame(utc_pulse):
+        return utc_pulse - TRUE_OFF + LAG + TRUE_OFF
+
+    first = origin + period
+    assert st(frame(first)) is None                 # no TIM-TP since the switch yet
+    clock.timepulse(origin + 2 * period, origin + 2 * period - TRUE_OFF - 300_000_000)
+    for n in range(2, 40):
+        assert st(frame(origin + n * period)) == origin + n * period
+    assert st.grid_moved == 0 and st.off_grid == 0
+    clock.timepulse(origin + 50 * period + 5_000_000, origin + 50 * period - TRUE_OFF)
+    st(frame(origin + 41 * period))
+    assert st.grid_moved == 1
+    clock.timepulse(S0 + 60 * 10**9, S0 + 30 * 10**9 - TRUE_OFF)    # 30 s off: GPS time?
+    assert clock.tp[0] != S0 + 60 * 10**9
+
+
+def test_tim_tp():
+    from pystarlight.capture.gps_ublox import tim_tp
+    week, tow_ms = 2441, 345_600_123
+    sub = 2**31                                      # + 0.5 ms
+    p = struct.pack("<IIiHBB", tow_ms, sub, 0, week, 0x03, 0)
+    assert tim_tp(p) == (315_964_800 + week * 604_800) * 10**9 + tow_ms * 10**6 + 500_000
+    assert tim_tp(struct.pack("<IIiHBB", tow_ms, sub, 0, week, 0x02, 0)) is None   # GNSS time
+
+
+def test_nav_timeutc():
+    from pystarlight.capture.gps_ublox import nav_timeutc
+
+    def payload(valid, nano=-1234):
+        return struct.pack("<IIiHBBBBBB", 0, 50, nano, 2026, 10, 28, 21, 15, 7, valid)
+    secs = calendar.timegm((2026, 10, 28, 21, 15, 7, 0, 0, 0))
+    assert nav_timeutc(payload(0x07)) == secs * 10**9 - 1234
+    assert nav_timeutc(payload(0x03)) is None   # UTC not valid (leap seconds unknown)
+    assert nav_timeutc(b"\0" * 10) is None
 
 
 # ---------------------------------------------------------------------------

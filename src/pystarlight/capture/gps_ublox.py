@@ -2,15 +2,22 @@
 (TIMEPULSE / PPS pin) rate, which triggers the camera.
 
 The timepulse is set with UBX-CFG-TP5: pulses only while the GPS has a fix (so every
-pulse is a true UTC instant), aligned to the UTC second, rising edge first. Rates that
-are whole Hz are set as a frequency (30 Hz: pulses at k/30 s exactly), others as a
-period in us (0.5 Hz: every even second). Settings are not saved in the GPS (no
-CFG-CFG): a power cycle brings back its default 1 Hz PPS.
+pulse is a true UTC instant), rising edge first, on the UTC time grid. Rates that are whole
+Hz are set as a frequency and aligned to the UTC second (30 Hz: pulses at k/30 s exactly);
+others as a period in whole us (1.5 fps: 666667 us), which the GPS aligns only for
+fractions of a second - their phase comes from UBX TIM-TP (the UTC of the next pulse).
+Settings are not saved in the GPS (no CFG-CFG): a power cycle brings back its default 1 Hz PPS.
+
+GPS UTC for the frame stamps (timing.GpsClock): UBX NAV-TIMEUTC and TIM-TP are switched on (and the unused
+NMEA GLL and VTG off, to keep the 9600 baud line from filling up); each one, with UTC valid,
+labels the burst of messages it came in, whose start (first byte after a quiet line) is
+taken from the monotonic clock.
 
 Optionally reads the compass that M8N modules often carry (QMC5883L or HMC5883L on the
 module's I2C wires, if they are connected to the Pi's I2C bus 1). The heading is
 magnetic and uncalibrated (no hard/soft-iron correction, no tilt compensation).
 """
+import calendar
 import fcntl
 import math
 import os
@@ -18,11 +25,20 @@ import struct
 import threading
 import time
 from datetime import datetime, timezone
+from fractions import Fraction
 
 import serial
 
+from .timing import GpsClock, rate_str
+
 UBX_SYNC = b"\xb5\x62"
 CFG_TP5 = (0x06, 0x31)
+CFG_MSG = (0x06, 0x01)
+NAV_TIMEUTC = (0x01, 0x21)
+TIM_TP = (0x0D, 0x01)
+GPS_EPOCH_S = 315_964_800       # 1980-01-06 in Unix seconds
+NMEA_GLL, NMEA_VTG = (0xF0, 0x01), (0xF0, 0x05)
+BURST_GAP_NS = 50_000_000       # a quiet line this long ends a burst of messages
 ACK = 0x05
 
 # TP5 flags
@@ -33,6 +49,7 @@ TP5_IS_FREQ = 0x08
 TP5_IS_LENGTH = 0x10
 TP5_ALIGN_TO_TOW = 0x20
 TP5_POLARITY_RISING = 0x40
+TP5_GRID_UTC = 0 << 7           # gridUtcGnss, bits 7-10: 0 UTC, 1 GPS, 2 GLONASS, 3 BeiDou, 4 Galileo
 
 FIX_NAMES = {1: "no fix", 2: "2D", 3: "3D"}
 GGA_QUALITY = {0: "invalid", 1: "GPS", 2: "DGPS", 4: "RTK", 5: "RTK float", 6: "dead reckoning"}
@@ -45,6 +62,31 @@ def ubx_frame(cls, mid, payload=b""):
         a = (a + x) & 0xFF
         b = (b + a) & 0xFF
     return UBX_SYNC + body + bytes([a, b])
+
+
+def nav_timeutc(payload):
+    """UBX NAV-TIMEUTC -> UTC (ns since 1970) of the navigation epoch, or None unless the
+    GPS says UTC is valid (leap seconds known)."""
+    if len(payload) < 20:
+        return None
+    _itow, _tacc, nano, year, month, day, hour, minute, sec, valid = struct.unpack(
+        "<IIiHBBBBBB", payload[:20])
+    if not valid & 0x04:        # validUTC
+        return None
+    secs = calendar.timegm((year, month, day, hour, minute, sec, 0, 0, 0))
+    return secs * 1_000_000_000 + nano
+
+
+def tim_tp(payload):
+    """UBX TIM-TP -> UTC (ns since 1970) of the next timepulse, or None unless its time base
+    is UTC and UTC is available. (Week and time of week then count UTC seconds.)"""
+    if len(payload) < 16:
+        return None
+    tow_ms, sub_ms, _qerr, week, flags = struct.unpack("<IIiHB", payload[:15])
+    if flags & 0x03 != 0x03:    # timeBase UTC, utc available
+        return None
+    return ((GPS_EPOCH_S + week * 604_800) * 1_000_000_000 + tow_ms * 1_000_000
+            + round(sub_ms * 1_000_000 / 2**32))
 
 
 def nmea_ok(line):
@@ -92,22 +134,33 @@ class Gps(threading.Thread):
         self.speed_kmh = None
         self.last_rx = 0.0          # time.monotonic() of the last good sentence
         # timepulse
-        self.tp_rate = None         # Hz currently set by set_timepulse() (None: untouched)
+        self.tp_rate = None         # Fraction (Hz) set by set_timepulse() (None: untouched)
+        self.pulse_len_us = None    # timepulse length (None: a quarter period, at most 100 ms)
         self._tp5 = None            # last polled CFG-TP5 payload
         self._acks = {}             # (cls, id) -> True (ACK) / False (NAK)
+        # GPS UTC
+        self.clock = GpsClock()
+        self.utc_valid = False      # NAV-TIMEUTC: UTC valid (leap seconds known)
+        self.burst_ns = 0           # time.monotonic_ns() when the current burst started
+        self._time_msgs = False     # NAV-TIMEUTC switched on
         self._buf = b""
         self.start()
 
     # ---- reader thread ----
     def run(self):
+        last_ns = 0
         while self.running:
             try:
-                data = self.ser.read(256)
+                data = self.ser.read(self.ser.in_waiting or 1)     # returns on the first byte
             except (serial.SerialException, OSError) as e:
                 print(f"GPS read failed: {e}")
                 time.sleep(1)
                 continue
             if data:
+                now = time.monotonic_ns()
+                if now - last_ns > BURST_GAP_NS:
+                    self.burst_ns = now
+                last_ns = now
                 self._buf += data
                 self._parse()
 
@@ -153,6 +206,15 @@ class Gps(threading.Thread):
             self._acks[(payload[0], payload[1])] = (mid == 0x01)
         elif (cls, mid) == CFG_TP5 and len(payload) >= 32:
             self._tp5 = payload
+        elif (cls, mid) == NAV_TIMEUTC:
+            utc = nav_timeutc(payload)
+            self.utc_valid = utc is not None
+            if utc is not None:
+                self.clock.label(self.burst_ns, utc)
+        elif (cls, mid) == TIM_TP:
+            utc = tim_tp(payload)
+            if utc is not None:
+                self.clock.timepulse(utc, time.monotonic_ns())
 
     def _on_nmea(self, f):
         kind = f[0][2:]
@@ -208,8 +270,9 @@ class Gps(threading.Thread):
                         f"{abs(self.lon):.5f}{'E' if self.lon >= 0 else 'W'}"
                         if self.lat is not None and self.lon is not None else "-"),
                 "alt": f"{self.alt:.1f} m" if self.alt is not None else "-",
-                "pulse": (f"{self.tp_rate:g} Hz" if self.tp_rate else "default (1 Hz)")
+                "pulse": (rate_str(self.tp_rate) if self.tp_rate else "default (1 Hz)")
                          + ("" if self.has_fix() else "  (off: no fix)"),
+                "clock": self.clock.status() + ("" if self.utc_valid else "  (UTC not valid yet)"),
             }
         return d
 
@@ -233,25 +296,45 @@ class Gps(threading.Thread):
                 time.sleep(0.02)
         return None
 
+    def enable_time_messages(self):
+        """NAV-TIMEUTC and TIM-TP once per epoch on this port; NMEA GLL and VTG (unused) off."""
+        ok = True
+        for (cls, mid), rate in ((NAV_TIMEUTC, 1), (TIM_TP, 1), (NMEA_GLL, 0), (NMEA_VTG, 0)):
+            ok &= bool(self._send_wait(*CFG_MSG, bytes([cls, mid, rate]), "ack"))
+        self._time_msgs = ok
+        return ok
+
     def set_timepulse(self, rate_hz):
-        """Timepulse TP1 at rate_hz (e.g. 30 .. 0.5), only while locked. True if ACKed."""
+        """Timepulse TP1 at rate_hz (e.g. 30 .. 0.5, or Fraction(10**6, period_us)), only
+        while locked, on the UTC grid. True if ACKed. Also switches NAV-TIMEUTC and TIM-TP on
+        (for the GPS clock) the first time."""
+        if not self._time_msgs and not self.enable_time_messages():
+            print("GPS: could not switch on NAV-TIMEUTC/TIM-TP (no GPS UTC for the stamps)")
         cur = self._send_wait(*CFG_TP5, b"\x00", "tp5")
         if cur is None:
             raise RuntimeError("GPS did not answer the CFG-TP5 poll (not a u-blox?)")
         (tp_idx, version, res, ant_delay, rf_delay, _f, _fl, _l, _ll, user_delay,
          _flags) = struct.unpack("<BBHhhIIIIiI", cur[:32])
-        is_freq = abs(rate_hz - round(rate_hz)) < 1e-9
-        period_us = 1e6 / rate_hz
-        value = int(round(rate_hz)) if is_freq else int(round(period_us))
+        rate = Fraction(rate_hz).limit_denominator(10**7)
+        is_freq = rate.denominator == 1
+        period_us = round(10**6 / rate)
+        if not is_freq:
+            rate = Fraction(10**6, period_us)       # what the GPS really does
+        value = int(rate) if is_freq else period_us
         length_us = int(min(100_000, period_us / 4))    # rising edge is what triggers
+        if self.pulse_len_us:
+            length_us = min(self.pulse_len_us, period_us // 2)
+        # alignToTow (pulses on the UTC second) only for whole Hz: the GPS aligns only
+        # periods that divide a second; the others' phase comes from TIM-TP
         flags = (TP5_ACTIVE | TP5_LOCK_GNSS_FREQ | TP5_LOCKED_OTHER_SET | TP5_IS_LENGTH
-                 | TP5_ALIGN_TO_TOW | TP5_POLARITY_RISING | (TP5_IS_FREQ if is_freq else 0))
+                 | TP5_POLARITY_RISING | TP5_GRID_UTC
+                 | (TP5_IS_FREQ | TP5_ALIGN_TO_TOW if is_freq else 0))
         # unlocked (no fix): same rate but zero length = no pulses
         payload = struct.pack("<BBHhhIIIIiI", tp_idx, version, res, ant_delay, rf_delay,
                               value, value, 0, length_us, user_delay, flags) + cur[32:]
         ok = self._send_wait(*CFG_TP5, payload, "ack")
         if ok:
-            self.tp_rate = rate_hz
+            self.tp_rate = rate
         return bool(ok)
 
     def close(self, restore_pps=True):

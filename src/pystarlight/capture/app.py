@@ -32,7 +32,16 @@ from .decode import format_bits
 from .recorder import RECORD_FORMATS, Recorder
 from .recorder import main as repair_main
 from .stacker import LiveStacker
-from .timing import GPS_RATES, VEYE_CALIBRATED_BITS, veye_line_ns
+from .timing import VEYE_CALIBRATED_BITS, parse_rate, rate_str, veye_line_ns
+
+
+def rate_arg(text):
+    try:
+        parse_rate(text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
+    return text
+
 
 parser = argparse.ArgumentParser(description="Aravis / VEYE MIPI live view and recorder")
 parser.add_argument("--camera", default=None,
@@ -74,14 +83,19 @@ parser.add_argument("--trigger", choices=["off", "gps", "hw", "sw"], default="of
                          "trigger input, frames stamped with the pulse time; hw: one frame per "
                          "edge on the trigger input (Line0); sw: one frame per 't' key press. "
                          "The GUI's GPS checkbox switches between gps and the others")
-parser.add_argument("--gps-rate", choices=GPS_RATES, default="1",
-                    help="GPS trigger frame rate in fps (default 1)")
-parser.add_argument("--pps", dest="gps_rate_alias", choices=GPS_RATES, nargs="?", const="1",
+parser.add_argument("--gps-rate", type=rate_arg, default="1",
+                    help="GPS trigger rate: fps (30, 1.5) or pulse period ('250ms', '2s'); "
+                         "default 1")
+parser.add_argument("--pps", dest="gps_rate_alias", type=rate_arg, nargs="?", const="1",
                     default=None, help=argparse.SUPPRESS)   # = --trigger gps --gps-rate RATE
 parser.add_argument("--gps-port", default="/dev/ttyAMA0",
                     help="u-blox GPS serial port (default /dev/ttyAMA0; 'none': no GPS - the "
                          "trigger pulses then must come at the selected rate by themselves)")
 parser.add_argument("--gps-baud", type=int, default=9600, help="GPS baud rate (default 9600)")
+parser.add_argument("--gps-pulse-ms", type=float, default=None,
+                    help="timepulse length in ms (default: a quarter period, at most 100 ms); "
+                         "the trigger uses only the rising edge. Short pulses make a narrow band "
+                         "on a GPS LED in view, for timing checks")
 parser.add_argument("--trigger-edge", choices=["rising", "falling"], default="rising",
                     help="active edge of the hardware trigger (default rising)")
 parser.add_argument("--trigger-delay", type=float, default=None,
@@ -127,8 +141,9 @@ def gps_frame_info(gps):
     if gps is None or not gps.has_fix():
         return {"satellites": gps.sats_used if gps else 0, "fix": ravf_writer.FIX_NONE,
                 "almanac": 1}
-    # NMEA has no leap-second status; a valid RMC fix means the receiver's UTC is in use
-    return {"satellites": gps.sats_used, "fix": ravf_writer.FIX_TIME_POSITION, "almanac": 0}
+    # almanac 0: leap seconds certain (NAV-TIMEUTC validUTC)
+    return {"satellites": gps.sats_used, "fix": ravf_writer.FIX_TIME_POSITION,
+            "almanac": 0 if gps.utc_valid else 1}
 
 
 def main(argv=None):
@@ -156,6 +171,8 @@ def main(argv=None):
         if args.gps_port.lower() != "none":
             try:
                 gps = gps_ublox.Gps(args.gps_port, args.gps_baud)
+                if args.gps_pulse_ms:
+                    gps.pulse_len_us = round(args.gps_pulse_ms * 1000)
                 print(f"GPS on {args.gps_port}")
             except Exception as e:
                 print(f"No GPS ({e})")
@@ -177,7 +194,9 @@ def main(argv=None):
 
         def header_info():
             """Metadata for a new recording (taken when it starts)."""
-            gps_stamped = s.grabber.stamper is not None
+            stamper = s.grabber.stamper
+            gps_stamped = stamper is not None and stamper.anchored
+            gps_utc = gps_stamped and stamper.clock is not None
             bits = format_bits(s.pixel_format)
             info = {
                 "instrument": camera.get_model_name(),
@@ -189,10 +208,12 @@ def main(argv=None):
                 "gain_db": s.controller.gain_db,
                 "exposure_ns": s.controller.exposure_us * 1000,
                 "roi_x": s.region[0], "roi_y": s.region[1],
-                "trigger": f"GPS timepulse {s.grabber.stamper.rate} Hz" if gps_stamped
+                "trigger": f"GPS timepulse {rate_str(stamper.rate)}" if gps_stamped
                            else "free run / external",
                 "trigger_delay_ns": s.trigger_delay_ns() if gps_stamped else 0,
-                "timestamp_source": "GPS trigger pulse" if gps_stamped else "Pi clock (NTP)",
+                "timestamp_source": ("GPS trigger pulse, GPS UTC" if gps_utc else
+                                     "GPS trigger pulse, Pi clock (NTP)" if gps_stamped else
+                                     "Pi clock (NTP)"),
                 # measured on the IMX178 at 12 bit to ~0.1 ms; NTP ~1 ms; else unknown
                 "timing_accuracy_ns": (100_000 if gps_stamped and s.is_veye
                                        and bits in VEYE_CALIBRATED_BITS else
@@ -213,7 +234,7 @@ def main(argv=None):
 
         def frame_info():
             info = {"exposure_ns": int(s.controller.exposure_us * 1000)}
-            if s.grabber.stamper is not None:
+            if s.grabber.pulse_ns is not None:        # this frame is pulse-stamped
                 info.update(gps_frame_info(gps))
             return info
 

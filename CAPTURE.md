@@ -50,6 +50,8 @@ uv run pystarlight-camera                                          # free run, f
 uv run pystarlight-camera --trigger gps --gps-rate 10 --exposure 20
 uv run pystarlight-camera --trigger gps --gps-rate 30 --roi 904,672,1280,720 --exposure 5
 uv run pystarlight-camera --trigger gps --record-start 23:40:00 --record-duration 60
+uv run pystarlight-camera --trigger gps --gps-rate 1.5             # or a period: --gps-rate 250ms
+uv run pystarlight-camera --trigger gps --gps-pulse-ms 1           # 1 ms LED flash (timing checks)
 uv run pystarlight-camera --exposure 800 --gain 24 --focal-mm 24       # sky: stack + plate solve (s)
 uv run pystarlight-camera --list                                   # cameras found
 uv run pystarlight-camera --record-format ser                      # SER instead of RAVF
@@ -74,6 +76,11 @@ uv run pystarlight-camera --repair ~/data/*.ravf                   # finish cras
   PyStarLight (scikit-image etc.).
 
 - `--exposure` is in **milliseconds**.
+- `--gps-rate` takes fps (`10`, `1.5`, `1.5fps`, `12Hz`) or the pulse period (`250ms`, `2s`), from
+  10 ms to 60 s. Rates that aren't whole fps become a period in whole µs (1.5 fps = 666 667 µs).
+- `--gps-pulse-ms` sets the timepulse length (default: a quarter of the period, at most 100 ms).
+  The trigger uses only the rising edge, so this only matters for a GPS LED in view: a 1 ms flash
+  shows as a narrow band, which makes timing checks easy (see the 2026-10-28 measurement).
 - `--pps [RATE]` is an old alias for `--trigger gps --gps-rate RATE`.
 - `--gps-port none` runs without a GPS. The trigger pulses must then arrive at the selected rate on
   their own.
@@ -87,13 +94,15 @@ uv run pystarlight-camera --repair ~/data/*.ravf                   # finish cras
 | image | fit to the window; **mouse wheel** zooms around the cursor (up to 64×, pixels as blocks past 1:1), **left drag** pans, **double-click** fits again |
 | **Camera** | exposure (log slider + ms box), gain, display gamma, resolution, peak value; measured frame number, rate, interval (mean ± jitter, min..max over ~200 frames), exposure read back from the camera and, in free run, its frame period; **Depth** 12 / 10 / 8 bit |
 | **Sensor region (ROI)** | x / y / w / h boxes, **Select** (then drag a rectangle on the image; shown in yellow until applied), **Apply**, **Full sensor**; current region |
-| **Trigger** | **GPS trigger** checkbox (off = free run, or the `--trigger hw/sw` mode), **GPS frame rate** 30 / 20 / 15 / 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1 / 0.5 fps, **Trigger delay** (ms), **y-trigger row** (VEYE, GPS mode; see below), warnings (exposure longer than the pulse period, rate too high for the camera, pulses skipped because of the delay, no fix), missed pulses |
-| **GPS** | UTC, fix, satellites (used / tracked / in view), DOP, position, altitude, timepulse rate, exposure start of the newest frame, its trigger pulse, pulse → frame delay, rolling-shutter line time, heading if a compass is found |
-| **Recording** | folder, format (RAVF / SER), observer, telescope, start **Now** or **At UTC** (with "next min"), stop after N s and/or N frames; Record button (orange = armed / Cancel, red = recording / Stop), frame count, elapsed time, countdown, last file saved |
+| **Trigger** | **GPS trigger** checkbox (off = free run, or the `--trigger hw/sw` mode), **GPS frame rate**: pick 30 / 20 / 15 / 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1.5 / 1 / 0.5 fps or type fps or a period (`250 ms`) and press Enter, **Trigger delay** (ms), **y-trigger row** (VEYE, GPS mode; see below), warnings (exposure longer than the pulse period, rate too high for the camera, pulses skipped because of the delay, no fix, anchoring to GPS UTC, frames or TIM-TP pulses off the grid), missed pulses |
+| **GPS** | UTC, fix, satellites (used / tracked / in view), DOP, position, altitude, timepulse rate, **time base** (GPS UTC since when, the Pi clock's rate error in ppm, the GPS message burst's lag after the second; or what anchoring waits for), exposure start of the newest frame (marked GPS UTC or Pi clock), its trigger pulse, pulse → frame delay, rolling-shutter line time, heading if a compass is found |
+| **Recording** | folder, format (RAVF / SER), observer, telescope, start **Now** or **At UTC** (with "next min"), stop after N s and/or N frames; Record button (orange = anchoring / armed / Cancel, red = recording / Stop), frame count, elapsed time, countdown, last file saved |
 | status bar | exposure, gain, camera and display fps, lost frames, bad buffers, restarts, frame ID, trigger count / lost, sensor position and raw value under the mouse |
 
 Keys: `e/E` exposure, `g/G` gain, `d/D` gamma, `r` record / stop, `t` software trigger (in `sw`
-mode), `s` stack, `c` or `Esc` continue the live view after a stack, `q` quit.
+mode), `s` stack, `c` or `Esc` continue the live view after a stack, `q` quit. Keys go to a text
+field while it has the focus; entering a rate hands the focus back to the image, and clicking the
+image does too.
 
 - The panel sits beside the image with a draggable divider. The **GPS** section folds away (click
   its title), leaving one line: fix, satellites, UTC. The divider position and the fold are
@@ -107,14 +116,23 @@ mode), `s` stack, `c` or `Esc` continue the live view after a stack, `q` quit.
 - Switching between GPS and free run restarts the camera's acquisition, and so does changing the
   trigger delay: the camera ignores the delay register while it streams.
 - **y-trigger** (or `--y-trigger ROW`): the app sets the trigger delay so that the timepulse, the
-  moment the GPS LED switches on, falls on that image row, marked with a dashed orange line. It
-  keeps the delay there while exposure, region, depth or rate change (not while recording). Use
-  it to check the timing: put the LED on the line and the line should cut the LED in half.
-  - The edge is exposure / line time rows wide (2 ms: about 140 rows), so use a short exposure for
-    a sharp line.
-  - The delay is nearly a full pulse period (about 970 ms at 1 Hz, full frame). The camera is
-    still busy at the next pulse, so it takes every 2nd pulse and runs at half the rate. The
-    trigger box says so, and those skipped pulses don't count as missed.
+  moment the GPS LED switches on, falls in the **middle of the exposure** of that image row, marked
+  with a dashed orange line. **Drag the line** in the image (the cursor turns into ↕ near it) or
+  type the row. It keeps the delay there while exposure, region, depth or rate change (not while
+  recording). Use it to check the timing: put the LED on the line and the line should cut the LED
+  in half.
+  - Image row 0 is the **top** of the image (the first row read out and exposed). Row y starts
+    exposing y × 14.33 µs after it.
+  - The LED's on edge is smeared over exposure / line time rows (2 ms: about 140 rows), between two
+    **dotted lines** half an exposure above and below the dashed one. The **first lit row is the
+    upper dotted line** (its exposure ends on the pulse). With a long exposure that is far above
+    the dashed line: 26 ms puts it 912 rows higher, and a line at the bottom of the frame can't
+    bring it below about the middle. Use a short exposure (1–2 ms) for a sharp edge on the line.
+  - The delay is up to a full pulse period of the **selected** rate (also while the GPS runs at
+    1 Hz for anchoring). Near the camera's limit the camera is still busy at the next pulse, so it
+    takes every 2nd pulse and runs at half the rate. The trigger box says so, and those skipped
+    pulses don't count as missed. At full frame, 15 fps works only with a delay under ~3.5 ms,
+    i.e. not with most y-trigger rows; use 10 fps or a smaller region.
   - Measured (2 ms, LED at rows 151–190): target 140 → edge at row 142.8, 170 → 176.7, i.e.
     within 0.1 ms.
 - On exit, the GPS goes back to its default 1 Hz PPS.
@@ -132,11 +150,19 @@ mode), `s` stack, `c` or `Esc` continue the live view after a stack, `q` quit.
 
 **GPS timepulse.**
 - `Gps.set_timepulse(rate)` sends UBX-CFG-TP5. The pulse is set to come **only while the GPS has a
-  fix** (unlocked pulse length 0), aligned to the UTC second, rising edge first.
-- Whole-Hz rates are set as a frequency, so 30 Hz means pulses at exactly k/30 s. Other rates are
-  set as a period in µs: 0.5 Hz means even seconds.
-- Pulse length is a quarter of the period, at most 100 ms.
-- The setting is not saved in the GPS: a power cycle brings back 1 Hz.
+  fix** (unlocked pulse length 0), on the **UTC time grid** (`gridUtcGnss`, flags bits 7–10, = 0;
+  1 would be GPS time, 18 s off), rising edge first.
+- **Whole-Hz rates** are set as a frequency and aligned to the UTC second (`alignToTow`), so 30 Hz
+  means pulses at exactly k/30 s.
+- **Other rates** (1.5, 0.5 fps, `333ms` …) are set as a period in whole µs. The GPS aligns only
+  periods that divide a second, so their phase is taken from **UBX TIM-TP**, which gives the exact
+  GPS UTC of the next pulse: the grid is that pulse plus whole periods. Each later TIM-TP is
+  checked against it (off by more than 10 µs: counted, shown in red).
+- Pulse length is a quarter of the period, at most 100 ms, or `--gps-pulse-ms`.
+- The setting is not saved in the GPS: a power cycle brings back 1 Hz. The app restores 1 Hz on
+  exit.
+- The first rate setting also switches on UBX NAV-TIMEUTC and TIM-TP (once per second each) and
+  switches off the NMEA GLL and VTG sentences (unused), so the 9600 baud line doesn't fill up.
 - Two serial-port quirks:
   - The **first UBX message after opening the port goes unanswered**.
   - Replies queue behind the NMEA output, arriving about 0.7 s later at 9600 baud.
@@ -146,16 +172,42 @@ mode), `s` stack, `c` or `Esc` continue the live view after a stack, `q` quit.
 **Which pulse triggered a frame** (`PulseStamper`).
 - A frame's CSI-2 frame-start time comes a steady delay after its pulse. On the VEYE camera that
   delay is about the camera's frame period + 3 ms, plus any trigger delay.
-- Frame time minus that delay, rounded to the pulse grid (k/rate seconds from the Unix epoch, which
-  matches the UTC grid), gives the pulse. This only needs the Pi clock to be within about half a
-  pulse period: ±16 ms even at 30 fps, where NTP is about 1 ms.
-- The predicted delay is refreshed whenever the exposure changes, then follows the measured delay.
-- The stamper uses the rate the **GPS confirmed** (ACK), not the one selected in the menu, so a
-  rejected or still-pending change can't mis-stamp frames.
+- Frame time minus that delay, rounded to the pulse grid, gives the pulse. That only needs the
+  frame time to within half a pulse period (±16 ms at 30 fps). The frame time comes from the
+  **GPS clock** below, so no NTP is involved. Without a GPS (`--gps-port none`) it comes from the
+  Pi clock instead and the predicted delay follows the measured one.
+- The stamp is the pulse's exact grid value, so the frame-time jitter drops out.
+- During a **rate change** the GPS switches whenever it gets the command, not on a second. From
+  sending the command until a pulse after the GPS's ACK, a frame goes to the nearest pulse of the
+  old or the new grid (both UTC-aligned); then the new one only. A new rate that needs TIM-TP
+  stamps nothing until TIM-TP has named its grid (about a second).
 - Missed pulses (gaps in the pulse sequence) are counted, except for the pulses the camera skips on
   purpose: a trigger that comes while the camera is still busy (its delay + about two frame
   periods + 3 ms after the last trigger) is lost, so with a long delay or a high rate it takes
   every n-th pulse (`pulses_per_frame`).
+
+**GPS UTC without NTP** (`GpsClock`).
+- The clock is the Pi's monotonic clock plus an offset that the GPS sets and the trigger pulses
+  keep. The Pi's NTP clock is not used for GPS-mode stamps.
+- **Anchoring** needs 1 Hz pulses for a few seconds. Every second the GPS sends a burst of messages
+  about the second that has just begun; the burst's start (first byte after a quiet line) is taken
+  from the monotonic clock, and its NAV-TIMEUTC names the UTC second, used only when the GPS says
+  UTC is valid (leap seconds known). The pulse of that second is the last trigger pulse less than
+  0.5 s before the burst. Three such seconds agreeing within 20 ms give the offset. (Serial timing
+  is far too loose to pick one of 30 pulses a second, but fine for one per second.) They need not
+  be consecutive: with a long trigger delay the camera takes every n-th pulse, and a frame taken
+  for the wrong second would disagree by a whole second.
+- From then on every stamped frame measures the offset again; a line fitted over the last minutes
+  follows the drift of the Pi's crystal (shown in ppm), also across gaps. The bursts keep being
+  checked against the clock: three in a row off by a whole second mark the clock as suspect (red).
+- **Re-anchoring** happens on every rate change and before every GPS-mode recording: the GPS goes
+  to 1 Hz, the clock anchors (about 4 s), then the GPS goes to the selected rate. **Record** first
+  re-anchors, then arms the recorder once the stamps are exact at the selected rate; a set start
+  time begins anchoring 20 s before. It also re-anchors when the GPS trigger is turned on after 10
+  minutes without stamped frames or after a warning. Until anchored, frames carry the Pi clock and
+  the GUI says so.
+- The RAVF header says `TIMESTAMP-SOURCE = GPS trigger pulse, GPS UTC`; the per-frame almanac
+  flag comes from NAV-TIMEUTC's "UTC valid".
 
 **Recording start and stop.**
 - In GPS mode, start and stop times refer to the **trigger pulse**. A recording armed for 23:40:00
@@ -325,7 +377,7 @@ that offset.
 
 | mode | row-0 exposure start | clock |
 |---|---|---|
-| GPS trigger | pulse + 0.9967 × trigger delay + (frame period − exposure) + 0.33 ms | GPS only |
+| GPS trigger | pulse + 0.9967 × trigger delay + (frame period − exposure) + 0.51 ms | GPS only |
 | free run | frame_ns − exposure − 3.33 ms | Pi (NTP) |
 
 - `frame_ns` is the CSI-2 frame-start time that the rp1-cfe driver records in CLOCK_MONOTONIC,
@@ -333,15 +385,48 @@ that offset.
 - "Frame period" is the camera's current frame period (`veye_mvcam.Camera.frame_period_ns()`). It
   follows the exposure, with a minimum of 30.12 ms at full frame and about 10.85 ms at 1280 × 720.
 - In trigger mode, a VEYE camera holds off the exposure so that it **ends** about one frame period
-  after the trigger. Short exposures therefore start well after the pulse: about 22.5 ms after it
+  after the trigger. Short exposures therefore start well after the pulse: about 22.6 ms after it
   at 8 ms exposure, full frame. Stamping a GPS frame at the pulse itself would be up to about 30 ms
   early.
 - The trigger delay is set in camera µs, but the camera's delay clock runs 0.33 % fast: the real
   delay is 0.9967 × the setting (`VEYE_DELAY_SCALE`). That's 3 ms at a 970 ms delay.
+- The 0.51 ms GPS-trigger offset was re-measured on 2026-10-28 (below). It was 0.33 ms before,
+  so **GPS stamps recorded before 2026-10-28 are about 0.18 ms early**.
 - The constants are `VEYE_FREE_LEAD_NS`, `VEYE_TRIGGER_OFFSET_NS`, `VEYE_LINE_NS` and
   `VEYE_DELAY_SCALE` in
   `capture/timing.py`, measured on this IMX178. For other cameras (Aravis, other VEYE models) nothing is
   measured, and the code falls back to frame start − exposure, or the pulse + delay.
+
+### Trigger offset re-measured (2026-10-28)
+
+Setup: GPS LED on the timepulse in the camera's view, defocused, VEYE IMX178 at 12 bit, GPS trigger,
+y-trigger to place the edges. A long exposure smears the LED's on edge over many rows, so the
+cleanest test uses a **1 ms LED flash** (`--gps-pulse-ms 1`) at 30 fps with 2 ms exposure in a small
+region at the top left (832 × 444): the LED then shows as a band about 210 rows tall with both
+edges inside the region.
+
+- The band's **first** row is the row whose exposure **ends** on the pulse; its **last** row is the
+  row whose exposure **starts** 1 ms after the pulse.
+- Measured: first row ~20 (predicted with the old 0.33 ms: 30.2), last row ~227 (predicted 239.6).
+  So exposure start is 0.18 ms and exposure end 0.14 ms later than the old offset gave; the real
+  exposure matches the setting to about 0.05 ms. Offset now 0.51 ms.
+- The exposure-end edge alone, in five more recordings:
+
+  | region, rate | exposure | trigger delay | first lit row | predicted (old) | difference |
+  |---|---|---|---|---|---|
+  | full, 10 fps | 26.1 ms | 65.1 ms | 299 | 308 | −9 rows |
+  | full, 10 fps | 26.1 ms | 61.0 ms | 585 | 594 | −9 |
+  | full, 10 fps | 26.1 ms | 54.6 ms | 1033 | 1042 | −9 |
+  | full, 10 fps | 21.3 ms | 68.7 ms | 49 | 58 | −9 |
+  | full, 10 fps | 1.5 ms | 47.1 ms | 1555 | 1565 | −10 |
+  | 568 × 320, 30 fps | 1 ms | 27.0 ms | ~53 | 65 | −12 |
+  | 568 × 320, 30 fps | 2 ms | 27.5 ms | ~20 | 30 | −10 |
+
+  (9 rows = 0.13 ms.) The same offset at all rows, exposures and delays confirms the line time
+  (14.33 µs), the top-to-bottom readout and the delay-clock scale; it is a constant offset.
+- With the LED saturated, its edge is sharp to about a row even at long exposures: a few µs of
+  light already show.
+- The free-run lead (3.33 ms) was not re-checked.
 
 ### How the timing was measured (2026-10-25)
 
@@ -447,6 +532,11 @@ every other pulse once that's exceeded; watch `lost` in the status bar.
 - **Exposure must be shorter than the pulse period.** At 1.6 s exposure and a 1 Hz PPS, most pulses
   are lost.
 - **No GPS fix means no pulses**, and so no frames in GPS mode. The GUI shows this in red.
+- **GPS anchoring assumes** the GPS starts each second's message burst less than 0.5 s after the
+  second (watch "burst +N ms" in the time base row) and that TIM-TP reports UTC when the pulse is
+  on the UTC grid (a TIM-TP more than 2 s off the clock is ignored, and rates that need it then
+  stamp nothing). If the serial line is so busy that bursts run together, anchoring doesn't
+  finish; it never produces wrong stamps.
 - Free-run timestamps are only as good as NTP (about 1 ms). For GPS-grade timing, use GPS mode,
   or wire the PPS to a Pi GPIO as well (`pps-gpio` overlay + chrony).
 
