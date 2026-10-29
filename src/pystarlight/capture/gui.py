@@ -1,10 +1,10 @@
 """Qt GUI of the capture app: live image view, control panel, status.
 
-The main thread only renders the newest frame (debayer -> crop + scale to the view -> gamma
-LUT) and talks to the camera through the Controller thread; see app.py for the threads.
+The main thread only renders the newest frame (debayer -> crop + scale to the view -> levels
++ gamma LUT) and talks to the camera through the Controller thread; see app.py for the threads.
 
-Keys: e/E exposure -/+, g/G gain -/+, d/D gamma -/+, t software trigger, r record on/off,
-q quit.
+Keys: e/E exposure -/+, g/G gain -/+, d/D gamma -/+, a auto levels, t software trigger,
+r record on/off, s stack, c continue live view, q quit.
 """
 import importlib.util
 import os
@@ -23,7 +23,6 @@ from .cameras import VEYE_MIN_ROI
 from .decode import format_bits, format_for_bits
 from .qt import QShortcut, QtCore, QtGui, QtWidgets, Signal, Slot, event_pos
 from .recorder import RECORD_FORMATS
-from .stacker import display_stretch
 from .timing import (
     GPS_RATES,
     LAG_EXTRA_NS,
@@ -40,6 +39,7 @@ EXP_STEPS = 1000            # exposure slider resolution (log scale)
 REANCHOR_LEAD_NS = 20 * 10**9   # set start time: anchor on GPS UTC this long before
 GAIN_STEPS = 10             # gain slider: 0.1 dB per step
 GAMMA_MIN, GAMMA_MAX = 0.1, 4.0
+STACK_FULL = 65535          # the shown stack: mean scaled to 0..this (keeps the fraction)
 
 
 def review_command(path):
@@ -298,6 +298,140 @@ def grid_box(title):
     return box, grid
 
 
+def zscale(img):
+    """IRAF zscale display limits (as pystarlight-view): faint stars without burning out the
+    sky. Large frames are subsampled first (zscale samples ~1000 pixels anyway); the odd step
+    keeps all colours of a Bayer mosaic."""
+    from astropy.visualization import ZScaleInterval
+    img = np.asarray(img)
+    step = 2 * (int(np.sqrt(img.size / 250_000)) // 2) + 1
+    return ZScaleInterval().get_limits(np.asarray(img[::step, ::step], np.float32))
+
+
+class LevelsBox(QtWidgets.QGroupBox):
+    """Display levels as in pystarlight-view: auto (zscale) or manual black / white point, auto
+    optionally per frame; display gamma on top. image() gives the shown image (raw values);
+    changed is emitted on every new setting and the owner redraws. full() (optional) gives
+    the raw value range for the "Full" button."""
+    changed = Signal()
+
+    def __init__(self, image, gamma=1.0, full=None):
+        super().__init__("Display")
+        self.image, self.full = image, full
+        self.auto, self.per_frame = True, False
+        self.lo, self.hi = 0.0, 1.0
+        g = QtWidgets.QGridLayout(self)
+        g.setColumnStretch(1, 1)
+        self.lo_slider, self.hi_slider = (QtWidgets.QSlider(QtCore.Qt.Horizontal) for _ in range(2))
+        self.lo_spin, self.hi_spin = (QtWidgets.QDoubleSpinBox(decimals=0, minimum=-1e7, maximum=1e7,
+                                                               keyboardTracking=False)
+                                      for _ in range(2))
+        self.lo_slider.valueChanged.connect(lambda v: self.on_level(v, None))
+        self.hi_slider.valueChanged.connect(lambda v: self.on_level(None, v))
+        self.lo_spin.valueChanged.connect(lambda v: self.on_level(v, None))
+        self.hi_spin.valueChanged.connect(lambda v: self.on_level(None, v))
+        for row, (name, slider, spin) in enumerate((("Black", self.lo_slider, self.lo_spin),
+                                                    ("White", self.hi_slider, self.hi_spin))):
+            g.addWidget(QtWidgets.QLabel(name), row, 0)
+            g.addWidget(slider, row, 1)
+            g.addWidget(spin, row, 2)
+        auto_b = QtWidgets.QPushButton("Auto  (a)")
+        auto_b.setToolTip("zscale levels of the shown image; back to automatic levels")
+        auto_b.clicked.connect(self.auto_levels)
+        self.per_frame_check = QtWidgets.QCheckBox("per frame")
+        self.per_frame_check.setToolTip("automatic levels: recompute them on every frame")
+        self.per_frame_check.toggled.connect(self.on_per_frame)
+        self.gamma_spin = QtWidgets.QDoubleSpinBox(decimals=2, minimum=GAMMA_MIN, maximum=GAMMA_MAX,
+                                                   singleStep=0.1, value=gamma, prefix="gamma ",
+                                                   keyboardTracking=False)
+        self.gamma_spin.setToolTip("display gamma (>1 brightens faint detail; keys d / D)")
+        self.gamma_spin.valueChanged.connect(lambda _: self.changed.emit())
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addWidget(auto_b)
+        if full is not None:
+            full_b = QtWidgets.QPushButton("Full")
+            full_b.setToolTip("black 0, white the largest raw value (manual levels)")
+            full_b.clicked.connect(self.full_levels)
+            buttons.addWidget(full_b)
+        buttons.addWidget(self.per_frame_check)
+        g.addLayout(buttons, 2, 0, 1, 2)
+        g.addWidget(self.gamma_spin, 2, 2)
+
+    @property
+    def gamma(self):
+        return self.gamma_spin.value()
+
+    @staticmethod
+    def useful_range(img, lo, hi):
+        """Levels slider range: the useful part of the histogram, not up to saturated stars."""
+        p_lo, p_hi = (float(v) for v in np.percentile(img[::4, ::4], (0.1, 99.9)))
+        span = max(hi - lo, 1.0)
+        return min(p_lo, lo), max(p_hi, hi + 4 * span)
+
+    def set_levels(self, lo, hi, manual=True, reset_range=False, slider_range=None):
+        """Black / white point. manual=False: set by auto levels. reset_range: slider range
+        from the shown image (else it only grows); slider_range: exactly this range."""
+        self.lo, self.hi = float(lo), float(max(hi, lo + 1.0))
+        if manual:
+            self.auto = False
+        smin, smax = slider_range or (self.lo_slider.minimum(), self.lo_slider.maximum())
+        img = self.image()
+        if reset_range and slider_range is None and img is not None:
+            smin, smax = self.useful_range(img, self.lo, self.hi)
+        smin, smax = int(np.floor(min(smin, self.lo))), int(np.ceil(max(smax, self.hi)))
+        for slider in (self.lo_slider, self.hi_slider):
+            slider.blockSignals(True)
+            slider.setRange(smin, smax)
+            slider.blockSignals(False)
+        for w, v in ((self.lo_slider, round(self.lo)), (self.hi_slider, round(self.hi)),
+                     (self.lo_spin, self.lo), (self.hi_spin, self.hi)):
+            w.blockSignals(True)
+            w.setValue(v)
+            w.blockSignals(False)
+        self.changed.emit()
+
+    def auto_levels(self):
+        """zscale levels of the shown image; back to automatic mode."""
+        img = self.image()
+        self.auto = True
+        if img is not None:
+            self.set_levels(*zscale(img), manual=False, reset_range=True)
+
+    def full_levels(self):
+        lo, hi = self.full()
+        self.set_levels(lo, hi, manual=True, slider_range=(lo, hi))
+
+    def new_image(self):
+        """The shown image changed: True if per-frame auto levels were set (changed emitted)."""
+        img = self.image()
+        if self.auto and self.per_frame and img is not None:
+            self.set_levels(*zscale(img), manual=False)
+            return True
+        return False
+
+    def on_level(self, lo, hi):
+        """User moved a black / white slider or spin box: manual levels."""
+        lo = self.lo if lo is None else float(lo)
+        hi = self.hi if hi is None else float(hi)
+        if hi <= lo:                        # keep black below white
+            if hi == self.hi:
+                hi = lo + 1.0
+            else:
+                lo = hi - 1.0
+        self.set_levels(lo, hi, manual=True)
+
+    def on_per_frame(self, on):
+        self.per_frame = on
+        if on:
+            self.auto_levels()
+
+    def lut(self, n, scale=1.0):
+        """Raw value (0..n-1) -> 8 bit through the levels and gamma; scale: the image holds
+        raw values times this."""
+        x = (np.arange(n, dtype=np.float32) / scale - self.lo) / max(self.hi - self.lo, 1e-6)
+        return np.round(255.0 * np.clip(x, 0.0, 1.0) ** (1.0 / self.gamma)).astype(np.uint8)
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, ctx, args):
         super().__init__()
@@ -305,11 +439,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.c = ctx                        # camera, controller, grabber, recorder, gps ...
         self.setWindowTitle(f"{ctx.camera.get_vendor_name()} {ctx.camera.get_model_name()}"
                             f" - {ctx.width}x{ctx.height} {ctx.pixel_format}")
-        self.gamma = float(np.clip(self.args.gamma, GAMMA_MIN, GAMMA_MAX))
-        self.lut = self.build_lut(self.gamma)
+        self.lut, self.lut_key = None, None # display lookup table and its (size, scale)
         self.img = None                     # newest decoded frame (full resolution)
         self.frame_id = None
         self.redraw = False
+        self.levels_pending = False          # set the levels from the next frame (new depth)
         self.disp_fps, self.disp_t0, self.disp_n = 0.0, time.monotonic(), 0
         self.gps_busy = False               # timepulse rate being set (worker thread)
         self.gps_msg = ""
@@ -320,7 +454,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pending_rec = None
         self.last_saved = ""
         self.stack_seen = -1                # stacker.version shown
-        self.stack_img = None               # stretched stack for the view
+        self.stack_mean = None              # stack shown (float, raw values)
+        self.stack_img = None               # ... as uint16 for the view (x STACK_FULL / max)
         self.solve_thread = None            # plate solve running (worker thread)
         self.solve_cancel = None
         self.solve_log = ""                 # its newest message
@@ -340,6 +475,10 @@ class MainWindow(QtWidgets.QMainWindow):
         panel = QtWidgets.QWidget()
         col = QtWidgets.QVBoxLayout(panel)
         col.addWidget(self.make_camera_box())
+        self.levels = LevelsBox(self.shown_image, float(np.clip(self.args.gamma, GAMMA_MIN, GAMMA_MAX)),
+                                full=lambda: (0, self.c.decode.max_value))
+        self.levels.changed.connect(self.on_levels)
+        col.addWidget(self.levels)
         col.addWidget(self.make_roi_box())
         col.addWidget(self.make_trigger_box())
         col.addWidget(self.make_gps_box())
@@ -375,8 +514,9 @@ class MainWindow(QtWidgets.QMainWindow):
                         ("Shift+E", lambda: self.step_exposure(1.25)),
                         ("g", lambda: self.gain_spin.setValue(self.target["gain"] - 0.5)),
                         ("Shift+G", lambda: self.gain_spin.setValue(self.target["gain"] + 0.5)),
-                        ("d", lambda: self.gamma_spin.setValue(self.gamma - 0.1)),
-                        ("Shift+D", lambda: self.gamma_spin.setValue(self.gamma + 0.1)),
+                        ("d", lambda: self.levels.gamma_spin.setValue(self.levels.gamma - 0.1)),
+                        ("Shift+D", lambda: self.levels.gamma_spin.setValue(self.levels.gamma + 0.1)),
+                        ("a", self.levels.auto_levels),
                         ("r", self.on_record_button),
                         ("t", self.software_trigger),
                         ("s", self.on_stack_button),
@@ -389,6 +529,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.frame_timer.start()
         self.status_timer = QtCore.QTimer(self, timeout=self.on_status_timer, interval=250)
         self.status_timer.start()
+        self.levels.full_levels()           # live frames as they are until a / dragged
         self.on_trigger_mode(initial=True)
         self.on_status_timer()
 
@@ -404,23 +545,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.gain_spin = QtWidgets.QDoubleSpinBox(decimals=1, suffix=" dB", singleStep=0.5,
                                                   keyboardTracking=False)
         self.gain_spin.setRange(c.gain_min, c.gain_max)
-        self.gamma_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        self.gamma_slider.setRange(int(GAMMA_MIN * 100), int(GAMMA_MAX * 100))
-        self.gamma_spin = QtWidgets.QDoubleSpinBox(decimals=2, singleStep=0.1,
-                                                   keyboardTracking=False)
-        self.gamma_spin.setRange(GAMMA_MIN, GAMMA_MAX)
         for r, (name, slider, spin) in enumerate((("Exposure", self.exp_slider, self.exp_spin),
-                                                  ("Gain", self.gain_slider, self.gain_spin),
-                                                  ("Gamma", self.gamma_slider, self.gamma_spin))):
+                                                  ("Gain", self.gain_slider, self.gain_spin))):
             g.addWidget(QtWidgets.QLabel(name), r, 0)
             g.addWidget(slider, r, 1)
             g.addWidget(spin, r, 2)
         self.cam_info = QtWidgets.QLabel()
-        g.addWidget(self.cam_info, 3, 0, 1, 3)
+        g.addWidget(self.cam_info, 2, 0, 1, 3)
         # measured frame timing (from the frame-start times) and the exposure actually set
         self.frame_labels = {}
         for r, (key, name) in enumerate((("frame", "Frame"), ("rate", "Rate"),
-                                         ("interval", "Interval"), ("exp", "Exposure")), 4):
+                                         ("interval", "Interval"), ("exp", "Exposure")), 3):
             g.addWidget(QtWidgets.QLabel(name), r, 0)
             lab = QtWidgets.QLabel("-")
             lab.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
@@ -435,19 +570,16 @@ class MainWindow(QtWidgets.QMainWindow):
                                    "12 bit 33.2, 10 bit 39.2, 8 bit 40.1 fps)")
         self.show_bits()
         self.bits_combo.currentIndexChanged.connect(self.on_bits)
-        g.addWidget(QtWidgets.QLabel("Depth"), 8, 0)
-        g.addWidget(self.bits_combo, 8, 1, 1, 2)
+        g.addWidget(QtWidgets.QLabel("Depth"), 7, 0)
+        g.addWidget(self.bits_combo, 7, 1, 1, 2)
 
         self.set_exposure_widgets(self.target["exposure"])
         self.set_gain_widgets(self.target["gain"])
-        self.set_gamma_widgets(self.gamma)
         self.exp_slider.valueChanged.connect(lambda p: self.set_exposure(self.slider_to_exp(p)))
         self.exp_spin.valueChanged.connect(lambda ms: self.set_exposure(ms * 1000))
         self.gain_slider.valueChanged.connect(
             lambda p: self.set_gain(c.gain_min + p / GAIN_STEPS))
         self.gain_spin.valueChanged.connect(self.set_gain)
-        self.gamma_slider.valueChanged.connect(lambda p: self.set_gamma(p / 100))
-        self.gamma_spin.valueChanged.connect(self.set_gamma)
         return box
 
     def exp_to_slider(self, us):
@@ -472,10 +604,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._quiet(self.gain_slider, int(round((db - self.c.gain_min) * GAIN_STEPS)))
         self._quiet(self.gain_spin, db)
 
-    def set_gamma_widgets(self, gamma):
-        self._quiet(self.gamma_slider, int(round(gamma * 100)))
-        self._quiet(self.gamma_spin, gamma)
-
     def set_exposure(self, us):
         us = float(np.clip(us, self.c.exp_min, self.c.exp_max))
         self.target["exposure"] = us
@@ -490,16 +618,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.target["gain"] = db
         self.set_gain_widgets(db)
         self.c.controller.request("gain", db)
-
-    def build_lut(self, g):
-        x = np.arange(self.c.decode.max_value + 1, dtype=np.float32) / self.c.decode.max_value
-        return np.round(255.0 * x ** (1.0 / g)).astype(np.uint8)
-
-    def set_gamma(self, gamma):
-        self.gamma = float(np.clip(gamma, GAMMA_MIN, GAMMA_MAX))
-        self.set_gamma_widgets(self.gamma)
-        self.lut = self.build_lut(self.gamma)
-        self.redraw = True
 
     def show_bits(self):
         bits = format_bits(self.c.pixel_format)
@@ -609,15 +727,30 @@ class MainWindow(QtWidgets.QMainWindow):
         self.show_bits()
         self.roi_pending = None
         self.update_roi_marks()
-        self.lut = self.build_lut(self.gamma)   # new value range
         self.update_rows_label()
         self.ytrig_spin.setMaximum(c.height - 1)
         self.img = None                         # old size/format; wait for a new frame
+        self.levels_pending = True              # new value range: levels from the next frame
         self.last_exposure = None               # new frame period -> new pulse-to-frame lag
 
     # ---- view ----
     def on_view_changed(self):
         self.redraw = True
+
+    def shown_image(self):
+        """The image the levels belong to: the stack (raw values) while shown, else the frame."""
+        if self.stack_show.isChecked() and self.stack_mean is not None:
+            return self.stack_mean
+        return self.img
+
+    def on_levels(self):
+        self.lut = None                         # rebuilt for the shown image
+        self.redraw = True
+
+    def display_lut(self, n, scale):
+        if self.lut is None or self.lut_key != (n, scale):
+            self.lut, self.lut_key = self.levels.lut(n, scale), (n, scale)
+        return self.lut
 
     # ---- panel: trigger ----
     def make_trigger_box(self):
@@ -1039,6 +1172,7 @@ class MainWindow(QtWidgets.QMainWindow):
         c = self.c
         if not c.stream_lock.acquire(blocking=False):
             return                              # the stream is being replaced (new ROI)
+        new_frame = False
         try:
             item = c.grabber.take()
             if item is not None:
@@ -1051,25 +1185,38 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.img = c.decode(buf)    # copies the data out of the buffer
                 finally:
                     c.stream.push_buffer(buf)
-                self.redraw = True
+                self.redraw = new_frame = True
         finally:
             c.stream_lock.release()
-        img = self.img
+        if new_frame and self.img is not None and not self.stack_show.isChecked():
+            if self.levels_pending:             # new depth: levels for the new value range
+                self.levels_pending = False
+                if self.levels.auto:
+                    self.levels.auto_levels()
+                else:
+                    self.levels.full_levels()
+            else:
+                self.levels.new_image()         # per-frame auto levels
+        img, n, scale = self.img, c.decode.max_value + 1, 1.0
         if self.stack_show.isChecked():
             st = c.stacker
             if st.version != self.stack_seen:
                 self.stack_seen = st.version
-                mean = st.preview()
-                self.stack_img = (None if mean is None
-                                  else display_stretch(mean, c.decode.max_value))
+                self.stack_mean = st.preview()
+                self.stack_img = (None if self.stack_mean is None else
+                                  np.clip(self.stack_mean * (STACK_FULL / c.decode.max_value) + 0.5,
+                                          0, STACK_FULL).astype(np.uint16))
                 self.redraw = True
-            img = self.stack_img if self.stack_img is not None else img
+                if self.levels.auto:
+                    self.levels.auto_levels()
+            if self.stack_img is not None:
+                img, n, scale = self.stack_img, STACK_FULL + 1, STACK_FULL / c.decode.max_value
         if img is None or not self.redraw:
             return
         self.redraw = False
-        # Order: debayer (needs full res) -> crop + scale to the view -> gamma LUT
+        # Order: debayer (needs full res) -> crop + scale to the view -> levels + gamma LUT
         frame = cv2.cvtColor(img, c.decode.bayer_code) if c.decode.bayer_code is not None else img
-        self.view.render(frame, self.lut)
+        self.view.render(frame, self.display_lut(n, scale))
         self.disp_n += 1
 
     def on_status_timer(self):
@@ -1387,6 +1534,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if not on:
             self.view.circles = []
             self.view.banner = ""
+            if self.levels.auto:                # back to the frame's levels
+                self.levels.auto_levels()
         else:
             self.show_solution_marks()
         self.redraw = True

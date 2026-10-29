@@ -92,14 +92,15 @@ uv run pystarlight-camera --repair ~/data/*.ravf                   # finish cras
 | panel | contents |
 |---|---|
 | image | fit to the window; **mouse wheel** zooms around the cursor (up to 64×, pixels as blocks past 1:1), **left drag** pans, **double-click** fits again |
-| **Camera** | exposure (log slider + ms box), gain, display gamma, resolution, peak value; measured frame number, rate, interval (mean ± jitter, min..max over ~200 frames), exposure read back from the camera and, in free run, its frame period; **Depth** 12 / 10 / 8 bit |
+| **Camera** | exposure (log slider + ms box), gain, resolution, peak value; measured frame number, rate, interval (mean ± jitter, min..max over ~200 frames), exposure read back from the camera and, in free run, its frame period; **Depth** 12 / 10 / 8 bit |
+| **Display** | as in the review player and `pystarlight-view`: **Black** / **White** point (slider + box, raw values), **Auto** (zscale of the shown image, key `a`), **Full** (0 to the largest raw value: the start setting, and after a depth change unless on Auto), **per frame** (auto levels recomputed on every frame), display **gamma** (keys `d/D`). Display only; the recording is untouched |
 | **Sensor region (ROI)** | x / y / w / h boxes, **Select** (then drag a rectangle on the image; shown in yellow until applied), **Apply**, **Full sensor**; current region |
 | **Trigger** | **GPS trigger** checkbox (off = free run, or the `--trigger hw/sw` mode), **GPS frame rate**: pick 30 / 20 / 15 / 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1.5 / 1 / 0.5 fps or type fps or a period (`250 ms`) and press Enter, **Trigger delay** (ms), **y-trigger row** (VEYE, GPS mode; see below), warnings (exposure longer than the pulse period, rate too high for the camera, pulses skipped because of the delay, no fix, anchoring to GPS UTC, frames or TIM-TP pulses off the grid), missed pulses |
 | **GPS** | UTC, fix, satellites (used / tracked / in view), DOP, position, altitude, timepulse rate, **time base** (GPS UTC since when, the Pi clock's rate error in ppm, the GPS message burst's lag after the second; or what anchoring waits for), exposure start of the newest frame (marked GPS UTC or Pi clock), its trigger pulse, pulse → frame delay, rolling-shutter line time, heading if a compass is found |
 | **Recording** | folder, format (RAVF / SER), observer, telescope, start **Now** or **At UTC** (with "next min"), stop after N s and/or N frames; Record button (orange = anchoring / armed / Cancel, red = recording / Stop), frame count, elapsed time, countdown, last file saved |
 | status bar | exposure, gain, camera and display fps, lost frames, bad buffers, restarts, frame ID, trigger count / lost, sensor position and raw value under the mouse |
 
-Keys: `e/E` exposure, `g/G` gain, `d/D` gamma, `r` record / stop, `t` software trigger (in `sw`
+Keys: `e/E` exposure, `g/G` gain, `d/D` gamma, `a` auto levels, `r` record / stop, `t` software trigger (in `sw`
 mode), `s` stack, `c` or `Esc` continue the live view after a stack, `q` quit. Keys go to a text
 field while it has the focus; entering a rate hands the focus back to the image, and clicking the
 image does too.
@@ -146,7 +147,7 @@ image does too.
   stream restarts are slow.
 - **Recorder** decodes frames and writes the RAVF or SER file.
 - **Gps** reads the serial port.
-- The Qt main thread renders: debayer, then downscale to the view size, then the gamma lookup table.
+- The Qt main thread renders: debayer, then downscale to the view size, then the lookup table (levels + gamma).
 
 **GPS timepulse.**
 - `Gps.set_timepulse(rate)` sends UBX-CFG-TP5. The pulse is set to come **only while the GPS has a
@@ -244,8 +245,9 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
 - While the stack is shown, a banner at the bottom of the image says so ("STACK 12/16",
   "... - solved"). **Continue live view** (button, key `c` or `Esc`) goes back to the live frames;
   a running stack goes on in the background, and **Show stack** brings the stack and its marked
-  stars back. The stack is auto-stretched (background black, brightest 0.05 % white); live
-  frames are shown as they are, with the display gamma only.
+  stars back. The stack and the live frames share the **Display** levels; in
+  auto mode the stack gets its own zscale levels while it is shown (and the frame's again on the
+  way back).
 - First sky test (2026-10-27, 24 mm lens, trees in the lower half): 4 x 0.8 s at 24 dB, full
   frame, solved offline in 7.8 s: centre RA 22h34m27s Dec +46°12' (Lacerta), 17.34° x 11.64°,
   20.37"/px (nominal 20.6"), north 102° from up; the five brightest stars named by SIMBAD
@@ -274,7 +276,7 @@ Python it uses the repo's `.venv`). Reads RAVF, SER, ADV/AAV, AVI and FITS folde
   in the file, or the config's default site. **Save as the movie's plate solution** writes
   `<movie>.wcs.fit`, `.wcs.json` (stack_start = the range start) and `.stars.json` as
   pystarlight-view caches them, so the viewer uses that solution.
-- Keys: Space play/pause, Left/Right, PgUp/PgDn (10), Home/End, `n`/`b`, `[`/`]`, `s`, `c` or
+- Keys: Space play/pause, Left/Right, PgUp/PgDn (10), Home/End, `n`/`b`, `[`/`]`, `a` auto levels, `d/D` gamma, `s`, `c` or
   `Esc` back to the frames, `q`.
 - Times are kept as float64 Unix seconds (0.24 µs resolution), enough for review; the files keep
   their ns stamps.
