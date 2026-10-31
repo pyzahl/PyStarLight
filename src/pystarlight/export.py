@@ -60,8 +60,7 @@ def sky_lines(lc, wcs, stars=None, frame: float = 7.5) -> tuple[list[str], dict]
 
     Aperture positions are taken at the row nearest `frame` (default: middle of the 16-frame
     stack that was solved), so drift during the run does not shift the coordinates."""
-    from astropy.coordinates import SkyCoord
-
+    from .wcs.identify import radec_text
     from .wcs.solve import orientation
     frames = lc.columns[lc.names[0]]['frame']
     i = int(min(range(len(frames)), key=lambda k: abs(frames[k] - frame)))

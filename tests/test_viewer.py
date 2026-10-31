@@ -98,6 +98,15 @@ def test_plot_panels(movie):
         fig2, ax = plt.subplots()
         plot.timing(ax, lc)
     assert len(fig.axes) == 4
+    from matplotlib.colors import to_hex
+    raw, curve, drift = fig.axes[1], fig.axes[2], fig.axes[3]
+    t, r = raw.get_lines()                          # target red, twice as wide, on top
+    assert to_hex(t.get_color()) == plot.TARGET_COLOR and to_hex(r.get_color()) != plot.TARGET_COLOR
+    assert t.get_linewidth() == 2 * r.get_linewidth() and t.get_zorder() > r.get_zorder()
+    assert all(to_hex(ln.get_color()) == plot.TARGET_COLOR for ln in curve.get_lines() + drift.get_lines())
+    for ax in (raw, curve, drift):                  # legends top left, opaque
+        leg = ax.get_legend()
+        assert leg._loc == 2 and leg.get_frame().get_alpha() == 1.0
 
 
 def test_viewer_shows_ra_dec(movie, tmp_path):
@@ -445,3 +454,24 @@ def test_esc_stops_hanging_star_names_and_run_goes_ahead(movie, monkeypatch):
     v.poll()
     assert v._lc is not None and v.ap_stars == {}
     hang.set()
+
+
+def test_new_apertures_match_loaded_box_size_after_resizing(movie):
+    (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
+    v = Viewer(str(movie))
+    v.size = 21                                    # saved with another size than the config's
+    click(v, c0, r0)
+    key(v, 's')
+    v = Viewer(str(movie))
+    assert v.size == 21 and 'box 21px' in v.aperture_size_text.get_text()
+    v.adjust_aperture_size(2)
+    click(v, c1, r1)
+    assert [a.size for a in v.apertures] == [23, 23]
+    key(v, 's')
+    v.size = 51                                    # an old file with mixed sizes
+    click(v, STARS[2][1], STARS[2][0])
+    centre = v.apertures[-1].center
+    key(v, 's')
+    v = Viewer(str(movie))
+    assert v.size == 23 and [a.size for a in v.apertures] == [23, 23, 23]
+    assert np.allclose(v.apertures[-1].center, centre) and 'was different' in v.status.get_text()

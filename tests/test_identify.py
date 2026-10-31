@@ -146,3 +146,29 @@ def test_simbad_failure_pauses_lookups(monkeypatch):
              for x in (40.0, 60.0, 80.0)]
     assert len(calls) == 1 and all(not s.name for s in stars)       # one timeout, not three
     assert 'SIMBAD skipped' in logs[-1]
+
+
+def test_radec_text_without_position_is_empty_and_quiet():
+    import warnings
+
+    from pystarlight.wcs.identify import FieldStar, radec_text
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        assert radec_text(float('nan'), 10.0) == '' and FieldStar(1, 2, 3, 4, False).radec == ''
+        assert radec_text(310.36, 45.1).startswith('20:41:')
+
+
+def test_simbad_lookup_gives_up(monkeypatch):
+    import threading
+    import time
+
+    import pystarlight.wcs.identify as ident
+    never = threading.Event()
+    monkeypatch.setattr(ident, '_simbad_query', lambda *a: never.wait(30))
+    t0 = time.monotonic()
+    with pytest.raises(TimeoutError):
+        ident.simbad_lookup(310.0, 45.0, timeout=0.2)
+    assert time.monotonic() - t0 < 2
+    never.set()
+    monkeypatch.setattr(ident, '_simbad_query', lambda *a: {'main_id': 'HD 1'})
+    assert ident.simbad_lookup(310.0, 45.0)['main_id'] == 'HD 1'

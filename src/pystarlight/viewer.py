@@ -230,6 +230,7 @@ class Viewer:
         self.job_status = self.fig.text(0.04, 0.006, '', fontsize=8, color='0.45')
 
         frame = self.movie.read(0)
+        self.image = frame.image
         self.movie.close()
         self.jump = self.frames_per(10.0)
         # display: levels (auto = zscale, or manual), optional auto per frame, display gamma
@@ -317,8 +318,7 @@ class Viewer:
 
         self.ap_stars = {}            # aperture name -> FieldStar (catalogue identification)
         if self.aperture_file.exists():
-            self.apertures = load_apertures(self.aperture_file)
-            self.ap_stars = load_aperture_stars(self.aperture_file)
+            self.load_aperture_file()
         self.wcs = self.orient = None
         self.stars = []               # brightest stars, identified (wcs.field_stars)
         self._star_marks = []
@@ -327,7 +327,8 @@ class Viewer:
         self._skip_ident = False      # Esc: no more catalogue lookups until p / i
         self.show(0)
         keys = ' '.join(f'{r["key"]}:{name}' for name, r in self.roles.items())
-        self.say(f'click: add aperture, right click: remove, roles {keys}, a: run, s/l: save/load')
+        if not self.status.get_text():           # keep a note from loading the apertures
+            self.say(f'click: add aperture, right click: remove, roles {keys}, a: run, s/l: save/load')
 
         # plate solution: RA/Dec under the cursor and field orientation
         self.ax.format_coord = self.format_coord
@@ -838,23 +839,40 @@ class Viewer:
 
     # ---------------------------------------------------------------- editing
 
+    def load_aperture_file(self):
+        """<movie>.apertures.json. All boxes share one size: the most common one in the file
+        (older files may mix sizes), which new apertures and +/- then use."""
+        self.apertures = load_apertures(self.aperture_file)
+        self.ap_stars = load_aperture_stars(self.aperture_file)
+        sizes = [a.size for a in self.apertures]
+        if sizes:
+            self.size = max(set(sizes), key=sizes.count)
+            self.aperture_size_text.set_text(f'box {self.size}px')
+            odd = [a.name for a in self.apertures if a.size != self.size]
+            for a in self.apertures:
+                self._resize(a, self.size)
+            if odd:
+                self.say(f'box size {self.size}px for all apertures (was different: {", ".join(odd)})')
+
+    def _resize(self, aperture, size: int):
+        """New box size, centre kept (to the pixel for odd size changes)."""
+        delta = size - aperture.size
+        if delta:
+            aperture.x0 -= delta // 2
+            aperture.y0 -= delta // 2
+            aperture.size = size
+            aperture.default_mask, _ = circular_mask(size, aperture.default_mask_radius)
+            aperture.clamp(self.image.shape[1], self.image.shape[0])
+
     def adjust_aperture_size(self, delta: int):
         """Resize all aperture boxes by two pixels while keeping their centres fixed."""
         if delta not in (-2, 2):
             raise ValueError('aperture size changes must be 2 pixels')
-        limit = min(self.image.shape)
-        if not 2 <= self.size + delta <= limit:
+        if not 2 <= self.size + delta <= min(self.image.shape):
             return
-        if any(not 2 <= a.size + delta <= limit for a in self.apertures):
-            return
-
         self.size += delta
         for aperture in self.apertures:
-            aperture.x0 -= delta // 2
-            aperture.y0 -= delta // 2
-            aperture.size += delta
-            aperture.default_mask, _ = circular_mask(aperture.size, aperture.default_mask_radius)
-            aperture.clamp(self.image.shape[1], self.image.shape[0])
+            self._resize(aperture, self.size)
         self.aperture_size_text.set_text(f'box {self.size}px')
         self.draw_apertures()
         self.update_zooms()
@@ -1050,9 +1068,9 @@ class Viewer:
             save_apertures(self.aperture_file, self.apertures, self.wcs, self.ap_stars)
             self.say(f'saved {self.aperture_file.name}')
         elif k == 'l' and self.aperture_file.exists():
-            self.apertures = load_apertures(self.aperture_file)
-            self.ap_stars = load_aperture_stars(self.aperture_file)
+            self.load_aperture_file()
             self.draw_apertures()
+            self.update_zooms()
         elif k == 'a':
             self.run()
         elif k in ('1', '2') and ev.inaxes is self.ax:

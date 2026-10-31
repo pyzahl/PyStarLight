@@ -26,6 +26,11 @@ APERTURE_COLORS = {'red': '#d62728', 'green': '#2ca02c', 'yellow': '#e6b800', 'w
 ROLE_COLORS = {'target': 'red', 'reference': 'yellow', 'check': 'green', 'sky': 'cyan'}
 
 
+TARGET_COLOR = APERTURE_COLORS['red']
+# references etc. in plots: matplotlib's cycle without its red (red is the target's)
+OTHER_COLORS = [c for c in plt.rcParams['axes.prop_cycle'].by_key()['color'] if c != '#d62728']
+
+
 def aperture_color(ap) -> str:
     """Display colour: by role when set (global mode), else PyMovie's colour."""
     name = ROLE_COLORS.get(getattr(ap, 'role', ''), ap.color)
@@ -141,13 +146,14 @@ def lightcurve(ax, lc, name: str, references: Sequence[str] = (), window: int = 
     return ax
 
 
-def tracking(ax, lc, names: Sequence[str]):
+def tracking(ax, lc, names: Sequence[str], colors: Optional[Sequence[str]] = None):
     """Measured centroid drift of apertures (shake / tracking diagnostics)."""
     x = _time_axis(ax, lc, seconds(lc))
-    for n in names:
+    for k, n in enumerate(names):
         xc, yc = lc[n]['xc'], lc[n]['yc']
-        ax.plot(x, xc - np.nanmedian(xc), lw=0.7, label=f'{n} x')
-        ax.plot(x, yc - np.nanmedian(yc), lw=0.7, ls='--', label=f'{n} y')
+        c = colors[k] if colors else None
+        ax.plot(x, xc - np.nanmedian(xc), lw=0.7, color=c, label=f'{n} x')
+        ax.plot(x, yc - np.nanmedian(yc), lw=0.7, ls='--', color=c, label=f'{n} y')
     ax.set_ylabel('Drift (px)')
     return ax
 
@@ -163,6 +169,12 @@ def timing(ax, lc):
 
 # --------------------------------------------------------------------------- figures
 
+def _legend(ax, **kw):
+    """Top left, in an opaque box over the data: an occultation sits mid-run, not at the start."""
+    return ax.legend(loc='upper left', frameon=True, framealpha=1.0, facecolor='white',
+                     edgecolor='0.6', fancybox=False, **kw)
+
+
 def summary(lc, image: np.ndarray, apertures: Sequence, target: str,
             references: Sequence[str] = (), window: int = 101, bin_size: int = 1,
             title: Optional[str] = None, figsize=(7.0, 6.5)):
@@ -172,17 +184,19 @@ def summary(lc, image: np.ndarray, apertures: Sequence, target: str,
     ax_img = fig.add_subplot(gs[0, 0])
     frame(ax_img, image, apertures)
     ax_raw = fig.add_subplot(gs[0, 1])
-    for n in [target, *references]:
-        x = _time_axis(ax_raw, lc, seconds(lc))
-        ax_raw.plot(x, lc[n]['signal'], lw=0.6, label=n)
+    x = _time_axis(ax_raw, lc, seconds(lc))
+    ax_raw.plot(x, lc[target]['signal'], lw=1.2, color=TARGET_COLOR, label=target, zorder=3)
+    for k, n in enumerate(references):          # target first in the legend, drawn on top
+        ax_raw.plot(x, lc[n]['signal'], lw=0.6, color=OTHER_COLORS[k % len(OTHER_COLORS)], label=n,
+                    zorder=2)
     ax_raw.set_ylabel('Signal (ADU)')
-    ax_raw.legend(loc='best')
+    _legend(ax_raw)
     ax_lc = fig.add_subplot(gs[1, :])
-    lightcurve(ax_lc, lc, target, references, window=window, bin_size=bin_size)
-    ax_lc.legend(loc='lower left')
+    lightcurve(ax_lc, lc, target, references, window=window, bin_size=bin_size, color=TARGET_COLOR)
+    _legend(ax_lc)
     ax_tr = fig.add_subplot(gs[2, :], sharex=ax_lc)
-    tracking(ax_tr, lc, [target])
-    ax_tr.legend(loc='upper right', ncol=2)
+    tracking(ax_tr, lc, [target], colors=[TARGET_COLOR])
+    _legend(ax_tr, ncol=2)
     if title:
         fig.suptitle(title)
     return fig

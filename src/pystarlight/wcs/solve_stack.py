@@ -74,8 +74,9 @@ def field_size(wcs, shape) -> tuple[float, float]:
 def hms_dms(ra, dec) -> tuple[str, str]:
     from astropy.coordinates import SkyCoord
     c = SkyCoord(ra, dec, unit='deg')
-    return (c.ra.to_string(unit='hour', sep='hms', precision=1, pad=True),
-            c.dec.to_string(sep='dms', precision=0, alwayssign=True, pad=True))
+    with np.errstate(invalid='ignore'):     # astropy 8 + numpy 2.5 warn spuriously (radec_text)
+        return (c.ra.to_string(unit='hour', sep='hms', precision=1, pad=True),
+                c.dec.to_string(sep='dms', precision=0, alwayssign=True, pad=True))
 
 
 def solve_stack(image: np.ndarray, header: dict, n_stars: int = 5, workdir: str = '.',

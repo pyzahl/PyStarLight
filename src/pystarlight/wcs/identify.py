@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Optional
@@ -20,17 +21,19 @@ import numpy as np
 from scipy.ndimage import maximum_filter, median_filter
 
 PREFERRED_IDS = ('HD', 'HIP', 'TYC', 'Gaia DR3', 'UCAC4', '2MASS')
-SIMBAD_TIMEOUT_S = 20.0     # per query (astroquery's default is 18 minutes)
+SIMBAD_TIMEOUT_S = 20.0     # per lookup (astroquery itself waits as long as the network does)
 SIMBAD_RETRY_S = 300.0      # after a failed query SIMBAD is skipped this long (offline in the field)
 _simbad_down_until = 0.0
 
 
 def radec_text(ra: float, dec: float) -> str:
-    """'hh:mm:ss.s +dd:mm:ss.s', or '' without a position (astropy warns on NaN)."""
+    """'hh:mm:ss.s +dd:mm:ss.s', or '' without a position."""
     if not (math.isfinite(ra) and math.isfinite(dec)):
         return ''
     from astropy.coordinates import SkyCoord
-    return SkyCoord(ra, dec, unit='deg').to_string('hmsdms', precision=1, sep=':')
+    # astropy 8 with numpy 2.5 warns "invalid value encountered in do_format" for any angle
+    with np.errstate(invalid='ignore'):
+        return SkyCoord(ra, dec, unit='deg').to_string('hmsdms', precision=1, sep=':')
 
 
 @dataclass
@@ -98,12 +101,32 @@ def astrometry_annotations(job_id: int, api_key: Optional[str] = None) -> list[d
     return out
 
 
-def simbad_lookup(ra: float, dec: float, radius_arcsec: float = 10.0) -> Optional[dict]:
-    """Nearest SIMBAD object with a V magnitude (else nearest at all) within the radius."""
+def simbad_lookup(ra: float, dec: float, radius_arcsec: float = 10.0,
+                  timeout: float = SIMBAD_TIMEOUT_S) -> Optional[dict]:
+    """Nearest SIMBAD object with a V magnitude (else nearest at all) within the radius.
+    Gives up after `timeout` s (TimeoutError): astroquery's network calls have no time limit."""
+    box = {}
+
+    def work():
+        try:
+            box['hit'] = _simbad_query(ra, dec, radius_arcsec)
+        except Exception as e:
+            box['error'] = e
+    t = threading.Thread(target=work, daemon=True)      # left behind if SIMBAD never answers
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise TimeoutError(f'SIMBAD did not answer within {timeout:.0f} s')
+    if 'error' in box:
+        raise box['error']
+    return box['hit']
+
+
+def _simbad_query(ra: float, dec: float, radius_arcsec: float) -> Optional[dict]:
     import astropy.units as u
     from astropy.coordinates import SkyCoord
     from astroquery.simbad import Simbad
-    s = Simbad(timeout=SIMBAD_TIMEOUT_S)
+    s = Simbad()
     s.add_votable_fields('V', 'ids')
     c = SkyCoord(ra, dec, unit='deg')
     r = s.query_region(c, radius=radius_arcsec * u.arcsec)
