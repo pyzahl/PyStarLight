@@ -245,8 +245,22 @@ class _NumpyNewshapeCompat:
         return self._np.reshape(a, *args, **kw)
 
 
+def _import_adv2_file():
+    """Adv2.Adv2File; Adv2 loads its native library on import, which fails (OSError) where the
+    wheel has no matching build, e.g. on Apple Silicon (Adv2 1.2.0 ships an x86_64 dylib only)."""
+    try:
+        import Adv2.Adv2File as adv_file
+    except OSError as e:
+        raise ImportError(
+            'Adv2 is installed but its native library (libAdvCore) does not load on this '
+            'machine; Adv2 1.2.0 has no arm64 build for macOS. Run under an x86_64 Python '
+            '(Rosetta) or replace Adv2/Adv2DLLlibs/libAdvCore.dylib with an arm64 build of '
+            f'ADVlib. Original error: {e}') from e
+    return adv_file
+
+
 def _patch_adv2_for_numpy2():
-    import Adv2.Adv2File as adv_file
+    adv_file = _import_adv2_file()
     try:
         np.reshape(np.zeros(1), newshape=(1,))
     except TypeError:                       # numpy >= 2.x: give Adv2 the old keyword back
@@ -288,8 +302,7 @@ class AdvReader(MovieReader):
     def _open(self):
         """(Re)open this file in Adv2's global slot. Call with _ADV_LOCK held."""
         global _ADV_OWNER
-        from Adv2.Adv2File import Adv2reader
-        self._r = Adv2reader(self.path)
+        self._r = _import_adv2_file().Adv2reader(self.path)
         _ADV_OWNER = self
 
     def __len__(self):

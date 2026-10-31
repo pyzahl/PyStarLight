@@ -306,7 +306,7 @@ def test_auto_center_individual_and_all_apertures(movie):
 def test_playback_advances_one_frame_and_toggles(movie):
     v = Viewer(str(movie))
     labels = [button.label.get_text() for button in v._buttons]
-    assert labels[2:5] == ['<', 'Play', '>']
+    assert labels[3:6] == ['<', 'Play', '>']
     left = min(button.ax.get_position().x0 for button in v._buttons)
     right = max(button.ax.get_position().x1 for button in v._buttons)
     image_center = v.ax.get_position().x0 + v.ax.get_position().width / 2
@@ -360,3 +360,32 @@ def test_fit_frame_button_fits_without_moving(movie):
         for x in r.values():
             assert x['used'] == 1 and x['signal'] > 0 and x['fwhm'] > 2
         assert 'SG' in v.status.get_text() if sg else 'std' in v.status.get_text()
+
+
+def test_open_other_movie_replaces_the_window(movie, tmp_path):
+    import matplotlib.pyplot as plt
+    other = tmp_path / 'other.ser'
+    write_ser(other, [render(i, np.random.default_rng(1)) for i in range(12)])
+    v = Viewer(str(movie))
+    new = v.open_other(str(other))
+    assert new.path == other and new.n == 12 and new.cfg is v.cfg
+    assert not plt.fignum_exists(v.fig.number) and plt.fignum_exists(new.fig.number)
+    assert new.open_other(str(tmp_path / 'missing.ser')) is None     # bad file: stays open
+    assert plt.fignum_exists(new.fig.number) and 'cannot open' in new.status.get_text()
+    new.close()
+
+
+def test_file_dialog_result(monkeypatch, tmp_path):
+    import subprocess
+
+    from pystarlight import viewer
+
+    def fake(stdout):
+        return lambda *a, **k: SimpleNamespace(stdout=stdout)
+    monkeypatch.setattr(subprocess, 'run', fake(f'{tmp_path}/run.ravf\n'))
+    assert viewer.ask_movie_path(tmp_path) == f'{tmp_path}/run.ravf'
+    monkeypatch.setattr(subprocess, 'run', fake(f'{tmp_path}/frames/f_0001.fits\n'))
+    assert viewer.ask_movie_path() == f'{tmp_path}/frames'          # a FITS frame -> its folder
+    monkeypatch.setattr(subprocess, 'run', fake('\n'))
+    assert viewer.ask_movie_path() is None                            # cancelled
+    assert viewer.main([]) == 1                                       # no movie, dialog cancelled

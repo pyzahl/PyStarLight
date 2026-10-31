@@ -1,6 +1,7 @@
 """Minimal matplotlib viewer: step through a movie, see the timestamp, place apertures, run.
 
     pystarlight-view OTEVideo/run_1/run_1.ravf
+    pystarlight-view                       (no movie: file dialog)
 
 Mouse   left click     add aperture (snaps to the star's brightest pixels)
         right click    remove the nearest aperture
@@ -16,6 +17,7 @@ Keys    left / right   previous / next frame      page up / down  -/+ 25 frames
         s / l          save / load apertures (<movie>.apertures.json)
         p              plate-solve again (otherwise automatic on opening, cached as <movie>.wcs.fit)
         i              identify the stars in the apertures (astrometry.net names, SIMBAD); also automatic
+        ctrl+o         open another movie (also the Open button; a FITS frame opens its folder)
 Toolbar zoom/pan works as usual.
 
 Results are written next to the movie: <movie>.csv (PyMovie layout, opens in PyOTE),
@@ -29,6 +31,7 @@ import json
 import sys
 import threading
 import time
+import warnings
 from pathlib import Path
 from typing import Optional
 
@@ -48,6 +51,8 @@ from .tracking import Aperture
 
 AP_FIELDS = ('name', 'x0', 'y0', 'size', 'color', 'thresh', 'default_mask_radius', 'role')
 PYMOVIE_KEYS = {'Y': 'yellow', 'R': 'red', 'G': 'green', 'W': 'white'}
+MOVIE_PATTERNS = '*.ravf *.ser *.adv *.aav *.avi *.mov *.fit *.fits *.fts'
+FITS_SUFFIXES = ('.fit', '.fits', '.fts')
 NAV_KEYS = ('left', 'right', 'pageup', 'pagedown', 'home', 'end', 'n', 'a', 's', 'l', 'p', 'i', 'u', '1', '2')
 
 
@@ -57,6 +62,48 @@ def free_matplotlib_keys(keys):
     'o' (zoom) and 'q' (quit) keep their matplotlib meaning unless the config uses them."""
     for name in [k for k in plt.rcParams if k.startswith('keymap.')]:
         plt.rcParams[name] = [k for k in plt.rcParams[name] if k not in keys]
+
+
+_TK_DIALOG = r"""
+import sys, tkinter as tk
+from tkinter import filedialog
+root = tk.Tk()
+root.withdraw()
+p = filedialog.askopenfilename(title='Open movie', initialdir=sys.argv[1] or None,
+                               filetypes=[('Movies, FITS frames', sys.argv[2]), ('All files', '*')])
+root.destroy()
+print(p or '')
+"""
+
+
+def ask_movie_path(initial_dir=None) -> Optional[str]:
+    """File dialog for a movie; a FITS frame stands for its folder. None if cancelled.
+
+    Qt's own dialog when the viewer runs on a Qt backend, otherwise Tk in a subprocess, so the
+    dialog never fights the backend's event loop (Tk and Cocoa in one process hang on macOS)."""
+    import matplotlib
+    initial = str(initial_dir or '')
+    path = ''
+    app = None
+    if 'qt' in matplotlib.get_backend().lower():
+        from matplotlib.backends.qt_compat import QtWidgets
+        app = QtWidgets.QApplication.instance()
+    if app is not None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            None, 'Open movie', initial, f'Movies, FITS frames ({MOVIE_PATTERNS});;All files (*)')
+    else:
+        import subprocess
+        try:
+            r = subprocess.run([sys.executable, '-c', _TK_DIALOG, initial, MOVIE_PATTERNS],
+                               capture_output=True, text=True, check=True)
+        except (OSError, subprocess.CalledProcessError) as e:
+            print(f'no file dialog (needs tkinter): {getattr(e, "stderr", "") or e}', file=sys.stderr)
+            return None
+        path = r.stdout.strip()
+    if not path:
+        return None
+    p = Path(path)
+    return str(p.parent) if p.suffix.lower() in FITS_SUFFIXES else str(p)
 
 
 def save_apertures(path, apertures, wcs=None, stars=None):
@@ -223,7 +270,8 @@ class Viewer:
         self._playing = False
         self._play_timer = self.fig.canvas.new_timer(interval=max(1, round(10000 / self.jump)))
         self._play_timer.add_callback(self.playback_step)
-        buttons = [('|<', lambda e: self.go(0), 0.065),
+        buttons = [('Open', lambda e: self.open_other(), 0.065),
+                   ('|<', lambda e: self.go(0), 0.065),
                    ('-10 s', lambda e: self.go(self.index - self.jump), 0.065),
                    ('<', lambda e: self.go(self.index - 1), 0.065),
                    ('Play', lambda e: self.toggle_playback(), 0.075),
@@ -347,6 +395,7 @@ class Viewer:
             'a run  s/l save/load',
             'p plate-solve (upload)',
             'i identify (SIMBAD)',
+            'ctrl+o open movie',
             'f full screen  o zoom',
             'levels/gamma: sliders',
             'Y R G W PyMovie colours',
@@ -982,6 +1031,37 @@ class Viewer:
             self.start_identify()
         elif k == 'p' and self._solve_job is None:
             self.start_solve(force=True)
+        elif k in ('ctrl+o', 'cmd+o'):
+            self.open_other()
+
+    # ---------------------------------------------------------------- open another movie
+
+    def open_other(self, path: Optional[str] = None) -> Optional['Viewer']:
+        """Open button / ctrl+o: another movie in a new window (same config and calibration);
+        this one closes. Apertures are not saved on the way (s saves them)."""
+        if self._job is not None:
+            self.say('analysis running: open another movie when it is done')
+            return None
+        path = path or ask_movie_path(self.path.parent)
+        if not path:
+            return None
+        try:
+            new = Viewer(path, self.cfg, self.calibration)
+        except Exception as e:
+            self.say(f'cannot open {Path(path).name}: {e}')
+            return None
+        self.close()
+        with warnings.catch_warnings():    # non-GUI backends (tests) warn that they cannot show
+            warnings.simplefilter('ignore')
+            new.fig.show()
+        return new
+
+    def close(self):
+        for name in ('timer', '_play_timer', '_solve_timer', '_ident_timer', '_stack_timer'):
+            t = getattr(self, name, None)
+            if t is not None:
+                t.stop()
+        plt.close(self.fig)
 
     # ---------------------------------------------------------------- analysis
 
@@ -1134,13 +1214,16 @@ def main(argv=None):
     import argparse
     p = argparse.ArgumentParser(prog='pystarlight-view', description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('movie', help='movie file or FITS folder')
+    p.add_argument('movie', nargs='?', help='movie file or FITS folder (default: file dialog)')
     p.add_argument('--config', help='config file (default: see pystarlight-config path)')
     p.add_argument('--calibration', help='.npz from Calibration.save() (default: [calibration] in config)')
     a = p.parse_args(argv)
     cfg = config_mod.load(a.config)
+    movie = a.movie or ask_movie_path()
+    if not movie:
+        return 1
     # --calibration overrides the config; otherwise [calibration] clips are stacked on the first run
-    Viewer(a.movie, cfg, Calibration.load(a.calibration) if a.calibration else None)
+    Viewer(movie, cfg, Calibration.load(a.calibration) if a.calibration else None)
     plt.show()
 
 

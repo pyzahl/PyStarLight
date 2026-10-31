@@ -160,8 +160,11 @@ def test_adv2_numpy2_compat_shim():
     assert c.reshape(a, newshape=(2, 3)).shape == (2, 3)       # Adv2's call
     assert c.reshape(a, (3, 2)).shape == (3, 2)                 # normal call
     assert c.uint16 is np.uint16                                # everything else is numpy
-    adv = pytest.importorskip('Adv2.Adv2File')
-    from pystarlight.movie import _patch_adv2_for_numpy2
+    from pystarlight.movie import _import_adv2_file, _patch_adv2_for_numpy2
+    try:
+        adv = _import_adv2_file()
+    except ImportError as e:                    # not installed, or no native build (Apple Silicon)
+        pytest.skip(str(e))
     _patch_adv2_for_numpy2()
     assert adv.np.reshape(a, newshape=(2, 3)).shape == (2, 3)
 
