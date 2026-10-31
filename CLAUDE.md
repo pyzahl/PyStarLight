@@ -36,7 +36,7 @@ PyOTE source: `../py-ote`. PySyzygos (formerly PyOccult; sites, local Gaia extra
 | `photometry.py` | PyMovie-exact background (`robust_mean_std`), blob mask, centroids, TME, `measure_aperture` |
 | `tracking.py` | `Aperture` dataclass (incl. `role`), PyMovie `Tracker` (0/1/2 yellow), `TrackPath` |
 | `pipeline.py` | `analyze()` PyMovie mode → `LightCurves` (`to_csv`, `to_pymovie_csv`, `normalized`) |
-| `globaltrack.py` | `analyze_global()`: roles, Gaussian peak fits, weighted robust rigid transform, dimming detection, target drift interpolation, sub-pixel circular apertures; opt-in `savgol_fit` (SG smoothing + 2-D Gaussian, fit-centred circles) |
+| `globaltrack.py` | `analyze_global()`: roles, Gaussian peak fits, weighted robust rigid transform, dimming detection, target drift interpolation, sub-pixel circular apertures; opt-in `photometry="optimal"` (Naylor optimal extraction, `optimal_stats`; viewer checkbox "Optimal"). The SG fit (`fit_peak_savgol`, `savgol_fit`) is kept in the library but no longer offered in the viewer or config |
 | `export.py` | PyMovie-layout CSV for PyOTE (`write_pymovie_csv`, `sky_lines`) |
 | `timestamps/` | `ocr.py` (PyMovie's VTI OCR, verbatim), `vti.py` (`VtiReader`), `timing.py` (checks, new) |
 | `wcs/` | `solve.py` (astrometry.net, orientation, plate scale, `solve_movie`, `field_stars`), `identify.py` (brightest stars, SIMBAD, `identify_positions`), `manual.py` (two-star, verbatim), `astrometry_client.py` (verbatim-ish) |

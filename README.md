@@ -216,6 +216,14 @@ checks) track together:
   aperture keeps following the field, plus the target's own slow offset, **interpolated between
   the start and end of the event**. A known event can also be given: `event=(first, last)`;
 - photometry uses a circular aperture with exact sub-pixel weights (radius 1.5 × FWHM unless set).
+  The checkbox **Optimal** (or `[analysis] photometry = "optimal"`) switches to Naylor's optimal
+  extraction (1998, MNRAS 296, 339): each pixel weighted by a circular Gaussian of the frame's
+  seeing (the reference stars' median FWHM) at the tracked position, the same profile for every
+  star so that profile errors cancel in the ratio. Linear in the data, so event depths stay
+  unbiased. It lowers the noise of faint stars whose noise is mostly sky noise and uncorrelated
+  from pixel to pixel; it does nothing against scintillation, which dominates short exposures
+  with small telescopes. On the owner's recordings (ASTRID 0.17 s, analog-video ADV) the
+  1.5 × FWHM circle was better, so the circle stays the default: compare both on your data.
 
 Written next to the movie:
 

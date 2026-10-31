@@ -14,6 +14,8 @@ from pystarlight.globaltrack import (
     fit_peak,
     fit_peak_savgol,
     fit_rigid,
+    optimal_stats,
+    pixel_gaussian,
     savgol_2d,
 )
 from test_pipeline import write_ser
@@ -148,13 +150,14 @@ def render_drift(i, rng, depth):
     return img
 
 
+@pytest.mark.parametrize('photometry', ['aperture', 'optimal'])
 @pytest.mark.parametrize('depth', [0.15, 0.0])
-def test_partial_occultation_and_drift(tmp_path, depth):
+def test_partial_occultation_and_drift(tmp_path, depth, photometry):
     rng = np.random.default_rng(9)
     p = tmp_path / 'drift.ser'
     write_ser(p, [render_drift(i, rng, depth) for i in range(90)])
     with open_movie(str(p)) as mv:
-        lc = analyze_global(mv, apertures())
+        lc = analyze_global(mv, apertures(), photometry=photometry)
     t = lc['target']
     ev = np.array(list(EVENT))
     assert np.all((t['dimmed'][ev] == 1) | (t['used'][ev] == 0))   # never steered tracking in the event
@@ -249,3 +252,71 @@ def test_radius_follows_fwhm_factor(movie):
         r085 = analyze_global(mv, apertures(), 0, 5, radius_fwhm=0.85).frame_info['radius'][0]
     assert r085 == pytest.approx(r15 * 0.85 / 1.5)
     assert r15 == pytest.approx(1.5 * 2.3548 * SIGMA, rel=0.05)
+
+
+# --------------------------------------------------------------------------- optimal extraction
+
+def test_pixel_gaussian_has_unit_flux_and_its_centre():
+    P = pixel_gaussian(20.3, 19.6, 3.3, 0, 0, (41, 41))
+    yy, xx = np.indices(P.shape)
+    assert P.sum() == pytest.approx(1.0, abs=1e-6)
+    assert (P * xx).sum() == pytest.approx(20.3, abs=1e-6) and (P * yy).sum() == pytest.approx(19.6, abs=1e-6)
+
+
+def faint_star(rng, cx=20.3, cy=19.6, amp=40.0, sigma=1.4, sky=300.0, noise=8.0):
+    y, x = np.indices((41, 41))
+    img = rng.normal(sky, noise, (41, 41))
+    return img + amp * np.exp(-((y - cy) ** 2 + (x - cx) ** 2) / (2 * sigma ** 2))
+
+
+def test_optimal_is_unbiased_and_beats_the_aperture_on_a_faint_star():
+    rng = np.random.default_rng(3)
+    flux = 2 * math.pi * 40.0 * 1.4 ** 2
+    fwhm = 2.3548 * 1.4
+    opt, ap, pred = [], [], []
+    for _ in range(400):
+        img = faint_star(rng)
+        s, area, _, _ = optimal_stats(img, 20.3, 19.6, fwhm)
+        opt.append(s - area * 300.0)
+        pred.append(8.0 * math.sqrt(area))
+        s, area = circle_sum(img, 20.3, 19.6, 1.5 * fwhm)
+        ap.append(s - area * 300.0)
+    opt, ap = np.array(opt), np.array(ap)
+    assert opt.mean() == pytest.approx(flux, rel=0.03)                 # total flux, unbiased
+    assert opt.std() < 0.8 * ap.std()                                   # sky-limited: much less noise
+    assert opt.std() == pytest.approx(pred[0], rel=0.15)                # noise column predicts it
+
+
+def test_optimal_gives_defect_pixels_no_weight():
+    class Cal:
+        defects = np.zeros((41, 41), bool)
+
+        def apply_roi(self, cut, x0, y0):
+            return cut
+    cal = Cal()
+    cal.defects[20, 21] = True
+    rng = np.random.default_rng(4)
+    clean = faint_star(rng, amp=2000.0)
+    hot = clean.copy()
+    hot[20, 21] = 60000.0
+    s0, a0, _, _ = optimal_stats(clean, 20.3, 19.6, 3.3)
+    s1, a1, _, hits = optimal_stats(hot, 20.3, 19.6, 3.3, calibration=cal)
+    assert hits == 1
+    assert s1 - a1 * 300 == pytest.approx(s0 - a0 * 300, rel=0.02)
+
+
+def test_global_optimal_tracks_seeing_and_occultation(movie):
+    path, _ = movie
+    with open_movie(path) as mv:
+        lc = analyze_global(mv, apertures(), photometry='optimal')
+    fi = lc.frame_info
+    assert np.all(fi['optimal'] == 1)
+    assert np.median(fi['psf_fwhm']) == pytest.approx(2.3548 * SIGMA, rel=0.1)
+    flux = lc.normalized(window=9)
+    ev = np.array(list(EVENT))
+    assert abs(np.median(flux[ev])) < 0.05
+    out = np.setdiff1d(np.arange(10, 80), np.arange(36, 60))
+    assert np.median(flux[out]) == pytest.approx(1.0, abs=0.03)
+    with open_movie(path) as mv:
+        with pytest.raises(ValueError):
+            analyze_global(mv, apertures(), photometry='psf')

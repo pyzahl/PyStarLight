@@ -191,8 +191,9 @@ def run_analysis(movie_path, apertures, start, stop, cfg, calibration=None, prog
                                   background=a['background'], search=a['search'],
                                   rotation=a['rotation'], min_snr=a['min_snr'],
                                   dim_fraction=a['dim_fraction'], target_drift=a['target_drift'],
-                                  savgol_fit=a['savgol_fit'], savgol_window=a['savgol_window'],
-                                  savgol_order=a['savgol_order'],
+                                  photometry=a['photometry'],
+                                  optimal_radius_fwhm=a['optimal_radius_fwhm'],
+                                  seeing_frames=a['seeing_frames'],
                                   calibration=calibration, progress=progress)
             mv.close ()
             return ret
@@ -273,9 +274,9 @@ class Viewer:
         self._per_frame_box = CheckButtons(self.fig.add_axes([0.665, 0.165, 0.09, 0.05]), ['per frame'],
                                            [self.per_frame])
         self._per_frame_box.on_clicked(self._on_per_frame)
-        self._savgol_box = CheckButtons(self.fig.add_axes([0.765, 0.165, 0.075, 0.05]), ['SG fit'],
-                                        [bool(self.cfg['analysis']['savgol_fit'])])
-        self._savgol_box.on_clicked(self._on_savgol)
+        self._optimal_box = CheckButtons(self.fig.add_axes([0.765, 0.165, 0.075, 0.05]), ['Optimal'],
+                                         [self.cfg['analysis']['photometry'] == 'optimal'])
+        self._optimal_box.on_clicked(self._on_optimal)
 
         self.slider = Slider(self.fig.add_axes([0.2, 0.115, 0.6, 0.025]), 'frame', 0, self.n - 1,
                              valinit=0, valstep=1, valfmt='%d')
@@ -508,13 +509,13 @@ class Viewer:
         if self.per_frame:
             self.auto_levels()
 
-    def _on_savgol(self, _label):
-        """Peak fit for the next run (global mode) and for centring: Savitzky-Golay + 2-D
-        Gaussian with fit-centred photometry, or the standard fit."""
+    def _on_optimal(self, _label):
+        """Photometry for the next run (global mode) and Fit frame: Naylor's optimal extraction
+        or the circular aperture."""
         a = self.cfg['analysis']
-        a['savgol_fit'] = not a['savgol_fit']
-        self.say('peak fit: ' + ('Savitzky-Golay + 2-D Gaussian, circles on fitted centres'
-                                 if a['savgol_fit'] else 'standard Gaussian, global solution'))
+        a['photometry'] = 'aperture' if a['photometry'] == 'optimal' else 'optimal'
+        self.say('photometry: ' + ('optimal extraction (Naylor), Gaussian weights of the seeing'
+                                   if a['photometry'] == 'optimal' else 'circular aperture'))
 
     def show(self, i):
         self.index = i
@@ -917,12 +918,10 @@ class Viewer:
         """Move one non-sky aperture to the fitted peak in the displayed frame."""
         if aperture.role == 'sky':
             return False
-        from .globaltrack import peak_fitter
+        from .globaltrack import fit_peak
 
-        a = self.cfg['analysis']
-        fitter = peak_fitter(a['savgol_fit'], a['savgol_window'], a['savgol_order'])
-        fit = fitter(self.image, *aperture.center, search=min(15, aperture.size / 2),
-                     calibration=self.calibration)
+        fit = fit_peak(self.image, *aperture.center, search=min(15, aperture.size / 2),
+                       calibration=self.calibration)
         if not fit.ok:
             return False
         aperture.x0 = int(round(fit.x)) - aperture.size // 2
@@ -949,13 +948,15 @@ class Viewer:
         self.say(f'auto-centered {centered}/{len(candidates)} apertures')
 
     def fit_frame(self) -> dict:
-        """Peak fit (standard or SG, as the checkbox) on every star aperture in the displayed
-        frame, plus photometry on a circle at each fitted centre. Apertures do not move.
-        Results go to the zoom views, cyan + marks and the status line; returns them."""
-        from .globaltrack import auto_radius, box_background, circle_stats, peak_fitter
+        """Peak fit on every star aperture in the displayed frame, plus photometry at each
+        fitted centre: a circle, or optimal extraction (as the checkbox) with the median FWHM.
+        Apertures do not move. Results go to the zoom views, cyan + marks and the status line;
+        returns them."""
+        from .globaltrack import auto_radius, box_background, circle_stats, fit_peak, optimal_stats
 
         a_cfg = self.cfg['analysis']
-        fitter = peak_fitter(a_cfg['savgol_fit'], a_cfg['savgol_window'], a_cfg['savgol_order'])
+        optimal = a_cfg['photometry'] == 'optimal'
+        fitter = fit_peak
         stars = [a for a in self.apertures if a.role != 'sky']
         if not stars:
             self.say('fit: no star apertures')
@@ -963,12 +964,19 @@ class Viewer:
         fits = {a.name: fitter(self.image, *self.centre_of(a), search=min(15, a.size / 2),
                                calibration=self.calibration) for a in stars}
         fw = [f.fwhm for f in fits.values() if f.ok]
-        radius = a_cfg['radius'] or auto_radius(fw, a_cfg['radius_fwhm'])
+        if optimal:
+            radius = float(np.median(fw)) if fw else 3.0        # the profile FWHM (drawn in the zooms)
+        else:
+            radius = a_cfg['radius'] or auto_radius(fw, a_cfg['radius_fwhm'])
         readings = {}
         for a in stars:
             f = fits[a.name]
             cx, cy = (f.x, f.y) if f.ok else self.centre_of(a)
-            s, area, maxpx, hits = circle_stats(self.image, cx, cy, radius, self.calibration)
+            if optimal:
+                s, area, maxpx, hits = optimal_stats(self.image, cx, cy, radius, a_cfg['optimal_radius_fwhm'],
+                                                     self.calibration)
+            else:
+                s, area, maxpx, hits = circle_stats(self.image, cx, cy, radius, self.calibration)
             bk, bs = box_background(self.image, cx, cy, a.size, self.calibration)
             fit = (f.x, f.y, f.fwhm, f.snr) if f.ok else (np.nan,) * 4
             readings[a.name] = dict(zip(
@@ -981,10 +989,10 @@ class Viewer:
                 self.patches += self.ax.plot([fits[a.name].x], [fits[a.name].y], '+', color='cyan',
                                              ms=9, mew=1)
         self.update_zooms(readings=readings, radius=radius)
-        kind = 'SG' if a_cfg['savgol_fit'] else 'std'
+        kind = f'optimal, FWHM {radius:.1f}px' if optimal else f'r {radius:.1f}px'
         parts = [f'{n} ' + (f'FWHM {fits[n].fwhm:.1f} SNR {fits[n].snr:.0f} S {r["signal"]:,.0f}'
                             if fits[n].ok else 'no fit') for n, r in readings.items()]
-        self.say(f'fit fr {self.index} ({kind}, r {radius:.1f}px): ' + ' | '.join(parts))
+        self.say(f'fit fr {self.index} ({kind}): ' + ' | '.join(parts))
         return readings
 
     def _free_name(self, base: str, numbered: bool = True) -> str:

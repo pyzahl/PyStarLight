@@ -16,7 +16,9 @@ Each frame:
     star that fades (the target during the event) or is hit by a cosmic ray does not
     move its aperture: the other stars carry it;
  4. photometry: sum inside a circle of the given radius with exact sub-pixel
-    weights, minus the local (or sky) background per pixel.
+    weights, minus the local (or sky) background per pixel; or (photometry='optimal')
+    Naylor's optimal extraction: pixels weighted by the star profile (a circular Gaussian
+    of the frame's seeing) at the tracked position.
 
     lc = analyze_global(movie, apertures)        # apertures with .role set
     flux = lc.normalized()                       # target / smoothed sum of references
@@ -34,6 +36,7 @@ import numpy as np
 from scipy.ndimage import median_filter
 from scipy.optimize import least_squares
 from scipy.signal import savgol_filter
+from scipy.special import erf
 
 from .movie import MovieReader
 from .photometry import robust_mean_std
@@ -291,6 +294,56 @@ def circle_stats(image, cx, cy, radius, calibration=None):
     return float((wts * cut).sum()), float(wts.sum()), maxpx, defects
 
 
+def pixel_gaussian(cx: float, cy: float, fwhm: float, x0: int, y0: int, shape) -> np.ndarray:
+    """A circular Gaussian of unit total flux centred at (cx, cy), integrated over each pixel
+    of a cut-out (top-left x0, y0). Pixel (r, c) covers [c-0.5, c+0.5] x [r-0.5, r+0.5]."""
+    h, w = shape
+    s = math.sqrt(2.0) * fwhm / 2.3548
+
+    def edges(n, start, c):
+        e = (np.arange(n + 1) + start - 0.5 - c) / s
+        return 0.5 * np.diff(erf(e))
+    return np.outer(edges(h, y0, cy), edges(w, x0, cx))
+
+
+def optimal_stats(image, cx, cy, fwhm, extent: float = 3.0, calibration=None):
+    """Naylor (1998, MNRAS 296, 339) optimal extraction at a known position.
+
+    Weights W = P / sum(P^2) with P the pixel-integrated star profile (circular Gaussian,
+    `fwhm`, unit flux) out to extent x FWHM: the weights of a sky-limited star. The same
+    profile shape for every star (target and references) makes profile errors cancel in the
+    ratio. Then sum(W * D) estimates the star's total flux, unbiased and linear in the data
+    (a deep drop is not biased as a fit would be). Defect pixels get no weight; the others
+    are renormalised, which keeps the estimate unbiased.
+    Returns (sum(W*D), sum(W), brightest pixel, defect pixels): as circle_stats, so the
+    signal is sum - area * background and the background-only noise bkstd * sqrt(area)
+    (sum(W^2) = sum(W) here)."""
+    hh, ww = image.shape
+    r = extent * fwhm
+    k = int(math.ceil(r)) + 1
+    x0, x1 = max(0, int(round(cx)) - k), min(ww, int(round(cx)) + k + 1)
+    y0, y1 = max(0, int(round(cy)) - k), min(hh, int(round(cy)) + k + 1)
+    cut = image[y0:y1, x0:x1].astype(np.float64)
+    if calibration is not None:
+        cut = calibration.apply_roi(cut, x0, y0)
+    P = pixel_gaussian(cx, cy, fwhm, x0, y0, cut.shape)
+    yy, xx = np.mgrid[y0:y1, x0:x1]
+    inside = (xx - cx) ** 2 + (yy - cy) ** 2 <= r * r
+    use = inside.copy()
+    defects = 0
+    if calibration is not None and calibration.defects is not None:
+        bad = calibration.defects[y0:y1, x0:x1].astype(bool) & inside
+        defects = int(bad.sum())
+        use &= ~bad
+    P = np.where(use, P, 0.0)
+    p2 = float((P * P).sum())
+    if p2 <= 0:
+        return float('nan'), float('nan'), float('nan'), defects
+    W = P / p2
+    maxpx = float(cut[inside].max()) if inside.any() else float('nan')
+    return float((W * cut).sum()), float(W.sum()), maxpx, defects
+
+
 def box_background(image, cx, cy, size, calibration=None, lunar=False):
     """PyMovie's robust (star-masked) background of a size x size box centred at (cx, cy)."""
     hh, ww = image.shape
@@ -411,6 +464,8 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
                    lunar: bool = False, event: Optional[tuple[int, int]] = None,
                    target_drift: bool = True, dim_fraction: float = 0.4,
                    savgol_fit: bool = False, savgol_window: int = 5, savgol_order: int = 2,
+                   photometry: str = 'aperture', optimal_radius_fwhm: float = 3.0,
+                   seeing_frames: int = 5,
                    progress: Optional[Callable[[int, dict], None]] = None,
                    cancel: Optional[threading.Event] = None) -> LightCurves:
     """Track all star apertures together and measure with sub-pixel circular apertures.
@@ -433,6 +488,13 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
         not faded or excluded, within `radius` of the global solution). Elsewhere, e.g.
         the target during the event, the global solution places it as before (with
         target_drift: plus the target's interpolated own offset).
+    photometry: 'aperture' (circle of `radius`) or 'optimal': Naylor's optimal extraction
+        (optimal_stats) at the tracked centre, out to optimal_radius_fwhm x FWHM. The
+        profile FWHM is the frame's seeing: the median FWHM of the reference and check
+        stars' fits (not faded), running median over seeing_frames frames; so the target's
+        own (faint, during the event) fit is never needed. Per row in frame_info['psf_fwhm'];
+        frame_info['radius'] then holds the FWHM (the zoom views draw it).
+        With 'optimal', sum is sum(W*D) and area sum(W) (the effective number of pixels).
     Columns per star: signal (sum - area*bkavg), sum, area, bkavg, bkstd,
         noise (bkstd*sqrt(area), background-only), xc/yc (aperture centre used),
         x_fit/y_fit/fwhm/peak_snr (this star's own fit), used (1 if it steered tracking),
@@ -441,6 +503,8 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
     """
     if background not in ('local', 'sky'):
         raise ValueError("background must be 'local' or 'sky'")
+    if photometry not in ('aperture', 'optimal'):
+        raise ValueError("photometry must be 'aperture' or 'optimal'")
     sky = [a for a in apertures if a.role == 'sky']
     if background == 'sky' and not sky:
         raise ValueError("background='sky' needs at least one aperture with role 'sky'")
@@ -455,10 +519,17 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
     tr = GlobalTracker(apertures, search, rotation, min_snr, calibration, dim_fraction, fitter)
     target = next((a for a in apertures if a.role == 'target'), None)
     tr.initialize(first)
+    fw = [f.fwhm for f in (fitter(first, *tr.ref[a.name], 3, calibration=calibration)
+                           for a in tr.stars) if f.ok]
     if radius is None:
-        fw = [f.fwhm for f in (fitter(first, *tr.ref[a.name], 3, calibration=calibration)
-                               for a in tr.stars) if f.ok]
         radius = auto_radius(fw, radius_fwhm)
+    seeing = deque([float(np.median(fw)) if fw else radius / radius_fwhm], maxlen=max(1, seeing_frames))
+    comparison = [a.name for a in tr.stars if a.role in ('reference', 'check')] or [a.name for a in tr.stars]
+
+    def measure(img, cx, cy, fwhm):
+        if photometry == 'optimal':
+            return optimal_stats(img, cx, cy, fwhm, optimal_radius_fwhm, calibration)
+        return circle_stats(img, cx, cy, radius, calibration)
 
     rows = []
     glob = {a.name: [] for a in apertures if a.role != 'sky'}   # global-solution centres
@@ -468,6 +539,11 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
         img = preprocess(fr.image) if preprocess else fr.image
         in_event = event is not None and target is not None and event[0] <= fr.index <= event[1]
         centres, fits, info = tr.step(img, exclude=(target.name,) if in_event else ())
+        now = [fits[n].fwhm for n in comparison if fits[n].ok and not getattr(fits[n], 'dimmed', False)
+               and not getattr(fits[n], 'excluded', False)]
+        if now:
+            seeing.append(float(np.median(now)))
+        info['psf_fwhm'] = float(np.median(seeing))
 
         sky_vals = {}
         for a in sky:
@@ -487,7 +563,7 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
             if (savgol_fit and f is not None and f.ok and not getattr(f, 'dimmed', False)
                     and not getattr(f, 'excluded', False) and math.hypot(f.x - cx, f.y - cy) <= radius):
                 cx, cy = f.x, f.y                        # centre from the fitted model
-            s, area, maxpx, hits = circle_stats(img, cx, cy, radius, calibration)
+            s, area, maxpx, hits = measure(img, cx, cy, info['psf_fwhm'])
             if background == 'sky':
                 bk, bs = sky_level, sky_std
             else:
@@ -509,19 +585,21 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
         names = SKY_COLUMNS if a.role == 'sky' else STAR_COLUMNS
         data = np.array([r[4][a.name] for r in rows], dtype=float).reshape(-1, len(names))
         cols[a.name] = {c: data[:, i] for i, c in enumerate(names)}
+    info_keys = list(rows[0][3]) if rows else []
+    psf = np.array([r[3]['psf_fwhm'] for r in rows], dtype=float)
     if target_drift and target is not None and rows:
         tc = cols[target.name]
         if savgol_fit:                       # offsets from the global solution, not the fit centres
             gx, gy = glob[target.name].T
             fitted = (tc['xc'] != gx) | (tc['yc'] != gy)
-            _apply_target_drift(reader, tc, target, radius, background, cols, sky, calibration,
-                                preprocess, lunar, cancel, global_xy=(gx, gy), keep=fitted)
+            _apply_target_drift(reader, tc, target, background, cols, sky, calibration,
+                                preprocess, lunar, cancel, measure, psf, global_xy=(gx, gy), keep=fitted)
         else:
-            _apply_target_drift(reader, tc, target, radius, background, cols,
-                                sky, calibration, preprocess, lunar, cancel)
-    info_keys = list(rows[0][3]) if rows else []
+            _apply_target_drift(reader, tc, target, background, cols,
+                                sky, calibration, preprocess, lunar, cancel, measure, psf)
     frame_info = {k: np.array([r[3][k] for r in rows], dtype=float) for k in info_keys}
-    frame_info['radius'] = np.full(len(rows), radius)
+    frame_info['radius'] = psf if photometry == 'optimal' else np.full(len(rows), radius)
+    frame_info['optimal'] = np.full(len(rows), float(photometry == 'optimal'))
     return LightCurves(cols, [r[1] for r in rows], [r[2] for r in rows], [None] * len(rows),
                        roles={a.name: a.role for a in apertures}, frame_info=frame_info,
                        source=str(getattr(reader, 'path', '')), metadata=dict(reader.metadata),
@@ -533,11 +611,13 @@ def _running_median(y, window):
     return np.array([np.median(y[max(0, i - h):i + h + 1]) for i in range(len(y))])
 
 
-def _apply_target_drift(reader, tc, target, radius, background, cols, sky, calibration,
-                        preprocess, lunar, cancel, window: int = 25, min_shift: float = 0.02,
+def _apply_target_drift(reader, tc, target, background, cols, sky, calibration,
+                        preprocess, lunar, cancel, measure, psf, window: int = 25, min_shift: float = 0.02,
                         global_xy=None, keep=None):
     """Move the target aperture by its own (smoothed, gap-interpolated) offset from the
     global solution and re-measure it. Updates the target's columns in place.
+
+    measure(img, cx, cy, fwhm): the photometry of the run; psf: its FWHM per row.
 
     global_xy: the global-solution centres when xc/yc are not (savgol_fit centres them on
     the fit); keep: rows left as measured (already on the fitted centre)."""
@@ -563,7 +643,7 @@ def _apply_target_drift(reader, tc, target, radius, background, cols, sky, calib
             continue
         img = preprocess(fr.image) if preprocess else fr.image
         cx, cy = gx[i] + ox[i], gy[i] + oy[i]
-        s, area, maxpx, hits = circle_stats(img, cx, cy, radius, calibration)
+        s, area, maxpx, hits = measure(img, cx, cy, psf[i])
         tc['maxpx'][i], tc['hit_defect'][i] = maxpx, hits
         if background == 'sky':
             bk = float(np.median([cols[a.name]['bkavg'][i] for a in sky]))

@@ -7,6 +7,12 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Global mode: Naylor optimal extraction (`analyze_global(photometry="optimal")`,
+  `[analysis] photometry`, `optimal_radius_fwhm`, `seeing_frames`; `globaltrack.optimal_stats`,
+  `pixel_gaussian`): pixels weighted by a circular Gaussian of the frame's seeing (median FWHM
+  of the reference stars, running median) at the tracked position, the same profile for all
+  stars; defect pixels get no weight. Per row `frame_info['psf_fwhm']`. Opt-in: on the owner's
+  recordings the 1.5 x FWHM circle stayed better (scintillation / correlated video noise).
 - Capture: per-sensor timing profiles for VEYE cameras (`timing.SensorTiming`): the measured
   IMX178 model, and an assumed (not yet measured) Sony Pregius global-shutter model for the
   IMX265M / IMX264M / IMX296M / IMX287M (exposure starts at the trigger, all rows at once,
@@ -51,6 +57,9 @@ uses [Semantic Versioning](https://semver.org/).
   aperture on the displayed frame, without moving apertures; shown in the zoom views and status.
 
 ### Changed
+- Viewer: the checkbox "SG fit" is now "Optimal" (photometry for the next run and Fit frame);
+  Fit frame and auto-centring use the standard peak fit. The `savgol_*` config keys are gone
+  (old private configs keep working); the SG functions stay in `globaltrack`.
 - Capture: VEYE GPS-trigger timing offset 0.33 → 0.51 ms (re-measured with a 1 ms LED flash, see
   CAPTURE.md); GPS stamps recorded before are about 0.18 ms early. The timepulse is set on the
   UTC grid explicitly; non-whole-Hz rates are no longer aligned by the GPS (TIM-TP instead).
