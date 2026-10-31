@@ -224,3 +224,18 @@ def test_local_solver_failure_and_nova_choice(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match='API key'):
         solve.solve_astrometry_net(np.ones((48, 64), np.float32), workdir=str(tmp_path / 'w'),
                                    solver='nova', log=lambda m: None)
+
+
+def test_astrometry_cfg_next_to_solve_field(tmp_path, monkeypatch):
+    """Homebrew (macOS): <prefix>/bin/solve-field reads <prefix>/etc/astrometry.cfg."""
+    from pystarlight.wcs import solve
+    (tmp_path / 'bin').mkdir()
+    (tmp_path / 'etc').mkdir()
+    exe = tmp_path / 'bin' / 'solve-field'
+    exe.write_text('#!/bin/sh\n')
+    exe.chmod(0o755)
+    monkeypatch.setenv('PATH', str(tmp_path / 'bin'))
+    monkeypatch.setattr(solve, 'ASTROMETRY_CFG', str(tmp_path / 'missing.cfg'))
+    (tmp_path / 'etc' / 'astrometry.cfg').write_text('add_path /x\n')
+    assert solve.astrometry_cfg() == str(tmp_path / 'etc' / 'astrometry.cfg')
+    assert solve.local_index_dirs() == ['/x']

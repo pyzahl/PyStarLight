@@ -510,3 +510,54 @@ def test_star_names_toggle(movie):
     assert texts() == ['ap1'] and v._names_button.label.get_text() == 'Names off'
     v.toggle_names()                                 # the button
     assert any('TYC 1-2-1' in t for t in texts())
+
+
+def test_result_plot_follows_role_and_colour_keys(movie):
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import to_hex
+    v = Viewer(str(movie))
+    (r0, c0, _), (r1, c1, _), (r2, c2, _) = STARS
+    for x, y, k in ((c0, r0, 't'), (c1, r1, 'r'), (c2, r2, 'r')):
+        click(v, x, y)
+        key(v, k, x, y)
+    v.run()
+    v._job.join(120)
+    v.poll()
+    fig = v._summary_fig
+
+    def raw():
+        return {ln.get_label(): to_hex(ln.get_color()) for ln in fig.axes[1].get_lines()}
+    assert set(raw()) == {'target', 'ref1', 'ref2'} and raw()['target'] == plot.TARGET_COLOR
+    key(v, 'Y', c1, r1)                                       # ref1 yellow, live
+    assert v._summary_fig is fig and raw()['ref1'] == plot.APERTURE_COLORS['yellow']
+    assert any('ref1 [Y]' in t.get_text() for t in v.patches if hasattr(t, 'get_text'))
+    ref1 = v._lc['ref1']['signal']
+    key(v, 't', c1, r1)                                       # ref1 becomes the target ...
+    assert v._summary_fig is fig and plt.fignum_exists(fig.number)
+    assert v._lc['target']['signal'] is ref1                  # its data went along with the name
+    assert abs(v.nearest(c1, r1).center[0] - c1) < 8 and v.nearest(c1, r1).name == 'target'
+    assert set(raw()) == {'target', 'ref2'}                   # ... the old target is no reference
+    key(v, 'r', c0, r0)                                       # and back in as a reference
+    assert set(raw()) == {'target', 'ref2', 'ref1'}
+
+
+def test_rename_in_a_text_box(movie):
+    v = Viewer(str(movie))
+    (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
+    click(v, c0, r0)
+    click(v, c1, r1)
+    key(v, 'n', c0, r0)
+    assert v._rename_ax.get_visible() and v._rename_box.text == 'ap1'
+    key(v, 't', c0, r0)                                # typing: no role, no frame step
+    key(v, 'right')
+    assert v.apertures[0].role == '' and v.index == 0
+    v._rename_box.set_val('ap2')                       # taken
+    assert 'already' in v.status.get_text() and v.apertures[0].name == 'ap1'
+    key(v, 'n', c0, r0)
+    v._rename_box.set_val('star7')                     # as Enter does
+    assert v.apertures[0].name == 'star7' and not v._rename_ax.get_visible()
+    key(v, 'n', c1, r1)
+    key(v, 'escape')                                   # cancelled
+    assert v.apertures[1].name == 'ap2' and not v._rename_ax.get_visible()
+    key(v, 't', c1, r1)                                # keys work again
+    assert v.apertures[1].role == 'target'

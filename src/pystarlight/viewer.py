@@ -10,8 +10,10 @@ Keys    left / right   previous / next frame      page up / down  -/+ 25 frames
         home / end     first / last frame
         t r c k        give the aperture under the mouse a role (defaults; set in the config):
                        t target, r reference, c check star, k sky (star-free)
-        Y R G W        PyMovie colours (shift; used when analysis.mode = "pymovie")
-        n              rename nearest aperture (in the terminal)
+        Y G W R        curve colour of the aperture in the result plot: yellow, green, grey; R =
+                       automatic (red is the target's). Shift keys. After a run the result plot
+                       follows role and colour keys live. analysis.mode = "pymovie": PyMovie's colours
+        n              rename nearest aperture (text box at the top: Enter applies, Esc cancels)
         1 / 2          show the aperture under the mouse in zoom view 1 / 2 (right side)
         a              run the analysis from this frame to the end
         s / l          save / load apertures (<movie>.apertures.json)
@@ -43,7 +45,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import PowerNorm
 from matplotlib.patches import Rectangle
-from matplotlib.widgets import Button, CheckButtons, RangeSlider, Slider
+from matplotlib.widgets import Button, CheckButtons, RangeSlider, Slider, TextBox
 
 from . import config as config_mod
 from . import plot
@@ -55,6 +57,7 @@ from .tracking import Aperture
 
 AP_FIELDS = ('name', 'x0', 'y0', 'size', 'color', 'thresh', 'default_mask_radius', 'role')
 PYMOVIE_KEYS = {'Y': 'yellow', 'R': 'red', 'G': 'green', 'W': 'white'}
+CURVE_COLORS = ('yellow', 'green', 'white')     # global mode: chosen curve colours (red = automatic)
 MOVIE_PATTERNS = '*.ravf *.ser *.adv *.aav *.avi *.mov *.fit *.fits *.fts'
 FITS_SUFFIXES = ('.fit', '.fits', '.fts')
 NAV_KEYS = ('left', 'right', 'pageup', 'pagedown', 'home', 'end', 'n', 'N', 'a', 's', 'l', 'p', 'i', 'u',
@@ -220,6 +223,7 @@ class Viewer:
         self._live_shown = 0.0
         self._live_frame = None
         self._lc = None               # last analysis result
+        self._summary_fig = None      # its result plot (updated live by role / colour keys)
         self._result = None
         self._error = None
 
@@ -255,14 +259,14 @@ class Viewer:
         self.gamma_slider = Slider(self.fig.add_axes([0.12, 0.152, 0.36, 0.022]), 'gamma', 0.2, 3.0,
                                    valinit=self.gamma, valfmt='%.2f')
         self.gamma_slider.on_changed(self._on_gamma)
-        self.aperture_size_text = self.fig.text(0.855, 0.56, f'box {self.size}px', va='center', fontsize=8)
-        self._size_minus = Button(self.fig.add_axes([0.912, 0.5425, 0.029, 0.035]), '-')
+        self.aperture_size_text = self.fig.text(0.855, 0.5925, f'box {self.size}px', va='center', fontsize=8)
+        self._size_minus = Button(self.fig.add_axes([0.912, 0.575, 0.029, 0.035]), '-')
         self._size_minus.on_clicked(lambda e: self.adjust_aperture_size(-2))
-        self._size_plus = Button(self.fig.add_axes([0.947, 0.5425, 0.029, 0.035]), '+')
+        self._size_plus = Button(self.fig.add_axes([0.947, 0.575, 0.029, 0.035]), '+')
         self._size_plus.on_clicked(lambda e: self.adjust_aperture_size(2))
-        self._center_all_button = Button(self.fig.add_axes([0.87, 0.505, 0.10, 0.03]), 'Center all')
+        self._center_all_button = Button(self.fig.add_axes([0.87, 0.537, 0.10, 0.03]), 'Center all')
         self._center_all_button.on_clicked(lambda e: self.center_all_apertures())
-        self._fit_frame_button = Button(self.fig.add_axes([0.87, 0.47, 0.10, 0.03]), 'Fit frame')
+        self._fit_frame_button = Button(self.fig.add_axes([0.87, 0.502, 0.10, 0.03]), 'Fit frame')
         self._fit_frame_button.on_clicked(lambda e: self.fit_frame())
         self._auto_button = Button(self.fig.add_axes([0.61, 0.172, 0.05, 0.036]), 'Auto')
         self._auto_button.on_clicked(lambda e: self.auto_levels())
@@ -303,11 +307,19 @@ class Viewer:
                 self._names_button = b
             x += width + gap
         self.fig.add_artist(self.cheat_sheet())
+        # rename (n): a text box at the top, shown while typing
+        self._rename_ax = self.fig.add_axes([0.66, 0.951, 0.18, 0.032])
+        self._rename_box = TextBox(self._rename_ax, 'new name ')
+        self._rename_box.on_submit(self._rename_submit)
+        self._rename_ax.set_visible(False)
+        self._rename_box.set_active(False)
+        self._renaming = None         # the aperture being renamed
 
         # two zoomed aperture views (keys 1 / 2 over an aperture), ~4-5x the main image
         self.zoom_names: list[Optional[str]] = ['target', 'ref1']
         self.zoom_axes, self.zoom_ims, self.zoom_marks = [], [], []
-        for k, (y, hgt) in enumerate(((0.25, 0.19), (0.025, 0.20))):   # room above for 'Fit frame'
+        # room above each view for its three-line title (name + star, star id, RA/Dec)
+        for k, (y, hgt) in enumerate(((0.25, 0.18), (0.015, 0.17))):
             zax = self.fig.add_axes([0.855, y, 0.13, hgt])
             zax.set_xticks([])
             zax.set_yticks([])
@@ -387,7 +399,6 @@ class Viewer:
 
         text_props = {'family': 'monospace', 'fontsize': 8, 'color': '0.25'}
         rows = [TextArea(line, textprops=text_props) for line in (
-            'KEYS',
             'click/r-click add/remove',
             'over an aperture:',
         )]
@@ -407,14 +418,13 @@ class Viewer:
             'u auto-center peak',
             'n rename  1 2 zoom view',
             '<- ->  1 frame  PgUp/Dn 25',
-            f'buttons 10 s ({self.jump} fr)',
             'a run  s/l save/load',
             'p plate-solve' + (' (offline)' if self.local_solver else ' (upload)'),
             'i identify  N names',
             'Esc stop solve/naming',
             'ctrl+o open movie',
             'f full screen  o zoom',
-            'Y R G W PyMovie colours',
+            'Y G W R curve colour',
         ))
         content = VPacker(children=rows, align='left', pad=0, sep=1)
         return AnchoredOffsetbox(loc='upper left', child=content, pad=0, borderpad=0, frameon=False,
@@ -636,7 +646,8 @@ class Viewer:
             self.patches.append(self.ax.add_patch(
                 Rectangle((a.x0 - 0.5, a.y0 - 0.5), a.size, a.size, fill=False, ec=col, lw=1)))
             st = getattr(self, 'ap_stars', {}).get(a.name)
-            label = a.name + (f'  {st.label()}' if self.show_names and st is not None and st.name else '')
+            label = a.name + (f' [{a.color[0].upper()}]' if a.role and a.color in CURVE_COLORS else '')
+            label += f'  {st.label()}' if self.show_names and st is not None and st.name else ''
             self.patches.append(self.ax.text(a.x0 + a.size + 2, a.y0, label, color=col,
                                              fontsize=8, va='top'))
         self.fig.canvas.draw_idle()
@@ -1022,30 +1033,100 @@ class Viewer:
             if r['max'] == 1:                       # move the single role (e.g. target) here
                 for b in holders:
                     b.role = ''
-                    b.name = self._free_name('ap')
+                    self._rename(b, self._free_name('ap'))
             else:
                 self.say(f'at most {r["max"]} {role} apertures')
                 return
         a.role = role
-        a.name = self._free_name(r['name'], numbered=r['max'] != 1)
+        self._rename(a, self._free_name(r['name'], numbered=r['max'] != 1))
         if role == 'sky':
             a.x0, a.y0 = self.place_sky(x, y)
         self.draw_apertures()
         self.update_zooms()
+        self.update_result()
 
     def set_color(self, x, y, color):
+        """Y G W R over an aperture. Global mode: the colour of its curve in the result plot
+        (red, the target's colour, means automatic). PyMovie mode: PyMovie's colours (yellow =
+        tracking, at most two; the first red/green is the target)."""
         a = self.nearest(x, y)
         if a is None:
             return
-        if color == 'yellow' and a.color != 'yellow':
+        pymovie = self.cfg['analysis'].get('mode') == 'pymovie'
+        if pymovie and color == 'yellow' and a.color != 'yellow':
             if sum(b.color == 'yellow' for b in self.apertures) >= 2:
                 self.say('at most two yellow (tracking) apertures')
                 return
         a.color = color
         a.primary_yellow = False
         self.draw_apertures()
+        self.update_result()
+
+    def start_rename(self, a):
+        """n: type the new name in the text box at the top; Enter applies, Esc cancels."""
+        self._renaming = None               # set_val submits: not a rename yet
+        self._rename_box.label.set_text(f'new name for {a.name} ')
+        self._rename_box.set_val(a.name)
+        self._rename_ax.set_visible(True)
+        self._rename_box.set_active(True)
+        self._rename_box.begin_typing()
+        self._rename_box.cursor_index = len(a.name)
+        self._rename_box._rendercursor()
+        self._renaming = a
+        self.say('rename: type the new name, Enter applies, Esc cancels')
+
+    def _close_rename(self):
+        self._renaming = None
+        self._rename_box.stop_typing()      # gives the keys back (submit is ignored now)
+        self._rename_box.set_active(False)
+        self._rename_ax.set_visible(False)
+        self.fig.canvas.draw_idle()
+
+    def _rename_submit(self, text):
+        a = self._renaming
+        if a is None:
+            return
+        self._close_rename()
+        new = text.strip()
+        if not new or new == a.name:
+            self.say('name unchanged')
+            return
+        if any(b.name == new for b in self.apertures if b is not a):
+            self.say(f'there is already an aperture {new}')
+            return
+        self._rename(a, new)
+        self.say(f'renamed to {new}')
+        self.draw_apertures()
+        self.update_zooms()
+        self.update_result()
+
+    def _rename(self, a, new: str):
+        """Rename an aperture; star name, zoom view and the last run's columns go along."""
+        old = a.name
+        if new == old:
+            return
+        a.name = new
+        for d in (self.ap_stars, self._track or {}):
+            if old in d:
+                d[new] = d.pop(old)
+        self.zoom_names = [new if z == old else z for z in self.zoom_names]
+        lc = self._lc
+        if lc is not None and old in lc.columns:
+            cols = {k: v for k, v in lc.columns.items() if k != new}     # a removed aperture's leftover
+            lc.columns = {new if k == old else k: v for k, v in cols.items()}
+            if old in lc.roles:
+                lc.roles[new] = lc.roles.pop(old)
+
+    def update_result(self):
+        """After a run: draw the result plot again with the current target, references and curve
+        colours (keys t r c k, Y G W R), and save it again. The CSV files stay as written by Run."""
+        if self._lc is None or self._job is not None:
+            return
+        self.show_result()
 
     def on_click(self, ev):
+        if self._renaming is not None:      # a click elsewhere ends the rename (the text box applies it)
+            return
         toolbar = getattr(self.fig.canvas, 'toolbar', None)
         if ev.inaxes is not self.ax or (toolbar is not None and toolbar.mode):
             return   # ignore clicks while zooming / panning
@@ -1061,6 +1142,10 @@ class Viewer:
 
     def on_key(self, ev):
         k = ev.key
+        if self._renaming is not None:      # the text box has the keys; Esc cancels
+            if k == 'escape':
+                self._close_rename()
+            return
         steps = {'right': 1, 'left': -1, 'pagedown': 25, 'pageup': -25}
         if k in steps:
             self.go(self.index + steps[k])
@@ -1077,13 +1162,7 @@ class Viewer:
         elif k == 'n' and ev.inaxes is self.ax:
             a = self.nearest(ev.xdata, ev.ydata)
             if a:
-                old = a.name
-                a.name = input(f'new name for {a.name}: ').strip() or a.name
-                self.zoom_names = [a.name if z == old else z for z in self.zoom_names]
-                if old in self.ap_stars:
-                    self.ap_stars[a.name] = self.ap_stars.pop(old)
-                self.draw_apertures()
-                self.update_zooms()
+                self.start_rename(a)
         elif k == 's':
             save_apertures(self.aperture_file, self.apertures, self.wcs, self.ap_stars)
             self.say(f'saved {self.aperture_file.name}')
@@ -1211,15 +1290,9 @@ class Viewer:
                        if 'xc' in lc[n]}
         self._lc = lc
         self.update_zooms()
-        target, refs = self._target_and_refs()
-        pc = self.cfg['plot']
-        with plot.style(**{'savefig.dpi': pc['dpi']}):
-            fig = plot.summary(lc, self.image, self.apertures, target, refs,
-                               window=self.cfg['analysis']['normalize_window'],
-                               bin_size=pc['bin_size'], title=self.path.stem)
-            plot.save(fig, str(self.path.with_name(self.path.stem + '-summary')), pc['formats'])
-        fig.show()
-        self.say(f'wrote {csv.name} and {self.path.stem}-summary ({", ".join(pc["formats"])})')
+        self.show_result()
+        self.say(f'wrote {csv.name} and {self.path.stem}-summary ({", ".join(self.cfg["plot"]["formats"])}); '
+                 'roles and Y G W R now update the plot')
         if self.cfg.get('output', {}).get('stack_image'):
             self.start_stack(lc)
 
@@ -1278,6 +1351,32 @@ class Viewer:
             self.say_job('stacked field: ' + ', '.join(names))
         else:
             self.say_job(self._stack_msg)
+
+    def show_result(self):
+        """The summary figure of the last run (drawn again in its window if that is still open)
+        and its saved files."""
+        lc = self._lc
+        target, refs = self._target_and_refs()
+        gone = [n for n in [target, *refs] if n not in lc.columns]
+        if gone:
+            self.say(f'not in the last run: {", ".join(gone)} (Run again to include them)')
+            return
+        colors = {a.name: plot.APERTURE_COLORS[a.color] for a in self.apertures if a.color in CURVE_COLORS}
+        fig = self._summary_fig
+        reuse = fig is not None and plt.fignum_exists(fig.number)
+        pc = self.cfg['plot']
+        with plot.style(**{'savefig.dpi': pc['dpi']}):
+            fig = plot.summary(lc, self.image, self.apertures, target, refs,
+                               window=self.cfg['analysis']['normalize_window'], bin_size=pc['bin_size'],
+                               title=self.path.stem, colors=colors, fig=fig if reuse else None)
+            plot.save(fig, str(self.path.with_name(self.path.stem + '-summary')), pc['formats'])
+        if reuse:
+            fig.canvas.draw_idle()
+        else:
+            with warnings.catch_warnings():    # non-GUI backends (tests) cannot show
+                warnings.simplefilter('ignore')
+                fig.show()
+        self._summary_fig = fig
 
     def _target_and_refs(self):
         norm = {n for n, r in self.roles.items() if r['normalize']}

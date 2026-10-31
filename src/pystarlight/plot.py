@@ -177,9 +177,14 @@ def _legend(ax, **kw):
 
 def summary(lc, image: np.ndarray, apertures: Sequence, target: str,
             references: Sequence[str] = (), window: int = 101, bin_size: int = 1,
-            title: Optional[str] = None, figsize=(7.0, 6.5)):
-    """Three panels: field with apertures, normalised target light curve, tracking drift."""
-    fig = plt.figure(figsize=figsize, constrained_layout=True)
+            title: Optional[str] = None, figsize=(7.0, 6.5), colors: Optional[dict] = None, fig=None):
+    """Three panels: field with apertures, normalised target light curve, tracking drift.
+    The target is red; colors: {reference name: colour}, the others from OTHER_COLORS.
+    fig: draw into this figure again (cleared) instead of a new one (the viewer's live update)."""
+    if fig is None:
+        fig = plt.figure(figsize=figsize, constrained_layout=True)
+    else:
+        fig.clear()
     gs = fig.add_gridspec(3, 2, height_ratios=[1.3, 1, 0.6], width_ratios=[1, 1.3])
     ax_img = fig.add_subplot(gs[0, 0])
     frame(ax_img, image, apertures)
@@ -187,8 +192,8 @@ def summary(lc, image: np.ndarray, apertures: Sequence, target: str,
     x = _time_axis(ax_raw, lc, seconds(lc))
     ax_raw.plot(x, lc[target]['signal'], lw=1.2, color=TARGET_COLOR, label=target, zorder=3)
     for k, n in enumerate(references):          # target first in the legend, drawn on top
-        ax_raw.plot(x, lc[n]['signal'], lw=0.6, color=OTHER_COLORS[k % len(OTHER_COLORS)], label=n,
-                    zorder=2)
+        c = (colors or {}).get(n) or OTHER_COLORS[k % len(OTHER_COLORS)]
+        ax_raw.plot(x, lc[n]['signal'], lw=0.6, color=c, label=n, zorder=2)
     ax_raw.set_ylabel('Signal (ADU)')
     _legend(ax_raw)
     ax_lc = fig.add_subplot(gs[1, :])

@@ -70,28 +70,96 @@ flat's exposure differs) to clip files. Each clip is averaged into a master fram
 median), cached in `~/.cache/pystarlight` and re-stacked only when the clip changes, then applied
 to every aperture box. Record them with the same gain and exposure as the observation.
 
+#### Optional: offline plate solving (local astrometry.net)
+
+With `solve-field` and index files installed, the viewer solves every recording offline as soon
+as it opens (a few seconds with the plate-scale hint); without them it uploads to
+nova.astrometry.net on `p`. `[astrometry] solver = "auto"` (default) picks local when it finds
+`solve-field` and at least one index file; `"local"` or `"nova"` force one.
+
+1. **Install the solver.** Debian / Ubuntu / Raspberry Pi OS:
+   `sudo apt-get install astrometry.net`. macOS (Homebrew): `brew install astrometry-net` (check
+   the name with `brew search astrometry`).
+2. **Install index files for your field size.** Each index set holds star quads of one size, and
+   the solver needs quads of about **¼ to 1× the field width** (it copes down to about 1/10). Work out the
+   field width: pixels × plate scale (″/px = 206.265 × pixel µm / focal mm). Debian packages:
+
+   | package | quad size | fields of about | size |
+   |---|---|---|---|
+   | `astrometry-data-2mass-00` / `-01` | 2′–2.8′ / 2.8′–4′ | **2′–16′: small fields** (long focal length, small ROI) | 14 / 9 GB |
+   | `astrometry-data-2mass-02` / `-03` | 4′–5.6′ / 5.6′–8′ | 4′–30′ | |
+   | `astrometry-data-2mass-04` … `-07` | 8′–30′ | 8′–2° | |
+   | `astrometry-data-2mass-08-19` | 30′–2000′ | 30′ and wider (camera lenses) | |
+
+   Small fields need the small-quad sets (the large downloads); with only wide-quad sets they never solve. Example:
+   ASTRID (IMX296, 1456 px) at 343 mm, 2.07″/px: 50′ × 38′ field, quads 12′–50′:
+   `-05` … `-07` and `-08-19`. A 1280 px ROI at 2000 mm (0.35″/px, 7.5′): `-00` … `-03`. The packages fetch the files
+   at install time into `/usr/share/astrometry` (listed by `add_path` in `/etc/astrometry.cfg`).
+
+   Elsewhere (macOS): download the `index-42xx*.fits` files you need from
+   <http://data.astrometry.net/4200/> into a folder and add `add_path /that/folder` to the
+   `astrometry.cfg` next to `solve-field` (Homebrew: `$(brew --prefix)/etc/astrometry.cfg`).
+   PyStarLight reads that file to see which index files exist.
+3. **Give the scale.** Set the site's `focal_mm` and `sensor_mm` (or `[astrometry]
+   scale_arcsec`): with the scale known a solve takes seconds, blind it can take minutes.
+   Small fields show few stars: more stacked frames help (`[astrometry] stack_frames`, default
+   16), and an ADV file's own RA/Dec is used as the field centre.
+4. **Check:** the viewer's key list says `p plate-solve (offline)` when the local solver is found.
+
+Measured times and the owner's Raspberry Pi setup: [CAPTURE.md, Offline plate
+solving](CAPTURE.md#offline-plate-solving-local-astrometrynet).
+
+#### Optional: star names offline (PySyzygos' Gaia catalogue)
+
+Stars are named from **PySyzygos'** local Gaia DR3 catalogue when it is on the machine: Tycho-2
+or UCAC4 name (as Occult and OWC show them), Gaia DR3 id and G magnitude, offline and in about a
+millisecond per star. Without it, names come from SIMBAD (online).
+
+- It needs a **format-2** catalogue with its **`xref`** part (the UCAC4 / Tycho-2 / Hipparcos
+  numbers): in PySyzygos, `pysyzygos catalog fetch --dir gaia_dr3_g16 --groups quality,xref`
+  (ready-made G ≤ 16 from Zenodo: 78 M stars, core 2.4 GB), or `pysyzygos catalog add xref` /
+  `pysyzygos catalog xref` for an existing one. Without `xref` the stars get their Gaia DR3 id.
+- **Where it is found:** `[catalog] gaia_dir` in the config, else `$PYSYZYGOS_CATALOG`, else a
+  format-2 catalogue folder next to the `sites.py` that `pysyzygos_sites` points to (one with
+  `xref` first). Older-format folders (`gaia_dr3_g18` from before PySyzygos 1.3) are skipped.
+- It is read with numpy only (memory-mapped); no PySyzygos code is imported or run.
+- Gaia leaves out the very brightest stars (G < ~3) and the catalogue stops at its G limit:
+  those come from astrometry.net's names (Deneb, ...) or SIMBAD.
+
 ### 2. Mark the stars
 
 ```bash
 uv run pystarlight-view path/to/recording.ravf
+uv run pystarlight-view                      # no file: a file dialog
 ```
 
-Press `p` to **plate-solve**: a median stack of the first frames goes to nova.astrometry.net
-in the background (private upload; result cached as `<movie>.wcs.fit`, loaded automatically
-when the movie is opened again; nothing is uploaded without `p`). Burnt-in timestamp rows are
+**Open** (or ctrl+o) loads another recording in a new window with the same settings; the
+apertures of the current one are not saved on the way (`s` saves them).
+
+The field is **plate-solved** from a median stack of the first frames. With a local
+astrometry.net (below) this happens offline as soon as the movie opens; otherwise press `p` to
+upload it to nova.astrometry.net in the background (private upload; nothing is uploaded without
+`p`). The result is cached as `<movie>.wcs.fit` and loaded when the movie is opened again.
+**Esc** stops a running solve or star identification (e.g. without network); **Run** never waits
+for star names. Burnt-in timestamp rows are
 blanked first; an ADV file's own RA/Dec is used as the field-centre hint, and the site's
 plate-scale hint only for recordings made at the site.
 With a local astrometry.net (`sudo apt-get install astrometry.net` plus the
 `astrometry-data-2mass-*` index files matching your field, see
 [Offline plate solving](CAPTURE.md#offline-plate-solving-local-astrometrynet)) the solve runs
-offline instead.
+offline instead (see [offline plate solving](#optional-offline-plate-solving-local-astrometrynet)).
 The cursor readout then shows RA/Dec, an N/E compass is drawn, and the line below the status
 gives the plate scale, the direction of north and whether the image is mirrored.
 
-The **three brightest stars** are then found in the stack and named: astrometry.net's name
-where it has one (it only knows bright-star and HD names), otherwise the nearest SIMBAD object,
-with its HD/HIP/TYC/Gaia DR3 IDs and V magnitude (needs the `catalog` extra and network). They
-are labelled on the image and cached as `<movie>.stars.json`. The stars in your **target,
+The **three brightest stars** are then found in the stack (outside a burnt-in timestamp) and
+named: a proper name from astrometry.net where it has one (Deneb, ...); otherwise, **offline**,
+from PySyzygos' local Gaia DR3 catalogue when it is on the machine: the **Tycho-2 or UCAC4 name**
+(as Occult and OWC show it), Gaia DR3 id and G magnitude, proper motion applied. The catalogue
+folder is found next to the `sites.py` that `pysyzygos_sites` points to (a format-2 catalogue,
+preferably with its `xref` part), or set `[catalog] gaia_dir`. Stars the local catalogue does not
+have (brighter than Gaia's limit, fainter than its G limit) are looked up in SIMBAD online (HD,
+HIP, TYC, Gaia DR3 IDs, V; needs the `catalog` extra; a lookup gives up after 20 s and SIMBAD is
+then skipped for 5 minutes). They are labelled on the image and cached as `<movie>.stars.json`. The stars in your **target,
 reference and check apertures** are identified the same way (automatically after the solve and
 before each run, `i` to repeat): position refined by a peak fit on the solved frames (the field
 drift since then is measured and removed), then name, IDs and V. The results are saved in
@@ -118,18 +186,21 @@ All keys:
 | click / right-click | add (snaps onto the star) / remove aperture |
 | `t` `r` `c` `k` | role of the aperture under the mouse (see above; changeable in the config) |
 | `1` / `2` | show the aperture under the mouse in zoom view 1 / 2 (right side, ~4-5×, own contrast). While analysing they update live (~2×/s) with the frame being processed; afterwards they follow the tracked position. Each shows the signal and, in global mode, the peak fit (FWHM, SNR, `+` = fitted centre, circle = photometry aperture) |
-| `n` | rename the aperture under the mouse (typed in the terminal) |
+| `n` | rename the aperture under the mouse: a text box at the top, **Enter** applies, **Esc** cancels |
+| `Y` `G` `W` `R` (shift) | **curve colour** of the aperture under the mouse in the result plot: yellow, green, grey; `R` back to automatic (red is the target's). The aperture label shows it, e.g. `ref2 [Y]`. With `mode = "pymovie"` these are PyMovie's colours (yellow = tracking, at most two; the first red/green is the target) |
 | ← / → | previous / next frame |
 | PgUp / PgDn | −/+ 25 frames |
 | Home / End, buttons `\|<` `>\|` | first / last frame |
 | buttons `-10 s` / `+10 s` | jump 10 s (frame count from the timestamps) |
 | `a`, button **Run** | analyse from the current frame to the end |
 | `s` / `l` | save / load apertures (`<movie>.apertures.json`) |
-| `p` | plate-solve (uploads to astrometry.net) |
-| `i` | identify the stars in the apertures (astrometry.net names, SIMBAD) |
+| `p` | plate-solve again (offline with a local astrometry.net, else uploads to nova.astrometry.net) |
+| `i` | identify the stars in the apertures (local catalogue, else SIMBAD); stars without a name are tried again automatically |
+| `N`, button **Names** | star names on the image on / off (default `[display] star_names`) |
+| Esc | stop plate solving / star identification |
+| ctrl+o, button **Open** | open another recording (file dialog) |
 | `f` | full screen (matplotlib) |
 | `o` | zoom rectangle (matplotlib toolbar); click the house icon to reset |
-| `Y` `R` `G` `W` (shift) | PyMovie colours yellow / red / green / white, for `mode = "pymovie"` |
 | sliders **levels** / **gamma**, **Auto**, **per frame** | display only: drag the levels for manual black/white points (kept across frames); **Auto** returns to the automatic (zscale) stretch; **per frame** re-stretches every frame; gamma < 1 brightens faint stars. Defaults in `[display]` of the config |
 
 ### 3. Run
@@ -152,10 +223,16 @@ Written next to the movie:
 |---|---|
 | `<movie>.csv` | light curves in **PyMovie's CSV layout: open it directly in PyOTE** |
 | `<movie>.pystarlight.csv` | every column (fit positions, FWHM, peak SNR, tracking shift/rotation, ...) |
-| `<movie>-summary.pdf/.png` | field with apertures, raw signals, normalised light curve vs UTC, drift |
+| `<movie>-summary.pdf/.png` | field with apertures, raw signals (target red and on top), normalised light curve vs UTC, drift |
 | `<movie>.apertures.json` | the apertures, reloaded next time |
 | `<movie>.wcs.fit` | the plate solution |
 | `<movie>-stack.fits/.svg/.png/.pdf` | **stacked field**: all analysed frames registered with the tracked shift + rotation and averaged (`[output] stack_image`); FITS with the plate solution, figure with apertures, names, catalogue IDs, compass and 1′ scale bar. In the SVG the image and the annotation layers (`apertures`, `aperture-labels`, `stars`, `compass`) are separate groups |
+
+**Trying other choices:** after a run the result plot stays linked to the viewer. Changing a
+role (`t` `r` `c` `k`) or a curve colour (`Y` `G` `W` `R`) over an aperture redraws it at once,
+from the data already measured: e.g. make another star the target, drop a doubtful reference
+(give it `c`), or colour the references apart. The summary files are saved again each time; the
+CSV files keep what Run wrote (press Run again for those).
 
 ### 4. Open in PyOTE
 

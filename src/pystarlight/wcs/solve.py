@@ -206,16 +206,25 @@ def solve_astrometry_net(image: np.ndarray, api_key: Optional[str] = None, workd
 
 # ---------------------------------------------------------------------------- local astrometry.net
 
-ASTROMETRY_CFG = '/etc/astrometry.cfg'
+ASTROMETRY_CFG = '/etc/astrometry.cfg'      # Debian / Raspberry Pi OS; see astrometry_cfg()
 # solve-field output lines worth passing on to the log
 _LOCAL_LOG = ('solved with index', 'Field center', 'Field size', 'Field rotation', 'Did not solve',
               'pixel scale')
 
 
+def astrometry_cfg() -> str:
+    """The astrometry.net config solve-field reads: <prefix>/etc/astrometry.cfg next to the
+    solve-field found (Homebrew: /opt/homebrew or /usr/local), else /etc/astrometry.cfg."""
+    exe = shutil.which('solve-field')
+    candidates = [str(Path(exe).resolve().parent.parent / 'etc' / 'astrometry.cfg')] if exe else []
+    candidates += [ASTROMETRY_CFG, '/opt/homebrew/etc/astrometry.cfg', '/usr/local/etc/astrometry.cfg']
+    return next((c for c in candidates if os.path.isfile(c)), ASTROMETRY_CFG)
+
+
 def local_index_dirs(cfg_path: Optional[str] = None) -> list[str]:
     """Directories searched for index files ('add_path' lines of the astrometry.net config)."""
     try:
-        with open(cfg_path or ASTROMETRY_CFG) as f:
+        with open(cfg_path or astrometry_cfg()) as f:
             return [ln.split()[1] for ln in f if ln.split()[:1] == ['add_path'] and len(ln.split()) > 1]
     except OSError:
         return []
