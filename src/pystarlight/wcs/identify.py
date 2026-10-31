@@ -25,6 +25,14 @@ SIMBAD_RETRY_S = 300.0      # after a failed query SIMBAD is skipped this long (
 _simbad_down_until = 0.0
 
 
+def radec_text(ra: float, dec: float) -> str:
+    """'hh:mm:ss.s +dd:mm:ss.s', or '' without a position (astropy warns on NaN)."""
+    if not (math.isfinite(ra) and math.isfinite(dec)):
+        return ''
+    from astropy.coordinates import SkyCoord
+    return SkyCoord(ra, dec, unit='deg').to_string('hmsdms', precision=1, sep=':')
+
+
 @dataclass
 class FieldStar:
     x: float
@@ -42,8 +50,7 @@ class FieldStar:
 
     @property
     def radec(self) -> str:
-        from astropy.coordinates import SkyCoord
-        return SkyCoord(self.ra, self.dec, unit='deg').to_string('hmsdms', precision=1, sep=':')
+        return radec_text(self.ra, self.dec)
 
     def label(self) -> str:
         v = f' V={self.vmag:.2f}' if self.vmag is not None else ''

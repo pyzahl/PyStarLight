@@ -796,12 +796,8 @@ class Viewer:
 
     def format_coord(self, x, y):
         s = f'x={x:.1f} y={y:.1f}'
-        if self.wcs is not None:
-            from astropy.coordinates import SkyCoord
-            ra, dec = (float(v) for v in self.wcs.all_pix2world(x, y, 0))
-            c = SkyCoord(ra, dec, unit='deg')
-            s += '   ' + c.to_string('hmsdms', precision=1, sep=':')
-        return s
+        sky = self.sky_of(x, y)
+        return f'{s}   {sky}' if sky else s
 
     def draw_stars(self):
         """Label the identified brightest stars on the image."""
@@ -820,9 +816,8 @@ class Viewer:
     def sky_of(self, x, y) -> str:
         if self.wcs is None:
             return ''
-        from astropy.coordinates import SkyCoord
-        ra, dec = (float(v) for v in self.wcs.all_pix2world(x, y, 0))
-        return SkyCoord(ra, dec, unit='deg').to_string('hmsdms', precision=1, sep=':')
+        from .wcs.identify import radec_text
+        return radec_text(*(float(v) for v in self.wcs.all_pix2world(x, y, 0)))
 
     def draw_compass(self):
         """N and E arrows in the upper-left corner, from the plate solution."""

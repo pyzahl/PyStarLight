@@ -86,7 +86,7 @@ def sky_lines(lc, wcs, stars=None, frame: float = 7.5) -> tuple[list[str], dict]
         if not (math.isfinite(x) and math.isfinite(y)):
             continue
         ra, dec = (float(v) for v in wcs.all_pix2world(x, y, 0))
-        txt = SkyCoord(ra, dec, unit='deg').to_string('hmsdms', precision=1, sep=':')
+        txt = radec_text(ra, dec)
         near = [st for st in stars or [] if math.hypot(st.x - x, st.y - y) < max(5.0, 2 * st.fwhm)]
         if near:
             txt += f'  ({near[0].label()})'
