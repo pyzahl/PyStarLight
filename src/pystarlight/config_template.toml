@@ -31,7 +31,8 @@ url = "https://nova.astrometry.net/api/"
 # covering quads of ~10-100 % of the field width (apt: astrometry-data-2mass-*)
 solver = "auto"
 timeout_s = 900
-auto_solve = true          # load the cached solution (<movie>.wcs.fit) on open; new solves only with key p
+auto_solve = true          # on open: load the cached solution (<movie>.wcs.fit), or solve offline
+                           # (local solver); uploads to nova only with key p
 stack_frames = 16          # frames median-stacked for the solve (more stars, no cosmic rays)
 scale_err_pct = 20         # tolerance on the plate scale computed from the site's optics
 scale_hint = true          # send a plate-scale hint (site optics, or scale_arcsec); false = blind solve

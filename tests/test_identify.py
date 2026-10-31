@@ -131,3 +131,18 @@ def test_viewer_identifies_apertures_through_drift(tmp_path, monkeypatch):
     from pystarlight.viewer import save_apertures
     save_apertures(v.aperture_file, v.apertures, v.wcs, v.ap_stars)
     assert set(load_aperture_stars(v.aperture_file)) == {'target', 'ref1'}
+
+
+def test_simbad_failure_pauses_lookups(monkeypatch):
+    import pystarlight.wcs.identify as ident
+    calls = []
+
+    def down(ra, dec, radius_arcsec=10.0):
+        calls.append(ra)
+        raise ConnectionError('no network')
+    monkeypatch.setattr(ident, 'simbad_lookup', down)
+    logs = []
+    stars = [ident.name_star(ident.FieldStar(x, 50.0, 1.0, 3.0, False), tan_wcs(), [], log=logs.append)
+             for x in (40.0, 60.0, 80.0)]
+    assert len(calls) == 1 and all(not s.name for s in stars)       # one timeout, not three
+    assert 'SIMBAD skipped' in logs[-1]

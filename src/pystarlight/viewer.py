@@ -15,8 +15,10 @@ Keys    left / right   previous / next frame      page up / down  -/+ 25 frames
         1 / 2          show the aperture under the mouse in zoom view 1 / 2 (right side)
         a              run the analysis from this frame to the end
         s / l          save / load apertures (<movie>.apertures.json)
-        p              plate-solve again (otherwise automatic on opening, cached as <movie>.wcs.fit)
+        p              plate-solve again (cached as <movie>.wcs.fit; automatic on opening when cached
+                       or solved offline with solve-field, uploads to nova.astrometry.net only on p)
         i              identify the stars in the apertures (astrometry.net names, SIMBAD); also automatic
+        Esc            stop plate solving / star identification (Run then skips the names)
         ctrl+o         open another movie (also the Open button; a FITS frame opens its folder)
 Toolbar zoom/pan works as usual.
 
@@ -28,6 +30,7 @@ Settings come from the config file (pystarlight-config init / show).
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import time
@@ -199,6 +202,8 @@ class Viewer:
         self.cfg = cfg or config_mod.load()
         self.roles = self.cfg['apertures']['roles']
         self.role_keys = {r['key']: name for name, r in self.roles.items()}
+        from .wcs.solve import uses_local_solver
+        self.local_solver = uses_local_solver(self.cfg['astrometry'])   # offline plate solving
         free_matplotlib_keys(set(self.role_keys) | set(PYMOVIE_KEYS) | set(NAV_KEYS))
         self.path = Path(path)
         self.movie = open_movie(str(path))
@@ -319,6 +324,7 @@ class Viewer:
         self._star_marks = []
         self._ident_job = None
         self._ident_msg = ''
+        self._skip_ident = False      # Esc: no more catalogue lookups until p / i
         self.show(0)
         keys = ' '.join(f'{r["key"]}:{name}' for name, r in self.roles.items())
         self.say(f'click: add aperture, right click: remove, roles {keys}, a: run, s/l: save/load')
@@ -327,11 +333,14 @@ class Viewer:
         self.ax.format_coord = self.format_coord
         self._solve_job = None
         self._solve_msg = ''
-        # never submits on its own: a cached solution is loaded, a new solve needs key p
+        # never uploads on its own: a cached solution is loaded, an offline solver (solve-field +
+        # index files) solves right away, an upload to nova.astrometry.net needs key p
         from .wcs.solve import solution_path
-        if solution_path(self.path).exists():
-            if self.cfg['astrometry'].get('auto_solve'):
-                self.start_solve()
+        if self.cfg['astrometry'].get('auto_solve') and (solution_path(self.path).exists()
+                                                         or self.local_solver):
+            self.start_solve()
+        elif self.local_solver:
+            self.say_job('no plate solution yet: press p to solve (offline, solve-field)')
         else:
             self.say_job('no plate solution yet: press p to solve (uploads the stacked frames to '
                          'nova.astrometry.net, private)')
@@ -393,8 +402,9 @@ class Viewer:
             '<- ->  1 frame  PgUp/Dn 25',
             f'buttons 10 s ({self.jump} fr)',
             'a run  s/l save/load',
-            'p plate-solve (upload)',
+            'p plate-solve' + (' (offline)' if self.local_solver else ' (upload)'),
             'i identify (SIMBAD)',
+            'Esc stop solve / names',
             'ctrl+o open movie',
             'f full screen  o zoom',
             'levels/gamma: sliders',
@@ -629,19 +639,27 @@ class Viewer:
 
     def start_solve(self, force: bool = False):
         from .wcs.solve import solve_movie
+        self._skip_ident = False
+        cancel = self._solve_cancel = threading.Event()
 
-        def work():
+        def work():       # after Esc (stop_jobs) the results of this thread are dropped
             try:
-                self.wcs, self.orient = solve_movie(str(self.path), self.cfg, log=self._solve_log,
-                                                    force=force)
+                wcs, orient = solve_movie(str(self.path), self.cfg, log=self._solve_log,
+                                          force=force, cancel=cancel)
+                if cancel.is_set():
+                    return
+                self.wcs, self.orient = wcs, orient
                 from .wcs.solve import field_stars
                 try:
-                    self.stars = field_stars(str(self.path), self.wcs, self.cfg, n=3,
-                                             log=self._solve_log, force=force)
+                    stars = field_stars(str(self.path), self.wcs, self.cfg, n=3,
+                                        log=self._solve_log, force=force)
+                    if not cancel.is_set():
+                        self.stars = stars
                 except Exception as e:      # names are a bonus
                     self._solve_msg = f'star identification failed: {e}'
             except Exception as e:
-                self._solve_msg = f'plate solve failed: {e}'
+                if not cancel.is_set():
+                    self._solve_msg = f'plate solve failed: {e}'
         self._solve_t0 = time.monotonic()
         self._solve_job = threading.Thread(target=work, daemon=True)
         self._solve_job.start()
@@ -655,21 +673,44 @@ class Viewer:
     def _poll_solve(self):
         if self._solve_job is not None and self._solve_job.is_alive():
             elapsed = time.monotonic() - self._solve_t0
-            self.say_job(f'plate solving ({elapsed:.0f} s): {self._solve_msg}')
+            stage = 'naming stars' if self.orient is not None else 'plate solving'
+            self.say_job(f'{stage} ({elapsed:.0f} s, Esc stops): {self._solve_msg}')
             return
         self._solve_timer.stop()
         self._solve_job = None
         if self.orient is None:
             self.say_job(self._solve_msg)
             return
+        self._show_solution()
+        if self._unidentified() and not self._skip_ident:
+            self.start_identify()
+
+    def _show_solution(self, note: str = ''):
         self.draw_compass()
         self.draw_stars()
         names = '; '.join(s.label() for s in self.stars)
         self.say_job('plate solved: ' + self.orient.describe()
-                       + (f'   |   brightest: {names}' if names else ''))
+                     + (f'   |   brightest: {names}' if names else '') + note)
         self.update_zooms()
-        if self._unidentified():
-            self.start_identify()
+
+    def stop_jobs(self):
+        """Esc: stop plate solving and star identification (SIMBAD can hang without network).
+        A solution already found is kept; Run then goes ahead without looking up names."""
+        self._skip_ident = True
+        solving, naming = self._solve_job is not None, self._ident_job is not None
+        if solving:                 # the thread may sit in a network request: it is left behind
+            self._solve_cancel.set()
+            self._solve_timer.stop()
+            self._solve_job = None
+        if naming:
+            self._ident_timer.stop()
+            self._ident_job = None
+        if solving and self.orient is not None:
+            self._show_solution('   |   star names skipped')
+        elif solving:
+            self.say_job('plate solve stopped (p: solve again)')
+        elif naming:
+            self.say_job('identification stopped (i: try again)')
 
     # ---------------------------------------------------------------- catalogue identification
 
@@ -1025,6 +1066,7 @@ class Viewer:
                 self.zoom_names[int(k) - 1] = a.name
                 self.update_zooms()
         elif k == 'i':
+            self._skip_ident = False
             missing = [a for a in self._star_apertures() if a.name not in self.ap_stars]
             if not missing:             # everything known: look all of them up again
                 self.ap_stars.clear()
@@ -1033,6 +1075,8 @@ class Viewer:
             self.start_solve(force=True)
         elif k in ('ctrl+o', 'cmd+o'):
             self.open_other()
+        elif k == 'escape':
+            self.stop_jobs()
 
     # ---------------------------------------------------------------- open another movie
 
@@ -1070,7 +1114,9 @@ class Viewer:
             return
         aps = [Aperture(**{k: getattr(a, k) for k in AP_FIELDS}) for a in self.apertures]
         start = self.index
-        missing = self._unidentified()
+        # names are a bonus: not while a solve / identification still runs, or after Esc
+        busy = self._solve_job is not None or self._ident_job is not None
+        missing = [] if busy or self._skip_ident else self._unidentified()
         self._result = self._error = None
 
         def work():
@@ -1219,6 +1265,9 @@ def main(argv=None):
     p.add_argument('--calibration', help='.npz from Calibration.save() (default: [calibration] in config)')
     a = p.parse_args(argv)
     cfg = config_mod.load(a.config)
+    # Qt backends on Wayland: silence a harmless focus warning (see capture/qt.py)
+    os.environ['QT_LOGGING_RULES'] = ';'.join(
+        r for r in (os.environ.get('QT_LOGGING_RULES'), 'qt.qpa.wayland.textinput=false') if r)
     movie = a.movie or ask_movie_path()
     if not movie:
         return 1

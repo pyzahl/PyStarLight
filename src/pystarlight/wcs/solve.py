@@ -134,8 +134,7 @@ def solve_astrometry_net(image: np.ndarray, api_key: Optional[str] = None, workd
     from ..config import load
     acfg = load()['astrometry']
     timeout = timeout or acfg['timeout_s']
-    solver = solver or acfg.get('solver', 'auto')
-    if solver == 'local' or (solver == 'auto' and local_solver_available()):
+    if uses_local_solver({**acfg, 'solver': solver or acfg.get('solver', 'auto')}):
         path = solve_local(image, workdir, frame_num, timeout, log, cancel, scale_arcsec,
                            scale_err_pct, center, radius_deg, dest, downsample)
         return (path, None) if return_job else path
@@ -230,6 +229,12 @@ def local_index_files(cfg_path: Optional[str] = None) -> list[str]:
 def local_solver_available() -> bool:
     """solve-field installed and at least one index file found."""
     return shutil.which('solve-field') is not None and bool(local_index_files())
+
+
+def uses_local_solver(acfg: dict) -> bool:
+    """[astrometry] solver is 'local', or 'auto' with solve-field and index files installed."""
+    solver = acfg.get('solver', 'auto')
+    return solver == 'local' or (solver == 'auto' and local_solver_available())
 
 
 def solve_local(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0,
@@ -463,7 +468,8 @@ def solve_movie(movie_path: str, cfg: Optional[dict] = None, site_name: Optional
     path, job = solve_astrometry_net(img, workdir=str(dest.parent / '.wcs-work'), frame_num=start, log=log,
                                      cancel=cancel, scale_arcsec=scale, center=center,
                                      scale_err_pct=float(acfg['scale_err_pct']), dest=str(dest),
-                                     return_job=True)
+                                     return_job=True, solver=acfg.get('solver', 'auto'),
+                                     api_key=acfg.get('api_key') or None, timeout=acfg.get('timeout_s'))
     w = load_wcs(path)
     o = orientation(w, shape)
     import json
@@ -504,5 +510,6 @@ def field_stars(movie_path: str, wcs, cfg: Optional[dict] = None, n: int = 3,
         img = stack_frames(mv, start, int(cfg['astrometry']['stack_frames']))
     log('identifying the brightest stars')
     stars = identify(img, wcs, n=n, job_id=meta.get('job_id'), log=log)
-    save_stars(str(cache), stars)
+    if any(s.name for s in stars):          # no names at all (offline): look them up next time
+        save_stars(str(cache), stars)
     return stars

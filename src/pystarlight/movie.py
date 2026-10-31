@@ -253,9 +253,8 @@ def _import_adv2_file():
     except OSError as e:
         raise ImportError(
             'Adv2 is installed but its native library (libAdvCore) does not load on this '
-            'machine; Adv2 1.2.0 has no arm64 build for macOS. Run under an x86_64 Python '
-            '(Rosetta) or replace Adv2/Adv2DLLlibs/libAdvCore.dylib with an arm64 build of '
-            f'ADVlib. Original error: {e}') from e
+            'machine; Adv2 1.2.0 has no arm64 build for macOS. Build it from source: '
+            f'sh scripts/build_advcore.sh (in the PyStarLight folder). Original error: {e}') from e
     return adv_file
 
 

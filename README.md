@@ -51,6 +51,10 @@ uv sync --extra all                      # or: pip install -e ".[all]"  (plot, R
 uv run pystarlight-config init --here    # private config: ./pystarlight.toml (git-ignored)
 ```
 
+Apple Silicon Macs: the `Adv2` wheel (ADV/AAV reader) ships an Intel-only native library. Build
+it once with `sh scripts/build_advcore.sh` (needs git and the Xcode command line tools); re-run
+after Adv2 is reinstalled.
+
 Edit the config: your name, email, your nova.astrometry.net API key, and your observing
 site(s). Sites use the same keys as PySyzygos (formerly PyOccult): point `pysyzygos_sites` at your PySyzygos
 `sites.py` (read as data, never executed) and/or add `[sites.<id>]` tables with `focal_mm`

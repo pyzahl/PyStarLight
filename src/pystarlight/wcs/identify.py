@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 
@@ -19,6 +20,9 @@ import numpy as np
 from scipy.ndimage import maximum_filter, median_filter
 
 PREFERRED_IDS = ('HD', 'HIP', 'TYC', 'Gaia DR3', 'UCAC4', '2MASS')
+SIMBAD_TIMEOUT_S = 20.0     # per query (astroquery's default is 18 minutes)
+SIMBAD_RETRY_S = 300.0      # after a failed query SIMBAD is skipped this long (offline in the field)
+_simbad_down_until = 0.0
 
 
 @dataclass
@@ -92,7 +96,7 @@ def simbad_lookup(ra: float, dec: float, radius_arcsec: float = 10.0) -> Optiona
     import astropy.units as u
     from astropy.coordinates import SkyCoord
     from astroquery.simbad import Simbad
-    s = Simbad()
+    s = Simbad(timeout=SIMBAD_TIMEOUT_S)
     s.add_votable_fields('V', 'ids')
     c = SkyCoord(ra, dec, unit='deg')
     r = s.query_region(c, radius=radius_arcsec * u.arcsec)
@@ -125,6 +129,7 @@ def name_star(s: FieldStar, wcs, annotations: list, use_simbad: bool = True,
               match_px: float = 5.0, log=print, radius_arcsec: float = 10.0) -> FieldStar:
     """Fill RA/Dec, and name/IDs/V from astrometry.net annotations and SIMBAD (searched within
     radius_arcsec; wide fields need more than the default, see simbad_radius)."""
+    global _simbad_down_until
     s.ra, s.dec = (float(v) for v in wcs.all_pix2world(s.x, s.y, 0))
     near = [a for a in annotations if a['x'] is not None and a['names']
             and math.hypot(a['x'] - s.x, a['y'] - s.y) <= match_px]
@@ -134,11 +139,14 @@ def name_star(s: FieldStar, wcs, annotations: list, use_simbad: bool = True,
         s.ids = {'astrometry.net': ' / '.join(n for b in near for n in b['names'])}
         s.vmag = next((b['vmag'] for b in near if b.get('vmag')), None)
         s.source = 'astrometry.net'
-    if use_simbad:
+    if use_simbad and time.monotonic() < _simbad_down_until:
+        log('SIMBAD skipped (unreachable a moment ago)')
+    elif use_simbad:
         try:
             hit = simbad_lookup(s.ra, s.dec, radius_arcsec)
         except Exception as e:
             log(f'SIMBAD lookup failed: {e}')
+            _simbad_down_until = time.monotonic() + SIMBAD_RETRY_S
             hit = None
         if hit:
             s.ids = {**hit['ids'], **s.ids}

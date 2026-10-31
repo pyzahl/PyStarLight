@@ -5,6 +5,12 @@ $PYSTARLIGHT_QT = pyside6 / pyqt5 picks one; default: PySide6 if installed, else
 """
 import os
 
+# Qt's Wayland text input logs "Trying to disable ... but 0x0 is focused" on focus changes (a Qt
+# bug, harmless). Rules are read when Qt starts; anything the user set in QT_LOGGING_RULES stays.
+QUIET_QT_RULE = "qt.qpa.wayland.textinput=false"
+os.environ["QT_LOGGING_RULES"] = ";".join(
+    r for r in (os.environ.get("QT_LOGGING_RULES"), QUIET_QT_RULE) if r)
+
 _want = os.environ.get("PYSTARLIGHT_QT", "").lower()
 
 if _want != "pyqt5":

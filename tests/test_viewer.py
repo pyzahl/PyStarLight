@@ -8,9 +8,17 @@ import pytest
 mpl = pytest.importorskip('matplotlib')
 mpl.use('Agg')
 
+from pystarlight import config as config_mod  # noqa: E402
 from pystarlight import plot  # noqa: E402
 from pystarlight.viewer import Viewer, load_apertures, save_apertures  # noqa: E402
 from test_pipeline import STARS, render, truth, write_ser  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def no_local_solver(monkeypatch):
+    """solve-field may be installed here: the viewer would plate-solve every test movie."""
+    from pystarlight.wcs import solve
+    monkeypatch.setattr(solve, 'local_solver_available', lambda: False)
 
 
 @pytest.fixture
@@ -389,3 +397,51 @@ def test_file_dialog_result(monkeypatch, tmp_path):
     monkeypatch.setattr(subprocess, 'run', fake('\n'))
     assert viewer.ask_movie_path() is None                            # cancelled
     assert viewer.main([]) == 1                                       # no movie, dialog cancelled
+
+
+def test_offline_solver_solves_on_open_upload_only_on_key(movie, monkeypatch):
+    from pystarlight.wcs import solve
+    started = []
+    monkeypatch.setattr(Viewer, 'start_solve', lambda self, force=False: started.append(force))
+    v = Viewer(str(movie))                                   # no local solver: never uploads on its own
+    assert not v.local_solver and started == [] and 'nova' in v.job_status.get_text()
+    monkeypatch.setattr(solve, 'local_solver_available', lambda: True)
+    v = Viewer(str(movie))
+    assert v.local_solver and started == [False]             # offline: solved right away
+    cfg = config_mod.load()
+    cfg['astrometry']['solver'] = 'nova'                     # forced nova: wait for key p
+    v = Viewer(str(movie), cfg)
+    assert not v.local_solver and started == [False]
+
+
+def test_esc_stops_hanging_star_names_and_run_goes_ahead(movie, monkeypatch):
+    import threading
+
+    from astropy.wcs import WCS
+
+    from pystarlight.wcs import orientation, solve
+    w = WCS(naxis=2)
+    w.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    w.wcs.crval, w.wcs.crpix = (310.36, 45.1), (160, 120)
+    w.wcs.cd = [[0, 2.07 / 3600], [2.07 / 3600, 0]]
+    hang = threading.Event()
+    monkeypatch.setattr(solve, 'solve_movie', lambda path, cfg, **kw: (w, orientation(w, (240, 320))))
+    monkeypatch.setattr(solve, 'field_stars', lambda *a, **kw: hang.wait(30) or [])   # SIMBAD hangs
+    v = Viewer(str(movie))
+    (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
+    click(v, c0, r0)
+    click(v, c1, r1)
+    key(v, 't', c0, r0)
+    key(v, 'r', c1, r1)
+    v.start_solve()
+    while v.orient is None:
+        v._solve_job.join(0.05)
+    v._poll_solve()
+    assert 'Esc stops' in v.job_status.get_text()
+    key(v, 'escape')
+    assert v._solve_job is None and v.wcs is w and 'names skipped' in v.job_status.get_text()
+    assert v._unidentified() and v.run() is None
+    v._job.join(60)                                    # no identification: straight to the analysis
+    v.poll()
+    assert v._lc is not None and v.ap_stars == {}
+    hang.set()
