@@ -2,8 +2,10 @@
 
 astrometry.net's annotations name only stars from its bright-star and HD lists (typically one
 to three per field). So the brightest stars are found in the image itself, given the
-astrometry.net name when there is one within a few pixels, and otherwise looked up in SIMBAD
-(CDS) by position: main identifier, the usual catalogue IDs (HD, HIP, TYC, Gaia DR3) and V.
+astrometry.net name when there is one within a few pixels (proper names are kept), and looked up
+by position: offline in PySyzygos' local Gaia DR3 catalogue when there is one (localcat: the
+Tycho-2 or UCAC4 name, as Occult and OWC show it, and G), else online in SIMBAD (CDS): main
+identifier, the usual catalogue IDs (HD, HIP, TYC, Gaia DR3) and V.
 
 SIMBAD lookups need network access and astroquery (pip install "starlight-photometry[catalog]").
 """
@@ -45,35 +47,46 @@ class FieldStar:
     saturated: bool
     ra: float = float('nan')         # deg, from the plate solution
     dec: float = float('nan')
-    name: str = ''                   # best name: astrometry.net name, else SIMBAD main id
+    name: str = ''                   # best name: proper name, else TYC / UCAC4 (local), else SIMBAD's
     ids: dict = field(default_factory=dict)   # catalogue -> id, e.g. {'HD': 'HD 197161'}
     vmag: Optional[float] = None
-    source: str = ''                 # 'astrometry.net' | 'SIMBAD' | ''
+    source: str = ''                 # 'astrometry.net' | 'Gaia DR3 (local)' | 'SIMBAD' | ''
     sep_arcsec: Optional[float] = None
+    gmag: Optional[float] = None     # Gaia G (local catalogue)
 
     @property
     def radec(self) -> str:
         return radec_text(self.ra, self.dec)
 
     def label(self) -> str:
-        v = f' V={self.vmag:.2f}' if self.vmag is not None else ''
-        return f'{self.name or "?"}{v}'
+        return f'{self.name or "?"}{self.mag_text()}'
+
+    def mag_text(self) -> str:
+        if self.vmag is not None:
+            return f' V={self.vmag:.2f}'
+        return f' G={self.gmag:.2f}' if self.gmag is not None else ''
 
 
 def brightest_stars(image: np.ndarray, n: int = 3, min_sep: int = 15, border: int = 10,
-                    saturation: Optional[float] = None) -> list[FieldStar]:
-    """The n brightest stars by fitted flux (not by peak, so wide and saturated stars rank right)."""
+                    saturation: Optional[float] = None,
+                    stamp: Optional[tuple[int, int]] = None) -> list[FieldStar]:
+    """The n brightest stars by fitted flux (not by peak, so wide and saturated stars rank right).
+    stamp: (top, bottom) rows of a burnt-in timestamp (VTI, ADV) never searched; default:
+    detected (solve.stamp_rows), else its saturated digits would be the "brightest stars"."""
     from ..globaltrack import fit_peak
+    from .solve import stamp_rows
     img = np.asarray(image, dtype=np.float64)
+    top, bottom = stamp if stamp is not None else stamp_rows(img)
     sm = median_filter(img, 3)
     bg = np.median(sm)
     noise = 1.4826 * np.median(np.abs(sm - bg)) or 1.0
     peaks = (sm == maximum_filter(sm, 2 * min_sep + 1)) & (sm > bg + 8 * noise)
-    peaks[:border, :] = peaks[-border:, :] = False
+    peaks[:top + border, :] = peaks[img.shape[0] - bottom - border:, :] = False
     peaks[:, :border] = peaks[:, -border:] = False
     ys, xs = np.nonzero(peaks)
     order = np.argsort(sm[ys, xs])[::-1][:max(20 * n, 200)]   # bright stars' halos give many peaks
-    sat = saturation if saturation is not None else (img.max() * 0.98)
+    sky = img[top:img.shape[0] - bottom]
+    sat = saturation if saturation is not None else (sky.max() * 0.98)
     stars = []
     for j in order:
         f = fit_peak(img, xs[j], ys[j], 3, half=10)
@@ -155,11 +168,25 @@ def _annotations(job_id, annotations, log):
     return annotations or []
 
 
+def _catalog(catalog):
+    """'auto': PySyzygos' local catalogue from the config (or None); else as given."""
+    if catalog != 'auto':
+        return catalog
+    try:
+        from .localcat import local_catalog
+        return local_catalog()
+    except Exception as e:          # an unreadable catalogue: names from SIMBAD instead
+        print(f'local star catalogue unavailable: {e}')
+        return None
+
+
 def name_star(s: FieldStar, wcs, annotations: list, use_simbad: bool = True,
-              match_px: float = 5.0, log=print, radius_arcsec: float = 10.0) -> FieldStar:
-    """Fill RA/Dec, and name/IDs/V from astrometry.net annotations and SIMBAD (searched within
-    radius_arcsec; wide fields need more than the default, see simbad_radius)."""
+              match_px: float = 5.0, log=print, radius_arcsec: float = 10.0, catalog=None) -> FieldStar:
+    """Fill RA/Dec, and name/IDs/magnitude from astrometry.net annotations, the local catalogue
+    (a localcat.LocalGaia; 'auto' finds it) and, if that has no star there, SIMBAD (searched
+    within radius_arcsec; wide fields need more than the default, see simbad_radius)."""
     global _simbad_down_until
+    catalog = _catalog(catalog)
     s.ra, s.dec = (float(v) for v in wcs.all_pix2world(s.x, s.y, 0))
     near = [a for a in annotations if a['x'] is not None and a['names']
             and math.hypot(a['x'] - s.x, a['y'] - s.y) <= match_px]
@@ -169,6 +196,13 @@ def name_star(s: FieldStar, wcs, annotations: list, use_simbad: bool = True,
         s.ids = {'astrometry.net': ' / '.join(n for b in near for n in b['names'])}
         s.vmag = next((b['vmag'] for b in near if b.get('vmag')), None)
         s.source = 'astrometry.net'
+    local = catalog.lookup(s.ra, s.dec, radius_arcsec) if catalog is not None else None
+    if local:
+        s.ids = {**local['ids'], **s.ids}
+        s.gmag, s.sep_arcsec = local['gmag'], local['sep_arcsec']
+        if not (near and near[0]['type'] == 'bright'):      # a proper name stays, HD / BD give way
+            s.name, s.source = local['name'], 'Gaia DR3 (local)'
+        return s
     if use_simbad and time.monotonic() < _simbad_down_until:
         log('SIMBAD skipped (unreachable a moment ago)')
     elif use_simbad:
@@ -198,17 +232,18 @@ def simbad_radius(wcs) -> float:
 
 def identify(image: np.ndarray, wcs, n: int = 3, job_id: Optional[int] = None,
              annotations: Optional[list] = None, use_simbad: bool = True,
-             match_px: float = 5.0, log=print) -> list[FieldStar]:
+             match_px: float = 5.0, log=print, catalog='auto') -> list[FieldStar]:
     """Brightest n stars of the (stacked) image with RA/Dec, and names where available."""
     stars = brightest_stars(image, n)
     ann = _annotations(job_id, annotations, log)
     radius = simbad_radius(wcs)
-    return [name_star(s, wcs, ann, use_simbad, match_px, log, radius) for s in stars]
+    catalog = _catalog(catalog)
+    return [name_star(s, wcs, ann, use_simbad, match_px, log, radius, catalog) for s in stars]
 
 
 def identify_positions(image: np.ndarray, wcs, positions: dict, search: float = 8.0,
                        job_id: Optional[int] = None, annotations: Optional[list] = None,
-                       use_simbad: bool = True, log=print) -> dict:
+                       use_simbad: bool = True, log=print, catalog='auto') -> dict:
     """Name the stars in given apertures: {name: (x, y)} -> {name: FieldStar}.
 
     Each position is refined with a peak fit on `image` (use the stack that was plate-solved,
@@ -217,6 +252,7 @@ def identify_positions(image: np.ndarray, wcs, positions: dict, search: float = 
     from ..globaltrack import fit_peak
     img = np.asarray(image, dtype=np.float64)
     ann = _annotations(job_id, annotations, log)
+    catalog = _catalog(catalog)
     sat = img.max() * 0.98
     out = {}
     for name, (x, y) in positions.items():
@@ -227,7 +263,8 @@ def identify_positions(image: np.ndarray, wcs, positions: dict, search: float = 
         else:
             st = FieldStar(float(x), float(y), float('nan'), float('nan'), False)
         log(f'looking up {name}')
-        out[name] = name_star(st, wcs, ann, use_simbad, log=log, radius_arcsec=simbad_radius(wcs))
+        out[name] = name_star(st, wcs, ann, use_simbad, log=log, radius_arcsec=simbad_radius(wcs),
+                              catalog=catalog)
     return out
 
 

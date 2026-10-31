@@ -18,6 +18,7 @@ Keys    left / right   previous / next frame      page up / down  -/+ 25 frames
         p              plate-solve again (cached as <movie>.wcs.fit; automatic on opening when cached
                        or solved offline with solve-field, uploads to nova.astrometry.net only on p)
         i              identify the stars in the apertures (astrometry.net names, SIMBAD); also automatic
+        N              star names on the image on / off (also the Names button)
         Esc            stop plate solving / star identification (Run then skips the names)
         ctrl+o         open another movie (also the Open button; a FITS frame opens its folder)
 Toolbar zoom/pan works as usual.
@@ -56,7 +57,8 @@ AP_FIELDS = ('name', 'x0', 'y0', 'size', 'color', 'thresh', 'default_mask_radius
 PYMOVIE_KEYS = {'Y': 'yellow', 'R': 'red', 'G': 'green', 'W': 'white'}
 MOVIE_PATTERNS = '*.ravf *.ser *.adv *.aav *.avi *.mov *.fit *.fits *.fts'
 FITS_SUFFIXES = ('.fit', '.fits', '.fts')
-NAV_KEYS = ('left', 'right', 'pageup', 'pagedown', 'home', 'end', 'n', 'a', 's', 'l', 'p', 'i', 'u', '1', '2')
+NAV_KEYS = ('left', 'right', 'pageup', 'pagedown', 'home', 'end', 'n', 'N', 'a', 's', 'l', 'p', 'i', 'u',
+            '1', '2')
 
 
 def free_matplotlib_keys(keys):
@@ -238,6 +240,7 @@ class Viewer:
         self.gamma = float(dc.get('gamma', 1.0))
         self.levels_auto = not isinstance(dc.get('levels', 'auto'), list)
         self.per_frame = bool(dc.get('per_frame', False))
+        self.show_names = bool(dc.get('star_names', True))     # star names on the image (N)
         self.lo, self.hi = (plot.zscale(frame.image) if self.levels_auto
                             else (float(dc['levels'][0]), float(dc['levels'][1])))
         self.im = self.ax.imshow(frame.image, cmap='gray', interpolation='nearest',
@@ -284,7 +287,8 @@ class Viewer:
                    ('>', lambda e: self.go(self.index + 1), 0.065),
                    ('+10 s', lambda e: self.go(self.index + self.jump), 0.065),
                    ('>|', lambda e: self.go(self.n - 1), 0.065),
-                   ('Run', lambda e: self.run(), 0.065)]
+                   ('Run', lambda e: self.run(), 0.065),
+                   (self._names_label(), lambda e: self.toggle_names(), 0.085)]
         gap = 0.01
         row_width = sum(width for _, _, width in buttons) + gap * (len(buttons) - 1)
         x = self.ax.get_position().x0 + (self.ax.get_position().width - row_width) / 2
@@ -295,6 +299,8 @@ class Viewer:
             self._buttons.append(b)
             if label == 'Play':
                 self._play_button = b
+            elif label == self._names_label():
+                self._names_button = b
             x += width + gap
         self.fig.add_artist(self.cheat_sheet())
 
@@ -404,11 +410,10 @@ class Viewer:
             f'buttons 10 s ({self.jump} fr)',
             'a run  s/l save/load',
             'p plate-solve' + (' (offline)' if self.local_solver else ' (upload)'),
-            'i identify (SIMBAD)',
-            'Esc stop solve / names',
+            'i identify  N names',
+            'Esc stop solve/naming',
             'ctrl+o open movie',
             'f full screen  o zoom',
-            'levels/gamma: sliders',
             'Y R G W PyMovie colours',
         ))
         content = VPacker(children=rows, align='left', pad=0, sep=1)
@@ -609,7 +614,7 @@ class Viewer:
                     (st for st in self.stars if np.hypot(st.x - cx, st.y - cy) < max(5, 2 * st.fwhm)), None)
                 title = f'{k + 1}: {a.name}'
                 if st is not None:
-                    title += (f'  V={st.vmag:.2f}' if st.vmag is not None else '') + f'\n{st.name or "?"}'
+                    title += f' {st.mag_text()}' + f'\n{st.name or "?"}'
                 # the solution belongs to the solved (first) frames: for an identified star show its
                 # fixed position; otherwise the aperture centre is only right before the field drifts
                 title += '\n' + (st.radec if st is not None and np.isfinite(st.ra) else self.sky_of(cx, cy))
@@ -631,7 +636,7 @@ class Viewer:
             self.patches.append(self.ax.add_patch(
                 Rectangle((a.x0 - 0.5, a.y0 - 0.5), a.size, a.size, fill=False, ec=col, lw=1)))
             st = getattr(self, 'ap_stars', {}).get(a.name)
-            label = a.name + (f'  {st.label()}' if st is not None and st.name else '')
+            label = a.name + (f'  {st.label()}' if self.show_names and st is not None and st.name else '')
             self.patches.append(self.ax.text(a.x0 + a.size + 2, a.y0, label, color=col,
                                              fontsize=8, va='top'))
         self.fig.canvas.draw_idle()
@@ -722,7 +727,9 @@ class Viewer:
     def _unidentified(self):
         if self.wcs is None:
             return []
-        return [a for a in self._star_apertures() if a.name not in self.ap_stars]
+        # a lookup that found nothing (e.g. offline) is saved without a name: try those again
+        return [a for a in self._star_apertures()
+                if a.name not in self.ap_stars or not self.ap_stars[a.name].name]
 
     def identify_apertures(self, apertures=None, frame=None, log=None):
         """Name the stars in the apertures (blocking; called from worker threads).
@@ -805,6 +812,9 @@ class Viewer:
         for m in self._star_marks:
             m.remove()
         self._star_marks = []
+        if not self.show_names:
+            self.fig.canvas.draw_idle()
+            return
         named = [self.ap_stars[a.name] for a in self.apertures if a.name in self.ap_stars]
         for k, st in enumerate(self.stars, 1):
             if any(np.hypot(n.x - st.x, n.y - st.y) < 3 for n in named):
@@ -813,6 +823,16 @@ class Viewer:
                 f'{k}: {st.label()}', (st.x, st.y), xytext=(12, 12), textcoords='offset points',
                 color='orange', fontsize=8, arrowprops=dict(arrowstyle='-', color='orange', lw=0.6)))
         self.fig.canvas.draw_idle()
+
+    def _names_label(self) -> str:
+        return 'Names on' if self.show_names else 'Names off'
+
+    def toggle_names(self):
+        """Names button / N: star names on the image on or off (aperture names stay)."""
+        self.show_names = not self.show_names
+        self._names_button.label.set_text(self._names_label())
+        self.draw_apertures()
+        self.draw_stars()
 
     def sky_of(self, x, y) -> str:
         if self.wcs is None:
@@ -1080,8 +1100,7 @@ class Viewer:
                 self.update_zooms()
         elif k == 'i':
             self._skip_ident = False
-            missing = [a for a in self._star_apertures() if a.name not in self.ap_stars]
-            if not missing:             # everything known: look all of them up again
+            if not self._unidentified():    # everything named: look all of them up again
                 self.ap_stars.clear()
             self.start_identify()
         elif k == 'p' and self._solve_job is None:
@@ -1090,6 +1109,8 @@ class Viewer:
             self.open_other()
         elif k == 'escape':
             self.stop_jobs()
+        elif k == 'N':
+            self.toggle_names()
 
     # ---------------------------------------------------------------- open another movie
 

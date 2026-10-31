@@ -36,6 +36,16 @@ def test_brightest_by_flux_and_halo_merged():
     assert stars[0].saturated and not stars[1].saturated
 
 
+def test_burnt_in_timestamp_is_not_a_star():
+    img = field([(300, 150, 9000, 1.5), (80, 60, 5000, 1.5), (200, 250, 3000, 1.5)])
+    h = img.shape[0]
+    img[h - 17:, :] = 0                                  # VTI / ADV stamp: black band, saturated digits
+    for x in range(20, img.shape[1] - 20, 30):
+        img[h - 14:h - 3, x:x + 2] = 65520
+    stars = brightest_stars(img, 3)
+    assert [(round(s.x), round(s.y)) for s in stars] == [(300, 150), (80, 60), (200, 250)]
+
+
 def test_names_from_annotations_without_network():
     img = field([(100, 100, 9000, 1.5), (250, 200, 5000, 1.5)])
     ann = [{'names': ['HD 1234'], 'x': 250.4, 'y': 199.7, 'type': 'hd', 'vmag': None},

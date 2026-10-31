@@ -475,3 +475,38 @@ def test_new_apertures_match_loaded_box_size_after_resizing(movie):
     v = Viewer(str(movie))
     assert v.size == 23 and [a.size for a in v.apertures] == [23, 23, 23]
     assert np.allclose(v.apertures[-1].center, centre) and 'was different' in v.status.get_text()
+
+
+def test_failed_lookups_are_tried_again(movie):
+    from pystarlight.wcs.identify import FieldStar
+    v = Viewer(str(movie))
+    (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
+    click(v, c0, r0)
+    click(v, c1, r1)
+    key(v, 't', c0, r0)
+    key(v, 'r', c1, r1)
+    v.wcs = object()                                   # solved
+    t, r = v.apertures
+    v.ap_stars = {t.name: FieldStar(c0, r0, 1, 3, False),                       # saved offline: no name
+                  r.name: FieldStar(c1, r1, 1, 3, False, name='TYC 1-2-1')}
+    assert [a.name for a in v._unidentified()] == [t.name]
+
+
+def test_star_names_toggle(movie):
+    from pystarlight.wcs.identify import FieldStar
+    v = Viewer(str(movie))
+    (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
+    click(v, c0, r0)
+    v.ap_stars = {v.apertures[0].name: FieldStar(c0, r0, 1, 3, False, name='TYC 1-2-1', gmag=9.5)}
+    v.stars = [FieldStar(c1, r1, 1, 3, False, name='UCAC4 600-000001')]
+
+    def texts():
+        v.draw_apertures()
+        v.draw_stars()
+        return [t.get_text() for t in v.patches + v._star_marks if hasattr(t, 'get_text')]
+    assert any('TYC 1-2-1' in t for t in texts()) and any('UCAC4' in t for t in texts())
+    assert v._names_button.label.get_text() == 'Names on'
+    key(v, 'N')
+    assert texts() == ['ap1'] and v._names_button.label.get_text() == 'Names off'
+    v.toggle_names()                                 # the button
+    assert any('TYC 1-2-1' in t for t in texts())

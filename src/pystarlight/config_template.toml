@@ -137,6 +137,13 @@ threshold = 99999          # 99999 = always the default circular mask
 levels = "auto"            # "auto" (zscale stretch) or [black, white] in counts, e.g. [3700, 4600]
 per_frame = false          # recompute auto levels on every frame (clouds, changing sky)
 gamma = 1.0                # display gamma: < 1 brightens faint stars, > 1 darkens the background
+star_names = true          # star names (catalogue identification) on the image; N or the Names button
+
+[catalog]
+# Star names offline: PySyzygos' local Gaia DR3 catalogue (format 2; with its xref part the
+# Tycho-2 / UCAC4 names). Empty: $PYSYZYGOS_CATALOG, else found next to pysyzygos_sites.
+# SIMBAD (online) is asked only for stars the local catalogue does not have.
+gaia_dir = ""
 
 [output]
 # Stacked field image after each run: all analysed frames shifted/rotated back by the tracking
