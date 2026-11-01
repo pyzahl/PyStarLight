@@ -165,7 +165,8 @@ class LocalGaia:
                epoch: Optional[float] = None) -> Optional[dict]:
         """The star at a measured position: nearest of those within 2 mag of the brightest in
         the radius (a measured centre near a bright star is that star, not a faint neighbour).
-        {'name': TYC, else UCAC4, else Gaia DR3, 'ids', 'gmag', 'sep_arcsec'} or None."""
+        {'name': TYC, else UCAC4, else Gaia DR3, 'ids', 'gmag', 'sep_arcsec', 'ra', 'dec'} or None
+        (ra, dec: the star at `epoch`)."""
         stars = [s for s in self.cone(ra, dec, radius_arcsec, epoch) if s['g'] is not None]
         if not stars:
             return None
@@ -179,4 +180,5 @@ class LocalGaia:
         if s['hip']:
             ids['HIP'] = f"HIP {s['hip']}"
         name = ids.get('TYC') or ids.get('UCAC4') or ids['Gaia DR3']
-        return {'name': name, 'ids': ids, 'gmag': s['g'], 'sep_arcsec': s['sep_arcsec']}
+        return {'name': name, 'ids': ids, 'gmag': s['g'], 'sep_arcsec': s['sep_arcsec'], 'ra': s['ra'],
+                'dec': s['dec']}

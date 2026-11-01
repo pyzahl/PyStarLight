@@ -78,6 +78,9 @@ def test_viewer_workflow(movie):
     assert 'wrote' in v.status.get_text(), v.status.get_text()
     assert movie.with_suffix('.csv').exists()
     assert movie.with_name('shake-summary.pdf').exists()
+    assert movie.with_name('shake-summary-mag.pdf').exists()          # the same in magnitudes
+    assert v._summary_mag_fig.axes[1].get_ylabel() == '\u0394mag to the references'   # no catalogue
+    assert v._summary_mag_fig.axes[1].yaxis_inverted()
     assert 'PyMovie' in movie.with_suffix('.csv').read_text().splitlines()[0]            # for PyOTE
     assert 'roles: target=target' in movie.with_suffix('.pystarlight.csv').read_text().splitlines()[0]
     key(v, 'right')                              # zoom now follows the tracked position
@@ -107,6 +110,14 @@ def test_plot_panels(movie):
     for ax in (raw, curve, drift):                  # legends top left, opaque
         leg = ax.get_legend()
         assert leg._loc == 2 and leg.get_frame().get_alpha() == 1.0
+    from pystarlight import normalize as nz
+    mags, ok = nz.magnitudes({n: lc[n]['signal'] for n in ('t', 'r')}, ['r'], {'r': 10.0}, window=9)
+    with plot.style():
+        fig = plot.summary(lc, img, aps, 't', ['r'], window=9, bin_size=4, mags=mags, mag_label='G')
+    raw, curve = fig.axes[1], fig.axes[2]
+    assert ok and len(fig.axes) == 4 and raw.get_ylabel() == curve.get_ylabel() == 'G'
+    assert raw.yaxis_inverted() and curve.yaxis_inverted()          # fainter is down
+    assert np.allclose(raw.get_lines()[0].get_ydata(), mags['t'], equal_nan=True)
 
 
 def test_viewer_shows_ra_dec(movie, tmp_path):
@@ -550,3 +561,44 @@ def test_rename_in_a_text_box(movie):
     assert v.apertures[1].name == 'ap2' and not v._rename_ax.get_visible()
     key(v, 't', c1, r1)                                # keys work again
     assert v.apertures[1].role == 'target'
+
+
+def test_astrometry_summary_flags_an_aperture_off_its_star(movie):
+    from pystarlight.wcs.reduce import ApertureCheck, Reduction
+    v = Viewer(str(movie))
+    (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
+    click(v, c0, r0)
+    click(v, c1, r1)
+    key(v, 't', c0, r0)
+    key(v, 'r', c1, r1)
+    t, r = v.apertures
+    assert v.astrometry_summary() == ''                 # no local catalogue: nothing reduced
+    v.reduction = Reduction(1, False, 0, 0, 0, 0, 1, [], [], [], [], 0.5, 0.4, 2026.8)
+    v.ap_checks = {t.name: ApertureCheck(t.name, c0, r0, 0, 0, 0.5, 0.4, 'TYC 1-2-1', 9.0, 0.1, -0.2),
+                   r.name: ApertureCheck(r.name, c1, r1, 0, 0, 0.5, 0.4, 'TYC 1-2-2', 9.5, 3.0, 2.0)}
+    s = v.astrometry_summary()
+    assert s.startswith('Gaia O-C 0.50"/0.40"')
+    assert f'{t.name} 0.22"' in s and 'OFF' not in s.split(';')[1]
+    assert f'{r.name} 3.61"' in s and s.endswith('OFF - check the star')
+
+
+def test_labels_show_the_frame_magnitudes(movie):
+    from pystarlight.wcs.reduce import ApertureCheck, FrameMags, MagScale
+    v = Viewer(str(movie))
+    (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
+    click(v, c0, r0)
+    click(v, c1, r1)
+    key(v, 't', c0, r0)
+    key(v, 'r', c1, r1)
+    t, r = v.apertures
+    v.frame_mags = FrameMags(v.index, MagScale(20.0, 0.2, 12, 4.0, 2.0), {
+        t.name: ApertureCheck(t.name, c0, r0, 0, 0, 0.5, 0.5, 'TYC 1-2-1', 10.0, mag=10.9, mag_err=0.05,
+                              mag_sigma=0.2),
+        r.name: ApertureCheck(r.name, c1, r1, 0, 0, 0.5, 0.5, 'TYC 1-2-2', 9.0, mag=None, mag_sigma=0.2)})
+    v.draw_apertures()
+    labels = [p.get_text() for p in v.patches if hasattr(p, 'get_text')]
+    assert any(s.startswith(t.name) and 'm=10.90±0.05 (+0.90, 4.4σ)' in s for s in labels)
+    assert any(s.startswith(r.name) and s.endswith('m=- (no flux)') for s in labels)
+    assert 'zero point 20.00, scatter 0.20 (12 Gaia stars)' in v.frame_mag_summary()
+    v.index += 1                                     # another frame: not measured yet, no stale values
+    assert v.frame_mag_text(t.name) == '' and v.frame_mag_summary() == ''

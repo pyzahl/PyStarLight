@@ -168,6 +168,31 @@ for those stars, the name. Both CSVs carry the pixel → RA/Dec mapping (scale, 
 mirroring, CRVAL/CRPIX/CD), the named stars, and every aperture's RA/Dec; `apertures.json` keeps
 RA/Dec too.
 
+**Gaia astrometry check** (with the local catalogue): along with the identification the frame
+shown (`i` repeats it on the current frame; the plate solution is moved by the measured drift) is
+reduced against Gaia DR3 in the manner of PRAIA (Assafin et al.): the measured stars are
+paired with Gaia (proper motions to the observation date), a tangent-plane polynomial (4
+constants up to 3rd order, as the star count allows) relates them, and outliers are dropped one by
+one. All matched stars and the apertures are then **measured** (circle of 2 x the median FWHM,
+background from an annulus) and put on the Gaia G scale (zero point from the median of G minus
+instrumental, outliers clipped). The line below the status then reads e.g. `frame 200: Gaia O-C
+0.63"/0.61" (25 stars), mag scatter 0.25 (24); target 0.84" (0.9 sigma) mag 10.06+-0.06 (G 9.89,
++0.17 = 0.7 sigma of 0.25)`: the residuals of the reference stars, how far the target sits from
+its Gaia star, its magnitude, and its difference from G in units of the field's scatter.
+**On every frame you step to** (not while playing) all those stars and apertures are measured
+again where they are now (field drift by phase correlation; the tracked centres after a run), with
+a new zero point (clouds): the aperture labels show `m=` next to the catalogue `G=`, the target's
+with error, difference from G and sigma, e.g. `m=13.45±0.08 (+0.75, 2.1σ)`, so it follows a
+fading star down (`m=- (no flux)` when nothing is left); the line below the status gives the
+frame's zero point and scatter. That
+scatter (~0.2 mag on the owner's camera) is mostly colour: the catalogue has G only and the
+sensor's band is not Gaia's, so it is no measure of the photometric precision. An
+aperture more than 3 sigma off is flagged `OFF - check the star` (a wrong star, a blend or a close
+companion). Everything (model, coefficients, each star's O-C, the apertures' RA/Dec with errors)
+is saved as `<movie>.astrometry.json`; from the command line:
+`python -m pystarlight.wcs.reduce MOVIE`. On the owner's ASTRID recording the Gaia fit cut the
+residuals from 0.85" (astrometry.net's WCS) to 0.5" (a quarter pixel) and removed a 0.4" offset.
+
 Each frame's UTC timestamp is shown on top; a short key list is on the right. Left-click a star
 to add an aperture (it snaps onto the star), right-click removes one. With the mouse over an
 aperture, press a key to give it a role:
@@ -232,6 +257,8 @@ Written next to the movie:
 | `<movie>.csv` | light curves in **PyMovie's CSV layout: open it directly in PyOTE** |
 | `<movie>.pystarlight.csv` | every column (fit positions, FWHM, peak SNR, tracking shift/rotation, ...) |
 | `<movie>-summary.pdf/.png` | field with apertures, raw signals (target red and on top), normalised light curve vs UTC, drift |
+| `<movie>-summary-mag.pdf/.png` | the same layout in **magnitudes** (fainter down): on the catalogue G scale of the identified references (their summed light, smoothed like the normalisation, gives each frame's zero point, so clouds drop out; V if they have no G), else Δmag to the references |
+| `<movie>.astrometry.json` | Gaia reduction (with the local catalogue): model, each star's O-C and magnitude, the apertures' RA/Dec and magnitudes |
 | `<movie>.apertures.json` | the apertures, reloaded next time |
 | `<movie>.wcs.fit` | the plate solution |
 | `<movie>-stack.fits/.svg/.png/.pdf` | **stacked field**: all analysed frames registered with the tracked shift + rotation and averaged (`[output] stack_image`); FITS with the plate solution, figure with apertures, names, catalogue IDs, compass and 1′ scale bar. In the SVG the image and the annotation layers (`apertures`, `aperture-labels`, `stars`, `compass`) are separate groups |
@@ -357,7 +384,7 @@ x, y = wcs.target_pixel(wcs.load_wcs(fits_path), '18h12m01s +22d07m00s')
 | `export` | PyMovie-layout CSV for PyOTE |
 | `config` | private config from the template, PySyzygos-compatible sites (`pystarlight-config`) |
 | `timestamps` | `VtiReader` (IOTA 2/3, BoxSprite, Kiwi NTSC/PAL, GHS), `check_timing()`, midnight rollover |
-| `wcs` | astrometry.net client, two-star solution, WCS → pixel, UCAC4 lookup |
+| `wcs` | astrometry.net client (online and local), two-star solution, WCS → pixel, star names (local Gaia DR3, SIMBAD), Gaia DR3 reduction (`wcs.reduce`) |
 | `calibrate` | master dark/flat, gain and defect maps, per-aperture correction |
 | `normalize` | reference-star normalisation, relative flux, Δmag, SNR |
 | `plot` | publication figures (matplotlib) |

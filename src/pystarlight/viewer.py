@@ -225,6 +225,7 @@ class Viewer:
         self._live_frame = None
         self._lc = None               # last analysis result
         self._summary_fig = None      # its result plot (updated live by role / colour keys)
+        self._summary_mag_fig = None  # the same in magnitudes
         self._result = None
         self._error = None
 
@@ -336,6 +337,10 @@ class Viewer:
         self.timer.add_callback(self.poll)
 
         self.ap_stars = {}            # aperture name -> FieldStar (catalogue identification)
+        self.reduction = None         # wcs.reduce.Reduction of the solved stack (local Gaia)
+        self.ap_checks = {}           # aperture name -> wcs.reduce.ApertureCheck
+        self.frame_mags = None        # wcs.reduce.FrameMags of the frame shown
+        self._red_image = None        # the frame the reduction was made on
         if self.aperture_file.exists():
             self.load_aperture_file()
         self.wcs = self.orient = None
@@ -444,6 +449,8 @@ class Viewer:
         else:
             self._play_timer.stop()
             self._play_button.label.set_text('Play')
+            self.update_frame_mags()
+            self.draw_apertures()
         self.fig.canvas.draw_idle()
 
     def playback_step(self):
@@ -528,6 +535,7 @@ class Viewer:
             self.set_levels(*plot.zscale(fr.image), manual=False)
         t = f'{fr.date or ""} {fr.time or "(no timestamp)"}'.strip()
         self.info.set_text(f'frame {i:6d} / {self.n - 1}    UTC {t}')
+        self.update_frame_mags()
         self.draw_apertures()
         self.update_zooms()
 
@@ -625,7 +633,7 @@ class Viewer:
                     (st for st in self.stars if np.hypot(st.x - cx, st.y - cy) < max(5, 2 * st.fwhm)), None)
                 title = f'{k + 1}: {a.name}'
                 if st is not None:
-                    title += f' {st.mag_text()}' + f'\n{st.name or "?"}'
+                    title += f' {st.mag_text()}{self.frame_mag_text(a.name)}' + f'\n{st.name or "?"}'
                 # the solution belongs to the solved (first) frames: for an identified star show its
                 # fixed position; otherwise the aperture centre is only right before the field drifts
                 title += '\n' + (st.radec if st is not None and np.isfinite(st.ra) else self.sky_of(cx, cy))
@@ -649,6 +657,7 @@ class Viewer:
             st = getattr(self, 'ap_stars', {}).get(a.name)
             label = a.name + (f' [{a.color[0].upper()}]' if a.role and a.color in CURVE_COLORS else '')
             label += f'  {st.label()}' if self.show_names and st is not None and st.name else ''
+            label += self.frame_mag_text(a.name, full=a.role == 'target')
             self.patches.append(self.ax.text(a.x0 + a.size + 2, a.y0, label, color=col,
                                              fontsize=8, va='top'))
         self.fig.canvas.draw_idle()
@@ -772,7 +781,119 @@ class Viewer:
             pos[a.name] = (cx + dx, cy + dy)
         found = identify_positions(stack, self.wcs, pos, job_id=meta.get('job_id'), log=log)
         self.ap_stars.update(found)
+        here = {a.name: (self.centre_of(a) if frame == self.index else a.center) for a in apertures}
+        self.reduce_astrometry(cur, frame, here, (dx, dy), log)
         return found
+
+    def reduce_astrometry(self, image, frame, positions, shift, log):
+        """With the local Gaia catalogue: PRAIA-style reduction of `image` (frame `frame`; the
+        plate solution moved by `shift`, the drift to the solved frames), the apertures' offsets
+        from their catalogue stars and the magnitudes of all matched stars and apertures on the
+        Gaia G scale (wcs.reduce), saved as <movie>.astrometry.json. Never fails the
+        identification."""
+        from .wcs import reduce as rd
+        from .wcs.localcat import local_catalog
+        try:
+            catalog = local_catalog(self.cfg)
+            if catalog is None:
+                return
+            log(f'Gaia DR3 reduction of frame {frame}')
+            with open_movie(str(self.path)) as mv:
+                f = mv.read(frame)
+            red = rd.reduce_field(image, rd.shifted_wcs(self.wcs, *shift), catalog,
+                                  rd.decimal_year(f.date, f.time), frame=frame, log=log)
+            checks = rd.check_positions(image, red, catalog, positions)
+            rd.measure_mags(image, red, checks)
+            self.reduction, self.ap_checks = red, checks
+            self._red_image = np.asarray(image, dtype=np.float32)
+            self.frame_mags = rd.FrameMags(frame, red.photometry, checks) if red.photometry else None
+            rd.save_reduction(self.path, red, checks)
+        except Exception as e:
+            self.reduction, self.ap_checks, self.frame_mags = None, {}, None
+            log(f'Gaia reduction failed: {e}')
+
+    def update_frame_mags(self):
+        """Magnitudes of all Gaia stars and apertures on the frame shown (wcs.reduce.remeasure):
+        the field shift to the reduced frame by phase correlation; apertures at their tracked
+        centres after a run, else shifted along. Not while playing (too slow per frame)."""
+        from .wcs.reduce import FrameMags, remeasure
+        red = self.reduction
+        if red is None or red.photometry is None or self._red_image is None or self._playing:
+            return
+        if self.index == red.frame:
+            self.frame_mags = FrameMags(red.frame, red.photometry, self.ap_checks)
+        else:
+            from skimage.registration import phase_cross_correlation
+            cur = np.asarray(self.image, dtype=np.float32)
+            try:
+                (dy, dx), _, _ = phase_cross_correlation(self._red_image, cur, upsample_factor=10,
+                                                         normalization=None)
+            except ValueError:          # other frame size
+                return
+            tracked = {}
+            for a in self.apertures:
+                if a.name in self.ap_checks and self._track and a.name in self._track:
+                    frames = self._track[a.name][0]
+                    j = int(np.clip(np.searchsorted(frames, self.index), 0, len(frames) - 1))
+                    if frames[j] == self.index:
+                        tracked[a.name] = self.centre_of(a)
+            self.frame_mags = remeasure(self.image, red, self.ap_checks, (-dx, -dy), tracked, self.index)
+        if self._ident_job is None and self._solve_job is None:
+            self.say_job(self.frame_mag_summary())
+
+    def frame_mag_text(self, name: str, full: bool = False) -> str:
+        """' m=13.45' for an aperture on the frame shown; full: with error, difference from G and
+        sigma (of the field's scatter of m - G)."""
+        fm = self.frame_mags
+        if fm is None or fm.frame != self.index or name not in fm.mags:
+            return ''
+        c = fm.mags[name]
+        if c.mag is None:
+            return ' m=- (no flux)'
+        s = f' m={c.mag:.2f}'
+        if full:
+            s += f'\u00b1{c.mag_err:.2f}'
+            if c.g is not None:
+                s += f' ({c.mag - c.g:+.2f}, {c.mag_significance:.1f}\u03c3)'
+        return s
+
+    def frame_mag_summary(self) -> str:
+        fm = self.frame_mags
+        if fm is None or fm.frame != self.index:
+            return ''
+        s = f'frame {fm.frame}: mag zero point {fm.scale.zero_point:.2f}, scatter {fm.scale.sigma:.2f} ' \
+            f'({fm.scale.n_used} Gaia stars)'
+        for name, c in fm.mags.items():
+            if self._role_of(name) == 'target':
+                s += f'; {name} ' + c.mag_text()
+        return s
+
+    def astrometry_summary(self) -> str:
+        """'frame 12: Gaia O-C 0.55"/0.45" (49 stars), mag scatter 0.05 (40); target 0.49" (0.7 sigma)
+        mag 9.87+-0.02 (G 9.89, -0.02 = 0.1 sigma of 0.20)', and a warning for any aperture more
+        than 3 sigma off its catalogue star (wrong star or blend)."""
+        red = self.reduction
+        if red is None:
+            return ''
+        s = f'frame {red.frame}: ' if red.frame is not None else ''
+        s += f'Gaia O-C {red.sigma_ra:.2f}"/{red.sigma_dec:.2f}" ({red.n_used} stars)'
+        p = red.photometry
+        if p is not None:
+            s += f', mag scatter {p.sigma:.2f} ({p.n_used})'
+        for name, c in self.ap_checks.items():
+            target = self._role_of(name) == 'target'
+            if c.offset is None:
+                s += f'; {name}: no Gaia star'
+            elif c.significance > 3 or target:
+                s += f'; {name} {c.offset:.2f}" ({c.significance:.1f} sigma)'
+                if target and c.mag is not None:
+                    s += ' ' + c.mag_text()
+                if c.significance > 3:
+                    s += ' OFF - check the star'
+        return s
+
+    def _role_of(self, name):
+        return next((a.role for a in self.apertures if a.name == name), None)
 
     def start_identify(self):
         if self._ident_job is not None or self.wcs is None:
@@ -782,6 +903,8 @@ class Viewer:
             try:
                 found = self.identify_apertures()
                 self._ident_msg = '; '.join(f'{n}: {st.label()}' for n, st in found.items()) or 'no apertures'
+                if self.astrometry_summary():       # first: the names list is long
+                    self._ident_msg = self.astrometry_summary() + ' | ' + self._ident_msg
             except Exception as e:
                 self._ident_msg = f'identification failed: {e}'
         self._ident_job = threading.Thread(target=work, daemon=True)
@@ -1299,7 +1422,8 @@ class Viewer:
         self._lc = lc
         self.update_zooms()
         self.show_result()
-        self.say(f'wrote {csv.name} and {self.path.stem}-summary ({", ".join(self.cfg["plot"]["formats"])}); '
+        formats = ", ".join(self.cfg["plot"]["formats"])
+        self.say(f'wrote {csv.name} and {self.path.stem}-summary[-mag] ({formats}); '
                  'roles and Y G W R now update the plot')
         if self.cfg.get('output', {}).get('stack_image'):
             self.start_stack(lc)
@@ -1370,21 +1494,40 @@ class Viewer:
             self.say(f'not in the last run: {", ".join(gone)} (Run again to include them)')
             return
         colors = {a.name: plot.APERTURE_COLORS[a.color] for a in self.apertures if a.color in CURVE_COLORS}
-        fig = self._summary_fig
-        reuse = fig is not None and plt.fignum_exists(fig.number)
+        window = self.cfg['analysis']['normalize_window']
+        mags, label = self._magnitude_curves(lc, target, refs, window)
         pc = self.cfg['plot']
-        with plot.style(**{'savefig.dpi': pc['dpi']}):
-            fig = plot.summary(lc, self.image, self.apertures, target, refs,
-                               window=self.cfg['analysis']['normalize_window'], bin_size=pc['bin_size'],
-                               title=self.path.stem, colors=colors, fig=fig if reuse else None)
-            plot.save(fig, str(self.path.with_name(self.path.stem + '-summary')), pc['formats'])
-        if reuse:
-            fig.canvas.draw_idle()
-        else:
-            with warnings.catch_warnings():    # non-GUI backends (tests) cannot show
-                warnings.simplefilter('ignore')
-                fig.show()
-        self._summary_fig = fig
+        for attr, suffix, kw in (('_summary_fig', '-summary', {}),
+                                 ('_summary_mag_fig', '-summary-mag', {'mags': mags, 'mag_label': label})):
+            fig = getattr(self, attr)
+            reuse = fig is not None and plt.fignum_exists(fig.number)
+            with plot.style(**{'savefig.dpi': pc['dpi']}):
+                fig = plot.summary(lc, self.image, self.apertures, target, refs, window=window,
+                                   bin_size=pc['bin_size'], title=self.path.stem, colors=colors,
+                                   fig=fig if reuse else None, **kw)
+                plot.save(fig, str(self.path.with_name(self.path.stem + suffix)), pc['formats'])
+            if reuse:
+                fig.canvas.draw_idle()
+            else:
+                with warnings.catch_warnings():    # non-GUI backends (tests) cannot show
+                    warnings.simplefilter('ignore')
+                    fig.show()
+            setattr(self, attr, fig)
+
+    def _magnitude_curves(self, lc, target, refs, window):
+        """({name: magnitudes} of the target and references, y label) for the magnitude summary:
+        on the Gaia G scale of the identified references (V if none has G), else relative to the
+        references (normalize.magnitudes)."""
+        from . import normalize as nz
+        stars = {r: self.ap_stars.get(r) for r in refs}
+        g = {r: st.gmag for r, st in stars.items() if st is not None and st.gmag is not None}
+        v = {r: st.vmag for r, st in stars.items() if st is not None and st.vmag is not None}
+        ref_mags, band = (g, 'G') if g else ((v, 'V') if v else ({}, ''))
+        signals = {n: lc[n]['signal'] for n in [target, *refs]}
+        mags, calibrated = nz.magnitudes(signals, refs, ref_mags, window=window)
+        if calibrated:
+            return mags, f'{band} (from {len(ref_mags)} reference{"s" * (len(ref_mags) > 1)})'
+        return mags, '\u0394mag to the references'
 
     def _target_and_refs(self):
         norm = {n for n, r in self.roles.items() if r['normalize']}

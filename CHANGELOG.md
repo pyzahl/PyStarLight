@@ -7,6 +7,23 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Gaia DR3 astrometric reduction in the manner of PRAIA (`wcs.reduce`, `python -m
+  pystarlight.wcs.reduce MOVIE`): measured stars of the solved stack paired with the local
+  catalogue (proper motions to the date), tangent-plane polynomial (4 constants to 3rd order),
+  outliers dropped one by one; RA/Dec with errors anywhere, and each aperture's offset from its
+  Gaia star. The viewer runs it with the identification when the local catalogue is there, shows
+  the O-C and the target's offset, flags apertures more than 3 sigma off, and saves
+  `<movie>.astrometry.json`. `localcat.lookup` also returns the star's RA/Dec. The viewer
+  reduces the frame shown (`i` on any frame; WCS moved by the drift, `reduce.shifted_wcs`) and
+  measures all matched stars and apertures on the Gaia G scale (`reduce.measure_mags`): target
+  magnitude with error and its difference from G in sigma of the field's scatter. Then on every
+  frame shown (`reduce.remeasure`: drift by phase correlation, tracked centres after a run, new
+  zero point per frame) the aperture labels show the measured `m=` (target: error, difference
+  from G, sigma), so a fading target is followed.
+- Second result plot `<movie>-summary-mag` (same layout) in magnitudes: on the catalogue G (or V)
+  scale of the identified references, per-frame zero point from their summed, smoothed signal
+  (`normalize.magnitudes`, `plot.summary(mags=...)`, `plot.magcurve`); without catalogue
+  magnitudes Δmag to the references. Updated live like the first.
 - Global mode: Naylor optimal extraction (`analyze_global(photometry="optimal")`,
   `[analysis] photometry`, `optimal_radius_fwhm`, `seeing_frames`; `globaltrack.optimal_stats`,
   `pixel_gaussian`): pixels weighted by a circular Gaussian of the frame's seeing (median FWHM

@@ -74,3 +74,25 @@ def snr(y: np.ndarray, baseline: slice | np.ndarray) -> float:
     """Baseline mean / baseline std: the usual occultation-quality figure."""
     b = np.asarray(y, dtype=float)[baseline]
     return float(np.nanmean(b) / np.nanstd(b))
+
+
+def magnitudes(signals: dict, references: Sequence[str], ref_mags: Optional[dict] = None,
+               window: int = 101, method: str = 'savgol') -> tuple[dict, bool]:
+    """Magnitude curves from signals ({name: array}) on the scale of the references' catalogue
+    magnitudes (ref_mags {name: mag}, e.g. Gaia G): the references with a magnitude form one
+    ensemble star of magnitude -2.5 log10(sum 10^(-0.4 m)), whose summed signal (smoothed over
+    `window` rows, as in normalize) gives each row's zero point, so clouds and extinction drop
+    out as in the normalised curve. Without any reference magnitude the curves are relative to
+    the ensemble (0 = as bright as all references together).
+    Returns ({name: magnitudes}, calibrated). Rows without positive signal are NaN."""
+    with_mag = [r for r in references if ref_mags and ref_mags.get(r) is not None]
+    used = with_mag or list(references)
+    ens = smooth(combine_references([signals[r] for r in used]), window, method)
+    ens = np.where(ens > 0, ens, np.nan)
+    m_ens = -2.5 * np.log10(sum(10 ** (-0.4 * ref_mags[r]) for r in with_mag)) if with_mag else 0.0
+    out = {}
+    with np.errstate(divide='ignore', invalid='ignore'):
+        for name, s in signals.items():
+            s = np.asarray(s, dtype=float)
+            out[name] = np.where(s > 0, m_ens - 2.5 * np.log10(s / ens), np.nan)
+    return out, bool(with_mag)

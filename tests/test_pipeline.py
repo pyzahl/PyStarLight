@@ -192,3 +192,22 @@ def test_close_is_idempotent_for_all_readers(ser_file, tmp_path):
         with open_movie(path) as m2:
             m2.read(0)
             m2.close()                                # close inside `with`, then __exit__ closes again
+
+
+def test_magnitudes_from_reference_catalogue_mags():
+    n = 200
+    cloud = np.where(np.arange(n) < 100, 1.0, 0.5)                   # half the light from frame 100
+    r1, r2 = 1000.0 * cloud, 400.0 * cloud                           # G 10 and ~11
+    t = 250.0 * cloud * np.where((np.arange(n) > 140) & (np.arange(n) < 160), 0.1, 1.0)
+    sig = {'t': t, 'r1': r1, 'r2': r2}
+    g2 = 10 - 2.5 * np.log10(0.4)
+    mags, ok = nz.magnitudes(sig, ['r1', 'r2'], {'r1': 10.0, 'r2': g2}, window=1)
+    assert ok
+    assert np.allclose(mags['r1'], 10.0) and np.allclose(mags['r2'], g2)            # clouds out
+    assert np.allclose(mags['t'][:140], 10 - 2.5 * np.log10(0.25))                 # 11.51
+    assert np.allclose(mags['t'][145], 10 - 2.5 * np.log10(0.025))                 # 2.5 mag down
+    rel, ok = nz.magnitudes(sig, ['r1', 'r2'], {}, window=1)                        # no catalogue
+    assert not ok and np.allclose(rel['t'][:140], -2.5 * np.log10(250 / 1400))
+    neg = np.where(np.arange(n) == 5, -3.0, t)
+    gone = nz.magnitudes({**sig, 't': neg}, ['r1'], {'r1': 10.0}, window=1)[0]
+    assert np.isnan(gone['t'][5])                                    # no positive signal: NaN

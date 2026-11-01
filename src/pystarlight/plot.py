@@ -11,6 +11,7 @@ Needs matplotlib (pip install "starlight-photometry[plot]").
 from __future__ import annotations
 
 import contextlib
+import warnings
 from typing import Optional, Sequence
 
 import matplotlib as mpl
@@ -175,12 +176,39 @@ def _legend(ax, **kw):
                      edgecolor='0.6', fancybox=False, **kw)
 
 
+def magcurve(ax, lc, mags: np.ndarray, name: str, bin_size: int = 1, color: str = 'k',
+             ylabel: str = 'Magnitude'):
+    """Magnitude curve of one aperture against UTC time (fainter is down)."""
+    x = _time_axis(ax, lc, seconds(lc))
+    y = np.asarray(mags, dtype=float)
+    ax.plot(x, y, '.', color=color, ms=2, alpha=0.6 if bin_size > 1 else 1.0, label=name,
+            rasterized=len(x) > 5000)
+    if bin_size > 1:
+        n = len(y) // bin_size * bin_size
+        with warnings.catch_warnings():             # all-NaN blocks (star gone)
+            warnings.simplefilter('ignore', RuntimeWarning)
+            yb = np.nanmean(y[:n].reshape(-1, bin_size), axis=1)
+        ax.plot(x[:n].reshape(-1, bin_size).mean(axis=1), yb, '-', color=color, lw=1.0,
+                label=f'{bin_size}-point mean')
+    _invert(ax)
+    ax.set_ylabel(ylabel)
+    return ax
+
+
+def _invert(ax):
+    if not ax.yaxis_inverted():
+        ax.invert_yaxis()
+
+
 def summary(lc, image: np.ndarray, apertures: Sequence, target: str,
             references: Sequence[str] = (), window: int = 101, bin_size: int = 1,
-            title: Optional[str] = None, figsize=(7.0, 6.5), colors: Optional[dict] = None, fig=None):
+            title: Optional[str] = None, figsize=(7.0, 6.5), colors: Optional[dict] = None, fig=None,
+            mags: Optional[dict] = None, mag_label: str = 'Magnitude'):
     """Three panels: field with apertures, normalised target light curve, tracking drift.
     The target is red; colors: {reference name: colour}, the others from OTHER_COLORS.
-    fig: draw into this figure again (cleared) instead of a new one (the viewer's live update)."""
+    fig: draw into this figure again (cleared) instead of a new one (the viewer's live update).
+    mags ({name: magnitudes}, normalize.magnitudes): the same layout in magnitudes, signals and
+    the target's curve as magnitudes (y axis `mag_label`, fainter down)."""
     if fig is None:
         fig = plt.figure(figsize=figsize, constrained_layout=True)
     else:
@@ -190,14 +218,22 @@ def summary(lc, image: np.ndarray, apertures: Sequence, target: str,
     frame(ax_img, image, apertures)
     ax_raw = fig.add_subplot(gs[0, 1])
     x = _time_axis(ax_raw, lc, seconds(lc))
-    ax_raw.plot(x, lc[target]['signal'], lw=1.2, color=TARGET_COLOR, label=target, zorder=3)
+
+    def curve(n):
+        return mags[n] if mags is not None else lc[n]['signal']
+    ax_raw.plot(x, curve(target), lw=1.2, color=TARGET_COLOR, label=target, zorder=3)
     for k, n in enumerate(references):          # target first in the legend, drawn on top
         c = (colors or {}).get(n) or OTHER_COLORS[k % len(OTHER_COLORS)]
-        ax_raw.plot(x, lc[n]['signal'], lw=0.6, color=c, label=n, zorder=2)
-    ax_raw.set_ylabel('Signal (ADU)')
+        ax_raw.plot(x, curve(n), lw=0.6, color=c, label=n, zorder=2)
+    if mags is not None:
+        _invert(ax_raw)
+    ax_raw.set_ylabel(mag_label if mags is not None else 'Signal (ADU)')
     _legend(ax_raw)
     ax_lc = fig.add_subplot(gs[1, :])
-    lightcurve(ax_lc, lc, target, references, window=window, bin_size=bin_size, color=TARGET_COLOR)
+    if mags is not None:
+        magcurve(ax_lc, lc, mags[target], target, bin_size=bin_size, color=TARGET_COLOR, ylabel=mag_label)
+    else:
+        lightcurve(ax_lc, lc, target, references, window=window, bin_size=bin_size, color=TARGET_COLOR)
     _legend(ax_lc)
     ax_tr = fig.add_subplot(gs[2, :], sharex=ax_lc)
     tracking(ax_tr, lc, [target], colors=[TARGET_COLOR])
