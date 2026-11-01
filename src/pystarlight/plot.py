@@ -94,7 +94,7 @@ def _time_axis(ax, lc, t):
         hh, rem = divmod(t0 % 86400, 3600)
         mm, ss = divmod(rem, 60)
         date = next((d for d in lc.date if d), '')
-        ax.set_xlabel(f'Time from {date} {int(hh):02d}:{int(mm):02d}:{ss:06.3f} UTC (s)'.replace('  ', ' '))
+        ax.set_xlabel(f'Time from {date} {int(hh):02d}:{int(mm):02d}:{ss:06.3f} UTC in s'.replace('  ', ' '))
         return t - t0
     ax.set_xlabel('Frame')
     return lc.columns[lc.names[0]]['frame']
@@ -114,8 +114,8 @@ def frame(ax, image: np.ndarray, apertures: Sequence = (), limits: Optional[tupl
         if label:
             ax.annotate(ap.name, (ap.x0 + ap.size, ap.y0), color=col, fontsize=7,
                         xytext=(2, 0), textcoords='offset points', va='top')
-    ax.set_xlabel('x (px)')
-    ax.set_ylabel('y (px)')
+    ax.set_xlabel('x in px')
+    ax.set_ylabel('y in px')
     return ax
 
 
@@ -155,7 +155,7 @@ def tracking(ax, lc, names: Sequence[str], colors: Optional[Sequence[str]] = Non
         c = colors[k] if colors else None
         ax.plot(x, xc - np.nanmedian(xc), lw=0.7, color=c, label=f'{n} x')
         ax.plot(x, yc - np.nanmedian(yc), lw=0.7, ls='--', color=c, label=f'{n} y')
-    ax.set_ylabel('Drift (px)')
+    ax.set_ylabel('Drift in px')
     return ax
 
 
@@ -164,7 +164,7 @@ def timing(ax, lc):
     t = seconds(lc)
     ax.plot(lc.columns[lc.names[0]]['frame'][1:], np.diff(t) * 1000, '.', ms=2, color='k')
     ax.set_xlabel('Frame')
-    ax.set_ylabel('Time step (ms)')
+    ax.set_ylabel('Time step in ms')
     return ax
 
 
@@ -177,7 +177,7 @@ def _legend(ax, **kw):
 
 
 def magcurve(ax, lc, mags: np.ndarray, name: str, bin_size: int = 1, color: str = 'k',
-             ylabel: str = 'Magnitude'):
+             ylabel: str = 'Magnitude in mag'):
     """Magnitude curve of one aperture against UTC time (fainter is down)."""
     x = _time_axis(ax, lc, seconds(lc))
     y = np.asarray(mags, dtype=float)
@@ -203,7 +203,7 @@ def _invert(ax):
 def summary(lc, image: np.ndarray, apertures: Sequence, target: str,
             references: Sequence[str] = (), window: int = 101, bin_size: int = 1,
             title: Optional[str] = None, figsize=(7.0, 6.5), colors: Optional[dict] = None, fig=None,
-            mags: Optional[dict] = None, mag_label: str = 'Magnitude'):
+            mags: Optional[dict] = None, mag_label: str = 'Magnitude in mag'):
     """Three panels: field with apertures, normalised target light curve, tracking drift.
     The target is red; colors: {reference name: colour}, the others from OTHER_COLORS.
     fig: draw into this figure again (cleared) instead of a new one (the viewer's live update).
@@ -227,7 +227,7 @@ def summary(lc, image: np.ndarray, apertures: Sequence, target: str,
         ax_raw.plot(x, curve(n), lw=0.6, color=c, label=n, zorder=2)
     if mags is not None:
         _invert(ax_raw)
-    ax_raw.set_ylabel(mag_label if mags is not None else 'Signal (ADU)')
+    ax_raw.set_ylabel(mag_label if mags is not None else 'Signal in ADU')
     _legend(ax_raw)
     ax_lc = fig.add_subplot(gs[1, :])
     if mags is not None:

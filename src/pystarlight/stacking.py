@@ -213,8 +213,8 @@ def save_field_stack(st: FieldStack, stem: str, apertures, lc, stars=(), ap_star
                   gid='field-image')
         ax.set_xlim(-0.5, w - 0.5)
         ax.set_ylim(h - 0.5, -0.5)
-        ax.set_xlabel('x (px)')
-        ax.set_ylabel('y (px)')
+        ax.set_xlabel('x in px')
+        ax.set_ylabel('y in px')
         by_name = {a.name: a for a in apertures}
         for n, (x, y) in pos.items():
             a = by_name.get(n)

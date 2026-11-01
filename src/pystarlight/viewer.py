@@ -1503,7 +1503,7 @@ class Viewer:
             reuse = fig is not None and plt.fignum_exists(fig.number)
             with plot.style(**{'savefig.dpi': pc['dpi']}):
                 fig = plot.summary(lc, self.image, self.apertures, target, refs, window=window,
-                                   bin_size=pc['bin_size'], title=self.path.stem, colors=colors,
+                                   bin_size=pc['bin_size'], title=self._result_title(target), colors=colors,
                                    fig=fig if reuse else None, **kw)
                 plot.save(fig, str(self.path.with_name(self.path.stem + suffix)), pc['formats'])
             if reuse:
@@ -1513,6 +1513,11 @@ class Viewer:
                     warnings.simplefilter('ignore')
                     fig.show()
             setattr(self, attr, fig)
+
+    def _result_title(self, target) -> str:
+        """'<movie> - candidate TYC 3574-1718-1': the identified star in the target aperture."""
+        st = self.ap_stars.get(target)
+        return self.path.stem + (f' - candidate {st.name}' if st is not None and st.name else '')
 
     def _magnitude_curves(self, lc, target, refs, window):
         """({name: magnitudes} of the target and references, y label) for the magnitude summary:
@@ -1526,8 +1531,8 @@ class Viewer:
         signals = {n: lc[n]['signal'] for n in [target, *refs]}
         mags, calibrated = nz.magnitudes(signals, refs, ref_mags, window=window)
         if calibrated:
-            return mags, f'{band} (from {len(ref_mags)} reference{"s" * (len(ref_mags) > 1)})'
-        return mags, '\u0394mag to the references'
+            return mags, f'{band} in mag'
+        return mags, '\u0394mag to the references in mag'
 
     def _target_and_refs(self):
         norm = {n for n, r in self.roles.items() if r['normalize']}

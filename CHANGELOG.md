@@ -74,6 +74,10 @@ uses [Semantic Versioning](https://semver.org/).
   aperture on the displayed frame, without moving apertures; shown in the zoom views and status.
 
 ### Changed
+- Result plots: the title names the candidate star (the identified star in the target
+  aperture); axis units written as "in": `G in mag`, `Signal in ADU`, `Drift in px`,
+  `x in px`, `Time ... UTC in s` (also the stack figure); the magnitude axis no longer says
+  "(from N references)".
 - Viewer: the checkbox "SG fit" is now "Optimal" (photometry for the next run and Fit frame);
   Fit frame and auto-centring use the standard peak fit. The `savgol_*` config keys are gone
   (old private configs keep working); the SG functions stay in `globaltrack`.

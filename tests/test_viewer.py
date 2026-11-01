@@ -79,7 +79,7 @@ def test_viewer_workflow(movie):
     assert movie.with_suffix('.csv').exists()
     assert movie.with_name('shake-summary.pdf').exists()
     assert movie.with_name('shake-summary-mag.pdf').exists()          # the same in magnitudes
-    assert v._summary_mag_fig.axes[1].get_ylabel() == '\u0394mag to the references'   # no catalogue
+    assert v._summary_mag_fig.axes[1].get_ylabel() == '\u0394mag to the references in mag'   # no catalogue
     assert v._summary_mag_fig.axes[1].yaxis_inverted()
     assert 'PyMovie' in movie.with_suffix('.csv').read_text().splitlines()[0]            # for PyOTE
     assert 'roles: target=target' in movie.with_suffix('.pystarlight.csv').read_text().splitlines()[0]
@@ -602,3 +602,11 @@ def test_labels_show_the_frame_magnitudes(movie):
     assert 'zero point 20.00, scatter 0.20 (12 Gaia stars)' in v.frame_mag_summary()
     v.index += 1                                     # another frame: not measured yet, no stale values
     assert v.frame_mag_text(t.name) == '' and v.frame_mag_summary() == ''
+
+
+def test_result_title_names_the_candidate_star(movie):
+    from pystarlight.wcs.identify import FieldStar
+    v = Viewer(str(movie))
+    assert v._result_title('target') == movie.stem                   # not identified: the movie only
+    v.ap_stars = {'target': FieldStar(1, 1, 1, 3, False, name='TYC 3574-1718-1')}
+    assert v._result_title('target') == f'{movie.stem} - candidate TYC 3574-1718-1'
