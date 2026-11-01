@@ -24,6 +24,21 @@ uses [Semantic Versioning](https://semver.org/).
   scale of the identified references, per-frame zero point from their summed, smoothed signal
   (`normalize.magnitudes`, `plot.summary(mags=...)`, `plot.magcurve`); without catalogue
   magnitudes Δmag to the references. Updated live like the first.
+- Step fit of the target for occultation times (`steps.fit_steps`): piecewise-constant model of
+  the flux relative to the reference ensemble (`normalize.ensemble`), change points by circular
+  binary segmentation with a BIC-like penalty (short events too), levels that differ by less than
+  5 sigma merged, each D/R time to a fraction of a frame (partial exposures) with a 1 sigma error
+  (chi^2 + 1 interval or Monte Carlo, the larger; calibrated on simulated events). Drawn on the
+  magnitude summary with level bands, time error bars and transition close-ups (`plot.stepmodel`,
+  `plot.stepzoom`); the times in UTC in the viewer's status line. No false events in noise.
+- `<movie>.event.json` with every result (`steps.event_report`, `movie.object_name`): object,
+  target star, references, check stars, fitted levels in flux and magnitude, D/R times in UTC with
+  errors, nested D/R pairs and durations, recording metadata. The magnitude summary lists each
+  level's magnitude +- error in a box next to the D/R times.
+- Third result plot `<movie>-mag-hist`: magnitude histograms (probability density, common bins)
+  of the target in each fitted level and, below, of the check stars (else the two references
+  nearest its magnitude), with fitted
+  Gaussian envelopes (`plot.mag_histograms`, `plot.maghist`, `plot.gaussian_envelope`).
 - Global mode: Naylor optimal extraction (`analyze_global(photometry="optimal")`,
   `[analysis] photometry`, `optimal_radius_fwhm`, `seeing_frames`; `globaltrack.optimal_stats`,
   `pixel_gaussian`): pixels weighted by a circular Gaussian of the frame's seeing (median FWHM

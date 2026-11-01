@@ -226,6 +226,9 @@ class Viewer:
         self._lc = None               # last analysis result
         self._summary_fig = None      # its result plot (updated live by role / colour keys)
         self._summary_mag_fig = None  # the same in magnitudes
+        self._hist_fig = None         # magnitude histograms of the target's levels and references
+        self._mag_band = ''           # catalogue band of the magnitude plots ('G', 'V' or '')
+        self.step_fit = None          # steps.StepFit of the target in the last result plot
         self._result = None
         self._error = None
 
@@ -1423,8 +1426,10 @@ class Viewer:
         self.update_zooms()
         self.show_result()
         formats = ", ".join(self.cfg["plot"]["formats"])
-        self.say(f'wrote {csv.name} and {self.path.stem}-summary[-mag] ({formats}); '
-                 'roles and Y G W R now update the plot')
+        self.say(f'wrote {csv.name}, {self.event_path().name}, {self.path.stem}-summary[-mag], '
+                 f'-mag-hist ({formats}); '
+                 f'roles and Y G W R now update the plot; {self.step_summary()}')
+        print(self.step_summary())
         if self.cfg.get('output', {}).get('stack_image'):
             self.start_stack(lc)
 
@@ -1495,10 +1500,13 @@ class Viewer:
             return
         colors = {a.name: plot.APERTURE_COLORS[a.color] for a in self.apertures if a.color in CURVE_COLORS}
         window = self.cfg['analysis']['normalize_window']
-        mags, label = self._magnitude_curves(lc, target, refs, window)
+        checks = [a.name for a in self.apertures if a.role == 'check' and a.name in lc.columns]
+        mags, label, steps = self._magnitude_curves(lc, target, refs, window, checks)
+        self.step_fit = steps[0]
         pc = self.cfg['plot']
         for attr, suffix, kw in (('_summary_fig', '-summary', {}),
-                                 ('_summary_mag_fig', '-summary-mag', {'mags': mags, 'mag_label': label})):
+                                 ('_summary_mag_fig', '-summary-mag',
+                                  {'mags': mags, 'mag_label': label, 'steps': steps})):
             fig = getattr(self, attr)
             reuse = fig is not None and plt.fignum_exists(fig.number)
             with plot.style(**{'savefig.dpi': pc['dpi']}):
@@ -1513,26 +1521,124 @@ class Viewer:
                     warnings.simplefilter('ignore')
                     fig.show()
             setattr(self, attr, fig)
+        fig = self._hist_fig
+        reuse = fig is not None and plt.fignum_exists(fig.number)
+        with plot.style(**{'savefig.dpi': pc['dpi']}):
+            fig = plot.mag_histograms(lc, mags, target, refs, steps[0], mag_label=label, colors=colors,
+                                      checks=checks, title=self._result_title(target),
+                                      fig=fig if reuse else None)
+            plot.save(fig, str(self.path.with_name(self.path.stem + '-mag-hist')), pc['formats'])
+        if reuse:
+            fig.canvas.draw_idle()
+        else:
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                fig.show()
+        self._hist_fig = fig
+        self.write_event(lc, target, refs, checks, steps)
+
+    def event_path(self) -> Path:
+        return self.path.with_name(self.path.stem + '.event.json')
+
+    def write_event(self, lc, target, refs, checks, steps) -> dict:
+        """<movie>.event.json: object, target star, references and check stars, and the step fit
+        of the target (steps.event_report: levels in flux and magnitude, D/R times in UTC with
+        errors, durations). Written with every result plot."""
+        from dataclasses import asdict
+        from datetime import datetime, timezone
+
+        from . import __version__
+        from . import steps as st
+        from .movie import object_name
+
+        def clean(v):                       # JSON: no NaN, no numpy scalars
+            if isinstance(v, dict):
+                return {str(k): clean(x) for k, x in v.items()}
+            if isinstance(v, (list, tuple)):
+                return [clean(x) for x in v]
+            if isinstance(v, (np.integer, int)) and not isinstance(v, bool):
+                return int(v)
+            if isinstance(v, (np.floating, float)):
+                return float(v) if np.isfinite(v) else None
+            if isinstance(v, (str, bool)) or v is None:
+                return v
+            return str(v)
+
+        def star(name):
+            d = {'aperture': name, 'role': self._role_of(name)}
+            fs = self.ap_stars.get(name)
+            if fs is not None:
+                d.update({k: getattr(fs, k) for k in ('name', 'ids', 'gmag', 'vmag', 'ra', 'dec', 'source',
+                                                      'sep_arcsec')})
+            ck = self.ap_checks.get(name)
+            if ck is not None:
+                d['astrometry'] = asdict(ck)
+            return d
+        fit, m0 = steps
+        date = next((d for d in lc.date if d), '')
+        t = plot.seconds(lc)
+        meta = getattr(lc, 'metadata', {}) or {}
+        rec = {
+            'software': f'PyStarLight {__version__}',
+            'created_utc': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'movie': self.path.name,
+            'object': object_name(meta, self.path),
+            'target': star(target),
+            'candidate': (self.ap_stars[target].name if target in self.ap_stars else '') or '',
+            'references': [star(r) for r in refs],
+            'checks': [star(c) for c in checks],
+            'recording': {'date': date, 'first_utc': plot.hms(np.nanmin(t)),
+                          'last_utc': plot.hms(np.nanmax(t)), 'rows': len(t), 'metadata': meta},
+            'photometry': {'normalize_window': self.cfg['analysis']['normalize_window'],
+                           'magnitudes': 'm = m0 - 2.5 log10(flux), flux = target signal / smoothed '
+                                         'ensemble of the references',
+                           'band': self._mag_band},
+            'step_fit': st.event_report(fit, date, m0, self._mag_band),
+            'notes': ['times are the frame time stamps as recorded (mid-exposure assumed, exposure = '
+                      'frame interval); no camera delay correction',
+                      'step model is sharp: no diffraction or stellar diameter',
+                      'sigma_s: the larger of the chi^2 + 1 half width and the Monte Carlo scatter'],
+        }
+        rec = clean(rec)
+        try:
+            with open(self.event_path(), 'w') as f:
+                json.dump(rec, f, indent=1)
+        except OSError as e:
+            self.say_job(f'could not write {self.event_path().name}: {e}')
+        return rec
 
     def _result_title(self, target) -> str:
         """'<movie> - candidate TYC 3574-1718-1': the identified star in the target aperture."""
         st = self.ap_stars.get(target)
         return self.path.stem + (f' - candidate {st.name}' if st is not None and st.name else '')
 
-    def _magnitude_curves(self, lc, target, refs, window):
-        """({name: magnitudes} of the target and references, y label) for the magnitude summary:
-        on the Gaia G scale of the identified references (V if none has G), else relative to the
-        references (normalize.magnitudes)."""
+    def _magnitude_curves(self, lc, target, refs, window, others=()):
+        """({name: magnitudes} of the target, references and others, y label, (step fit, m0)) for the
+        magnitude summary: on the Gaia G scale of the identified references (V if none has G),
+        else relative to the references (normalize.magnitudes). The step fit (steps.fit_steps)
+        is of the target's flux relative to the same ensemble, so m = m0 - 2.5 log10(flux)."""
         from . import normalize as nz
+        from . import steps as st
         stars = {r: self.ap_stars.get(r) for r in refs}
         g = {r: st.gmag for r, st in stars.items() if st is not None and st.gmag is not None}
         v = {r: st.vmag for r, st in stars.items() if st is not None and st.vmag is not None}
         ref_mags, band = (g, 'G') if g else ((v, 'V') if v else ({}, ''))
-        signals = {n: lc[n]['signal'] for n in [target, *refs]}
+        self._mag_band = band
+        signals = {n: lc[n]['signal'] for n in [target, *refs, *others]}
         mags, calibrated = nz.magnitudes(signals, refs, ref_mags, window=window)
-        if calibrated:
-            return mags, f'{band} in mag'
-        return mags, '\u0394mag to the references in mag'
+        ens, m0, _ = nz.ensemble(signals, refs, ref_mags, window=window)
+        fit = st.fit_steps(plot.seconds(lc), np.asarray(signals[target], dtype=float) / ens)
+        label = f'{band} in mag' if calibrated else '\u0394mag to the references in mag'
+        return mags, label, (fit, m0)
+
+    def step_summary(self) -> str:
+        """'events: D at 04:24:13.012 UTC +- 0.011 s (...); R at ...' of the last result plot."""
+        fit = getattr(self, 'step_fit', None)
+        if fit is None:
+            return ''
+        if not fit.transitions:
+            return 'step fit: no event'
+        return 'step fit: ' + fit.describe(fmt=lambda s: plot.hms(s) + ' UTC')
 
     def _target_and_refs(self):
         norm = {n for n, r in self.roles.items() if r['normalize']}

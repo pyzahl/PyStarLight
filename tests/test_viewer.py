@@ -1,5 +1,6 @@
 """Viewer and plots, driven headless (Agg backend)."""
 
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -81,6 +82,12 @@ def test_viewer_workflow(movie):
     assert movie.with_name('shake-summary-mag.pdf').exists()          # the same in magnitudes
     assert v._summary_mag_fig.axes[1].get_ylabel() == '\u0394mag to the references in mag'   # no catalogue
     assert v._summary_mag_fig.axes[1].yaxis_inverted()
+    assert v.step_fit is not None and 'step fit: ' in v.status.get_text()
+    assert movie.with_name('shake-mag-hist.pdf').exists() and v._hist_fig.axes[0].get_legend()
+    ev = json.loads(movie.with_name('shake.event.json').read_text())
+    assert ev['movie'] == movie.name and ev['target']['aperture'] == 'target'
+    assert ev['references'] and all(r['role'] == 'reference' for r in ev['references'])
+    assert ev['step_fit']['levels'] and 'transitions' in ev['step_fit'] and ev['notes']
     assert 'PyMovie' in movie.with_suffix('.csv').read_text().splitlines()[0]            # for PyOTE
     assert 'roles: target=target' in movie.with_suffix('.pystarlight.csv').read_text().splitlines()[0]
     key(v, 'right')                              # zoom now follows the tracked position
@@ -118,6 +125,33 @@ def test_plot_panels(movie):
     assert ok and len(fig.axes) == 4 and raw.get_ylabel() == curve.get_ylabel() == 'G'
     assert raw.yaxis_inverted() and curve.yaxis_inverted()          # fainter is down
     assert np.allclose(raw.get_lines()[0].get_ydata(), mags['t'], equal_nan=True)
+    from pystarlight import steps
+    t = plot.seconds(lc)
+    n = t.size
+    flux = np.where((np.arange(n) >= n // 3) & (np.arange(n) < 2 * n // 3), 0.2, 1.0)
+    flux = flux + np.random.default_rng(0).normal(0, 0.02, n)
+    fit = steps.fit_steps(t, flux)
+    assert [tr.kind for tr in fit.transitions] == ['D', 'R']
+    with plot.style():
+        fig = plot.summary(lc, img, aps, 't', ['r'], mags=mags, mag_label='G', steps=(fit, 10.0))
+    curve = fig.axes[2]
+    assert len(fig.axes) == 6                                       # + a close-up per transition
+    assert fig.axes[4].get_title().startswith('D ') and fig.axes[5].get_title().startswith('R ')
+    assert 'step fit' in [ln.get_label() for ln in curve.get_lines()]
+    assert any(t.get_text().startswith('D ') for t in curve.texts)
+    with plot.style():
+        fig = plot.mag_histograms(lc, {**mags, 't': 10.0 - 2.5 * np.log10(np.clip(flux, 1e-3, None))},
+                                  't', ['r'], fit, mag_label='G')
+    top, below = fig.axes
+    labels = [t.get_text() for t in top.get_legend().get_texts()]
+    assert len(labels) == 3 and labels[1].startswith('t ')           # the target's 3 levels
+    assert '11.7' in labels[1]                                       # the 20 % level: 1.75 mag fainter
+    assert below.get_title(loc='left').startswith('References nearest')      # no check stars
+    assert [t.get_text()[:3] for t in below.get_legend().get_texts()] == ['r: ']
+    fig = plot.mag_histograms(lc, mags, 't', [], fit, checks=['r'])
+    assert fig.axes[1].get_title(loc='left') == 'Check stars'
+    env = plot.gaussian_envelope(np.random.default_rng(1).normal(5.0, 0.1, 2000), np.linspace(4, 6, 81))
+    assert env[1] == pytest.approx(5.0, abs=0.01) and env[2] == pytest.approx(0.1, abs=0.01)
 
 
 def test_viewer_shows_ra_dec(movie, tmp_path):

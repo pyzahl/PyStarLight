@@ -433,6 +433,21 @@ class FitsFolderReader(MovieReader):
 
 # --------------------------------------------------------------------------- factory
 
+def object_name(metadata: dict, path: str | os.PathLike | None = None) -> str:
+    """The observed object as the recording names it: OBJNAME (RAVF, ADV), OBJECT (FITS), else
+    the file name's part before the date, as ASTRID names files (<object>_<yyyymmdd>_...;
+    'None' when nothing was entered there). '' if none."""
+    for key in ('OBJNAME', 'OBJECT', 'Object', 'OBJ-NAME'):
+        v = str(metadata.get(key, '') or '').strip()
+        if v and v != 'None':
+            return v
+    if path is not None:
+        m = re.match(r'(.+?)_\d{8}_', Path(path).name)
+        if m and m.group(1) != 'None':
+            return m.group(1)
+    return ''
+
+
 def open_movie(path: str, **kwargs) -> MovieReader:
     """Open a movie file or a FITS folder. kwargs go to the reader (e.g. sharpcap_timestamps)."""
     p = Path(path)

@@ -85,14 +85,23 @@ def magnitudes(signals: dict, references: Sequence[str], ref_mags: Optional[dict
     out as in the normalised curve. Without any reference magnitude the curves are relative to
     the ensemble (0 = as bright as all references together).
     Returns ({name: magnitudes}, calibrated). Rows without positive signal are NaN."""
-    with_mag = [r for r in references if ref_mags and ref_mags.get(r) is not None]
-    used = with_mag or list(references)
-    ens = smooth(combine_references([signals[r] for r in used]), window, method)
-    ens = np.where(ens > 0, ens, np.nan)
-    m_ens = -2.5 * np.log10(sum(10 ** (-0.4 * ref_mags[r]) for r in with_mag)) if with_mag else 0.0
+    ens, m_ens, calibrated = ensemble(signals, references, ref_mags, window, method)
     out = {}
     with np.errstate(divide='ignore', invalid='ignore'):
         for name, s in signals.items():
             s = np.asarray(s, dtype=float)
             out[name] = np.where(s > 0, m_ens - 2.5 * np.log10(s / ens), np.nan)
-    return out, bool(with_mag)
+    return out, calibrated
+
+
+def ensemble(signals: dict, references: Sequence[str], ref_mags: Optional[dict] = None,
+             window: int = 101, method: str = 'savgol') -> tuple[np.ndarray, float, bool]:
+    """(smoothed ensemble signal per row, its magnitude m_ens, calibrated) as used by magnitudes:
+    a signal s has the magnitude m_ens - 2.5 log10(s / ensemble), so s / ensemble is its flux on
+    a linear scale (also for s <= 0, e.g. an occulted star, which has no magnitude)."""
+    with_mag = [r for r in references if ref_mags and ref_mags.get(r) is not None]
+    used = with_mag or list(references)
+    ens = smooth(combine_references([signals[r] for r in used]), window, method)
+    ens = np.where(ens > 0, ens, np.nan)
+    m_ens = -2.5 * np.log10(sum(10 ** (-0.4 * ref_mags[r]) for r in with_mag)) if with_mag else 0.0
+    return ens, float(m_ens), bool(with_mag)
