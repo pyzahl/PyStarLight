@@ -7,6 +7,10 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Docs: CAPTURE.md "PySyzygos favorites server link" (server mode, token, config, a check
+  from the Pi, what the Favorites button fills in, error messages); README "Event timing: the
+  automatic step fit" (what is fitted, change-point search, sub-frame timing and its sigma,
+  magnitudes and limits, D/R pairing, validation, limits of the model).
 - Gaia DR3 astrometric reduction in the manner of PRAIA (`wcs.reduce`, `python -m
   pystarlight.wcs.reduce MOVIE`): measured stars of the solved stack paired with the local
   catalogue (proper motions to the date), tangent-plane polynomial (4 constants to 3rd order),

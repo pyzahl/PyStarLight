@@ -23,6 +23,7 @@ The code is the `src/pystarlight/capture/` package (`uv run pystarlight-camera`)
 | `review.py` | review player `pystarlight-review` (needs the full package) |
 | `ravf_writer.py` | RAVF writer (as ASTRID writes), frame scan, repair |
 | `ser_writer.py` | SER v3 writer, one UTC timestamp per frame, `.times` sidecar, repair |
+| `favorites.py` | PySyzygos favorites API client: tonight's events -> asteroid, target star, recording window (standard library only) |
 | `gps_ublox.py` | u-blox GPS: NMEA status, timepulse rate (UBX-CFG-TP5), optional QMC5883L/HMC5883L compass |
 
 ## Hardware (the owner's rig)
@@ -285,18 +286,87 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
   With an **Asteroid** the name carries it before the star,
   `MV-MIPI-IMX178M_158772-2003-SB60_UCAC4-521-006590_20261017T043548Z.ravf`, and OBJNAME is the
   asteroid (the star is in the file name and the viewer's identification).
-- **Favorites** (Recording panel): asks a PySyzygos server (its `SERVER_MODE.md`, favorites API
-  `/api/v1/favorites`) for the events of the next 12 h. One event is taken at once; several give
-  a list (time, asteroid, star, G, drop, duration, altitude, chance, site). The chosen one fills
-  **Asteroid**, **Target** (the star's UCAC4 / TYC / DR3 name), **Verify** (its Gaia DR3 id),
-  start **At UTC** = event - 40 s and **Stop after** 80 s (to event + 40 s; already inside the
-  window: start now, stop at event + 40 s). The line below shows the event time and the star's
-  altitude and azimuth for pointing. Server and token: `[pysyzygos_server] url / token` in the
-  private config (the token from `pysyzygos gui --new-token PyStarLight`; a local-mode PySyzygos
-  on 127.0.0.1 needs none), or `--pysyzygos URL` and `$PYSYZYGOS_URL` / `$PYSYZYGOS_TOKEN`. `past_hours`
-  (default 0) lists events that many hours back too, for tests: a chosen event that is over
-  records the same 80 s from now. Works
-  with the system Python too (standard library only; the config is read directly).
+- **Favorites** (Recording panel): tonight's events from a PySyzygos server fill **Asteroid**,
+  **Target**, **Verify** and the recording window (event - 40 s to event + 40 s). Setting up the
+  link: [PySyzygos favorites server link](#pysyzygos-favorites-server-link) below.
+
+## PySyzygos favorites server link
+
+[PySyzygos](https://github.com/pyzahl/PySyzygos) (the occultation predictions and favorites list)
+serves its favorites read-only over HTTP (its `SERVER_MODE.md`, section 6). With the link set up,
+the **Favorites** button in the Recording panel fills in the next event, so nothing has to be
+typed at the telescope.
+
+### 1. Start PySyzygos as a server (on the computer that has it)
+
+```bash
+pysyzygos gui --set-password                 # once: login for the browser GUI
+pysyzygos gui --host 0.0.0.0 --port 8080     # server mode, reachable from the Pi
+```
+
+To keep it running, use the systemd unit in PySyzygos' `deploy/` folder (`SERVER_MODE.md` section 3).
+If PySyzygos runs on the Pi itself in local mode (`http://127.0.0.1:8080`), the API needs no
+token: set only the URL and skip step 2.
+
+### 2. Give PyStarLight its own token
+
+```bash
+pysyzygos gui --new-token PyStarLight        # shown once: copy it now
+pysyzygos gui --list-tokens
+pysyzygos gui --revoke-token PyStarLight     # e.g. if the Pi is lost
+```
+
+A token can only read `/api/v1/...`: it cannot open the GUI, start runs or change favorites.
+A new or revoked token takes effect at once, without restarting the server.
+
+### 3. Put URL and token into the private config
+
+In `pystarlight.toml` (the repo root, mode 600, git-ignored; the defaults are in
+`config_template.toml`):
+
+```toml
+[pysyzygos_server]
+url = "http://phenom.local:8080/"   # the PySyzygos computer: name or address, port
+token = "..."                       # from step 2; empty for local mode on 127.0.0.1
+past_hours = 0                      # also list events that many hours back (for tests)
+```
+
+Instead of the config, `--pysyzygos URL` on the command line and the environment variables
+`$PYSYZYGOS_URL` / `$PYSYZYGOS_TOKEN` work too. The argument comes first, then the
+environment, then the config. Keep the token out of shell history and scripts that are shared.
+
+Check the link from the Pi (without printing the token):
+
+```bash
+python3 -c "import sys; sys.path.insert(0, 'src/pystarlight'); from capture import favorites as f; \
+u, t = f.server_settings(); print(u, 'token set' if t else 'no token'); \
+[print(f.describe(e)) for e in f.fetch_favorites(u, t, past=f.past_hours())]"
+```
+
+This runs with the Pi's system Python too: `favorites.py` uses the standard library only, and
+reads `pystarlight.toml` directly when the package's config module cannot be imported.
+
+### 4. Use it
+
+**Favorites** asks for the events from now (minus `past_hours`) to now + 12 h:
+
+- one event is taken at once. With several, a list shows each one (time, asteroid, star, G,
+  magnitude drop, duration, altitude, chance, site) to pick from;
+- the chosen event fills **Asteroid**, **Target** (the star's UCAC4 / TYC / DR3 name, looked up as
+  usual) and **Verify** (its Gaia DR3 id). It sets start **At UTC** = event - 40 s (whole
+  seconds) and **Stop after** 80 s, so the recording ends at event + 40 s;
+- already inside that window: the recording starts now and stops at event + 40 s. An event that
+  is over (only listed with `past_hours`) records 80 s from now, marked "(over: test recording
+  from now)";
+- the line below the button shows the event time and the star's altitude and azimuth, for
+  pointing;
+- the file name carries asteroid and star, e.g.
+  `MV-MIPI-IMX178M_3200-Phaethon-1983-TB_UCAC4-634-113397_20261102T010830Z.ravf`, and OBJNAME is the
+  asteroid. The viewer takes the object name for its results (`<movie>.event.json`) from there.
+
+Messages under the button: `favorites: PySyzygos refused the token (401)` (wrong or revoked
+token: make a new one), `[Errno 111] Connection refused` / timeout (server not running, wrong
+host or port, or the Pi is not on that network), `no favorites in the time window`.
 
 ## Review player
 

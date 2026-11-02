@@ -258,7 +258,7 @@ Written next to the movie:
 | `<movie>.csv` | light curves in **PyMovie's CSV layout: open it directly in PyOTE** |
 | `<movie>.pystarlight.csv` | every column (fit positions, FWHM, peak SNR, tracking shift/rotation, ...) |
 | `<movie>-summary.pdf/.png` | field with apertures, raw signals (target red and on top), normalised light curve vs UTC, drift |
-| `<movie>-summary-mag.pdf/.png` | the same layout in **magnitudes** (fainter down): on the catalogue G scale of the identified references (their summed light, smoothed like the normalisation, gives each frame's zero point, so clouds drop out; V if they have no G), else Δmag to the references. On the target's curve: a multi-step fit (`steps.fit_steps`, in flux) with each level's 1 sigma band and every transition (D/R) with its UTC time and 1 sigma error bar, plus a close-up row of the transitions; the times are also in the viewer's status line |
+| `<movie>-summary-mag.pdf/.png` | the same layout in **magnitudes** (fainter down): on the catalogue G scale of the identified references (their summed light, smoothed like the normalisation, gives each frame's zero point, so clouds drop out; V if they have no G), else Δmag to the references. On the target's curve: a multi-step fit (`steps.fit_steps`, in flux) with each level's 1 sigma band and every transition (D/R) with its UTC time and 1 sigma error bar, plus a close-up row of the transitions; the times are also in the viewer's status line (how it is fitted: [Event timing](#event-timing-the-automatic-step-fit)) |
 | `<movie>-mag-hist.pdf/.png` | magnitude histograms: the target in each level of the step fit (e.g. before D, between D and R, after R), and below for comparison all check stars (role `c`; without any, the two references closest to the target's magnitude), each with a fitted Gaussian envelope (mean and sigma in the legend) |
 | `<movie>.event.json` | the event: object (OBJNAME/OBJECT, else the ASTRID file-name prefix), target star (name, ids, G/V, RA/Dec, astrometric check), references and check stars, every fitted level (UTC span, flux and magnitude with error of the mean and per-frame scatter, or a 3 sigma 'fainter than' limit), every D/R (UTC, 1 sigma, chi^2 + 1 interval, Monte Carlo sigma, change, significance), D/R pairs nested from the inside with durations, recording metadata |
 | `<movie>.astrometry.json` | Gaia reduction (with the local catalogue): model, each star's O-C and magnitude, the apertures' RA/Dec and magnitudes |
@@ -271,6 +271,90 @@ role (`t` `r` `c` `k`) or a curve colour (`Y` `G` `W` `R`) over an aperture redr
 from the data already measured: e.g. make another star the target, drop a doubtful reference
 (give it `c`), or colour the references apart. The summary files are saved again each time; the
 CSV files keep what Run wrote (press Run again for those).
+
+### Event timing: the automatic step fit
+
+Every Run (and every redraw after a role change) also times the event, with no event window to
+mark. `steps.fit_steps` fits a **piecewise-constant model** (a "multi-step function") to the
+target's light curve. It finds how many levels there are, where they change, each
+disappearance (D) and reappearance (R) time to a fraction of a frame with a 1 sigma error, and
+each level's magnitude. The results go to the `-summary-mag` figure, the status line,
+`-mag-hist` and `<movie>.event.json`.
+
+**What is fitted.** The target's flux relative to the reference ensemble: the target signal
+divided by the summed, smoothed signal of the references (the same ensemble that gives the
+magnitude zero point, so clouds and transparency drop out). The fit is done in **flux**, not
+magnitudes: the curve is linear, and an occulted star at zero or negative flux is no problem.
+Magnitudes come afterwards, m = m0 - 2.5 log10(flux). m0 is on the catalogue G scale of the
+identified references (V if none has G), else the result is Δmag to the references. Rows
+without a value (NaN) are left out.
+
+**How the steps are found.**
+
+1. **Noise.** sigma is the point-to-point noise: the robust (MAD) rms of the frame-to-frame
+   differences divided by sqrt 2. Steps barely change it.
+2. **Change points.** These are found by binary segmentation, made circular. For each segment
+   the fit tries the best single split, and also the best "box" (a short dip inside the
+   segment, which no single split finds, e.g. a 0.4 s event in a long recording). A split
+   is kept while it lowers the sum of squares by more than `penalty` · ln(n) in units of
+   sigma² per change point (a box adds two). This is a BIC-like criterion: penalty 6 instead of
+   the BIC's 2, because real curves have red noise (scintillation, slow drifts), and 6 is about
+   6.4 sigma for 600 rows. At most 10 steps; a level has at least `min_len` = 2 frames.
+3. **Backward elimination.** With all splits in place, the weakest change point is dropped
+   while it no longer passes the threshold. The remaining points are then moved to their best
+   place between their neighbours (three passes).
+4. **Levels.** The mean flux of each level; the scatter is the robust rms of its frames, but at
+   least sigma; the error of the mean is scatter / sqrt n.
+5. **Clean-up.** A short level (≤ 2 · `min_len` frames) whose value lies between its neighbours
+   is not an event: it is the frame or two that were only partly exposed during the step. It
+   is joined to the nearer neighbour (step 6 models those frames). Then a step whose level
+   change is less than `min_significance` = 5 times its error (both levels' errors combined)
+   is removed, and the levels are recomputed until all steps pass.
+
+**Transition times, below one frame.** Each frame is taken as an exposure of one frame interval
+(the median spacing of the time stamps), centred on its time stamp. A frame that the step falls
+into therefore sees a mix of both levels, in proportion to the part of its exposure before the
+step. The step time tau is scanned on a grid of 1/20 frame across the frames around the step
+(up to 30 either side, at most half of each level). The chi² uses each level's own variance,
+with the levels held fixed. The best tau is the D or R time. Its 1 sigma is the larger of:
+
+- half the width of the chi² + 1 interval;
+- the scatter of tau fitted to 300 simulated curves (the fitted step plus noise like the
+  levels' scatter). This also counts the chance that the step lands a frame off, which the local
+  chi² profile misses.
+
+Both numbers are in `event.json` (`chi2_plus_1_interval_s`, `sigma_mc_s`) next to `sigma_s`.
+
+**Magnitudes.** Each level's magnitude error is 1.0857 · error / flux, plus its per-frame
+scatter. A level within 3 sigma of zero flux (the star is gone) has no magnitude, only a
+"fainter than" limit at 3 sigma.
+
+**Events.** D and R are paired from the inside out, like brackets: for D1 D2 R1 R2, D2 R1 is
+the inner event and D1 R2 the outer, e.g. a double star or a satellite. Each pair's duration
+error is the two sigmas added in quadrature.
+
+**How well it works.** Events were injected into a real recording (single, short 0.4 s,
+shallow, nested double). They were recovered within their sigma, with the normalised errors
+(fit - true) / sigma having an rms of 0.85 - 1.25. In 200 noise-only curves the fit found no
+step at all.
+
+**Limits.** The model is a sharp step. Fresnel diffraction, the star's diameter and gradual
+events (grazes, an extended or double star that is not resolved) are not modelled. For a
+report, fit the CSV in PyOTE as well and compare; these times are a quick, independent
+check. The partial-exposure model assumes the exposure fills the frame interval and the time
+stamps are mid-exposure, as on ASTRID and the Pi camera. With much shorter exposures than
+the interval the sub-frame part is only approximate, but the sigma (from the Monte Carlo)
+stays honest. Very strong red noise can still give a spurious slow step. The significance in the
+status line and in `event.json` shows how strong each step is.
+
+From Python:
+
+```python
+from pystarlight import steps
+fit = steps.fit_steps(t, flux)          # t in s (e.g. seconds of the day), flux normalised
+print(fit.describe())                   # D at ... ± ... s (change 98 %, 40 sigma); R at ...
+report = steps.event_report(fit, date='2026-11-02', m0=11.2, band='G')   # as in event.json
+```
 
 ### 4. Open in PyOTE
 
@@ -403,7 +487,7 @@ x, y = wcs.target_pixel(wcs.load_wcs(fits_path), '18h12m01s +22d07m00s')
 - **Mirrored images.** PyMovie's two-star solution assumes a non-mirrored image. For an image
   seen through an odd number of mirrors (e.g. a star diagonal) pass `mirrored=True`, or the
   target lands at its mirror position, typically tens of pixels away. Check with a third star.
-- **New code** (not in PyMovie): `normalize`, `timestamps.timing`, `plot`, `viewer`, the `mirrored`
+- **New code** (not in PyMovie): `normalize`, `steps` (event timing), `timestamps.timing`, `plot`, `viewer`, the `mirrored`
   option, and per-aperture calibration.
 - **Not included:** NRE/Naylor extraction, GCE, finder/stacking, `.pymovie` record files.
 - `ocr.py`, `wcs/manual.py` and `wcs/astrometry_client.py` are kept as close to PyMovie's
