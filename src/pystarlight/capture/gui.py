@@ -40,6 +40,7 @@ REANCHOR_LEAD_NS = 20 * 10**9   # set start time: anchor on GPS UTC this long be
 GAIN_STEPS = 10             # gain slider: 0.1 dB per step
 GAMMA_MIN, GAMMA_MAX = 0.1, 4.0
 STACK_FULL = 65535          # the shown stack: mean scaled to 0..this (keeps the fraction)
+SOLVE_RADIUS_DEG = 3.0      # plate solve: search this far around the expected position
 
 
 def review_command(path):
@@ -483,17 +484,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.solve_cancel = None
         self.solve_log = ""                 # its newest message
         self.solution = None                # result dict of the last solve
+        self.solve_count = 0                # solutions so far (a new one redoes the markers)
         self.solved_path = None             # the stack it belongs to
         self.auto_solved = None             # stack already sent by "Plate-solve when done"
         # markers (brightest stars + target, catalogue names) from the solution, in sensor
         # pixels of the stack's first frame: [{"x", "y", "r", "label", "kind"}]
         self.marks = []
-        self.marks_key = None               # (solution, target text, n) they were made for
+        self.marks_key = None               # (solve count, target, n, verify) they were made for
         self.marks_roi = (0, 0)             # the stack's region offset
         self.marks_thread = None            # naming them (worker thread: network)
         self.marks_log = ""
         self.marks_shift = (0.0, 0.0)       # field drift since the stack (live frames)
         self.marks_frame = None             # frame id the drift was last measured on
+        self.target_radec = None            # (ra, dec) of the target once looked up
         self.roi_seen = 0                   # controller.roi_changes already followed
         self.roi_pending = None             # selected/typed region not applied yet
         # last requested values (keys step from these, not from a lagging camera read-back)
@@ -1507,6 +1510,8 @@ class MainWindow(QtWidgets.QMainWindow):
                                     "short stacks or a tracking mount")
         self.focal_spin = QtWidgets.QDoubleSpinBox(decimals=1, maximum=10_000.0, suffix=" mm",
                                                    keyboardTracking=False)
+        # the command line wins; else the last focal length set (remembered across runs)
+        self.c.focal_mm = self.c.focal_mm or self.settings.value("focal_mm", 0.0, type=float)
         self.focal_spin.setValue(self.c.focal_mm)
         self.focal_spin.setSpecialValueText("unknown (blind solve)")
         self.focal_spin.valueChanged.connect(self.on_focal)
@@ -1515,7 +1520,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stars_spin = QtWidgets.QSpinBox(minimum=0, maximum=30, prefix="name the ",
                                              suffix=" brightest stars")
         self.stars_spin.setValue(5)
-        self.simbad_check = QtWidgets.QCheckBox("SIMBAD names", checked=True)
+        self.simbad_check = QtWidgets.QCheckBox(
+            "SIMBAD names", checked=self.settings.value("simbad", True, type=bool))
+        self.simbad_check.setToolTip("name the stars of the solution in SIMBAD (CDS) too; the "
+                                     "markers' UCAC4 / TYC / DR3 names do not need it")
+        self.simbad_check.toggled.connect(lambda on: self.settings.setValue("simbad", on))
         self.stack_button = QtWidgets.QPushButton()
         self.stack_button.setMinimumHeight(32)
         self.stack_button.clicked.connect(self.on_stack_button)
@@ -1582,6 +1591,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_focal(self, mm):
         c = self.c
         c.focal_mm = mm
+        self.settings.setValue("focal_mm", float(mm))
         if mm and c.pixel_um:
             self.scale_label.setText(f"{206.265 * c.pixel_um / mm:.2f}\"/px ({c.pixel_um} µm)")
         else:
@@ -1630,14 +1640,22 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         cancel = threading.Event()
         n, simbad = self.stars_spin.value(), self.simbad_check.isChecked()
+        center = self.solve_hint()
+        t0 = time.monotonic()
 
         def log(msg):
-            self.solve_log = msg
-            print(f"solve: {msg}")
+            self.solve_log = f"[{time.monotonic() - t0:.0f} s] {msg}"
+            print(f"solve: {self.solve_log}")
 
         def work():
             try:
-                self.solution = solve_fits(path, n, use_simbad=simbad, log=log, cancel=cancel)
+                sol = solve_fits(path, n, use_simbad=simbad, log=log, cancel=cancel,
+                                 center=center, radius_deg=SOLVE_RADIUS_DEG)
+                c = sol["center"]
+                self.settings.setValue("last_center", [c["ra"], c["dec"]])
+                print(f"solve: done in {time.monotonic() - t0:.1f} s")
+                self.solution = sol
+                self.solve_count += 1
                 self.solved_path = path
                 self.solve_log = ""
             except Exception as e:
@@ -1649,6 +1667,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.solve_log = "plate solving..."
         self.solve_thread = threading.Thread(target=work, daemon=True)
         self.solve_thread.start()
+
+    def solve_hint(self):
+        """Where the field probably is: the last solution's centre (this run or the last one),
+        else the target's position (from the markers). None: search the whole sky."""
+        if self.solution is not None:
+            c = self.solution["center"]
+            return c["ra"], c["dec"]
+        last = self.settings.value("last_center")
+        if last:
+            try:
+                return float(last[0]), float(last[1])
+            except (TypeError, ValueError, IndexError):
+                pass
+        return self.target_radec
 
     def show_solution_marks(self):
         sol = self.solution
@@ -1708,6 +1740,8 @@ class MainWindow(QtWidgets.QMainWindow):
                         notes.append(f"{kind}: {e}")
                         continue
                     found[kind] = t
+                    if kind == "target":
+                        self.target_radec = (t["ra"], t["dec"])
                     x, y = (float(v) for v in wcs.all_world2pix(t["ra"], t["dec"], 0))
                     mag = f"  {t['band']} {t['mag']:.1f}" if np.isfinite(t["mag"]) else ""
                     marks.append({"x": x, "y": y, "r": 8.0 if kind == "target" else 14.0,
@@ -1850,7 +1884,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if not self.view.circles:
                 self.show_solution_marks()
         if sol is not None and self.marks_thread is None:
-            key = (id(sol), self.target_edit.text().strip(), self.marks_spin.value(),
+            key = (self.solve_count, self.target_edit.text().strip(), self.marks_spin.value(),
                    self.verify_edit.text().strip())
             if key != self.marks_key:
                 self.start_marks(sol, key)

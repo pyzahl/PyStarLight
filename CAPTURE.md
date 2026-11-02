@@ -269,6 +269,11 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
   also says whether a star is detected at the target in the solved stack (sigma, offset from
   the catalogue position). Tycho-2 is looked up at ESA (`public.tycho2`, retried when ESA says
   "overloaded"), else VizieR. Target and Verify are remembered between runs.
+- **Faster solves**: the focal length is remembered between runs (`--focal-mm` wins), so the
+  scale hint is not lost on a restart (without it solve-field searches all scales: ~95 s instead
+  of ~6 s on a 1.24"/px stack). The solve also searches first within 3° of the last solution's
+  centre (remembered across runs), else of the target, and the whole sky only if that fails:
+  3.7 s with scale and position on the Pi 5. The SIMBAD checkbox is remembered too.
 - **Observer** and **Telescope** (Recording panel) are remembered between runs too; the command
   line (`--observer`, `--telescope`) wins when given. They go into the RAVF/SER header.
   First use (2026-11-01, 400 mm f/6, 1.24"/px): Gaia DR3 1963716673315870848 -> UCAC4

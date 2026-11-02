@@ -83,10 +83,14 @@ def solve_stack(image: np.ndarray, header: dict, n_stars: int = 5, workdir: str 
                 dest: Optional[str] = None, scale_arcsec: Optional[float] = None,
                 use_simbad: bool = True, site: Optional[dict] = None,
                 log: Callable[[str], None] = print,
-                cancel: Optional[threading.Event] = None) -> dict:
+                cancel: Optional[threading.Event] = None,
+                center: Optional[tuple[float, float]] = None, radius_deg: float = 2.0) -> dict:
     """Solve `image` with astrometry.net (local solve-field, or nova with the API key from
     [astrometry] in the config: see solve_astrometry_net) and describe the field; see the
-    module doc. Blocks for up to the config's timeout: use a thread."""
+    module doc. Blocks for up to the config's timeout: use a thread.
+
+    center: (ra, dec) deg where the field is expected (e.g. the last solution, the target),
+    searched within radius_deg; if the solve fails there it is tried once more without it."""
     from ..config import load
     from ..config import site as get_site
     cfg = load()
@@ -97,11 +101,24 @@ def solve_stack(image: np.ndarray, header: dict, n_stars: int = 5, workdir: str 
     scale = scale_arcsec or scale_hint(header)
     log(f'plate-scale hint {scale:.2f}"/px' if scale else 'no plate-scale hint (blind solve)')
     dest = dest or str(Path(workdir) / 'stack.wcs.fit')
-    path, job = solve_astrometry_net(
-        img, workdir=str(Path(workdir) / '.wcs-work'), log=log, cancel=cancel,
-        scale_arcsec=scale, scale_err_pct=float(cfg['astrometry']['scale_err_pct']),
-        dest=dest, return_job=True,
-        downsample=2 if shape[1] > DOWNSAMPLE_ABOVE_PX else None)
+
+    def solve(near):
+        return solve_astrometry_net(
+            img, workdir=str(Path(workdir) / '.wcs-work'), log=log, cancel=cancel,
+            scale_arcsec=scale, scale_err_pct=float(cfg['astrometry']['scale_err_pct']),
+            center=near, radius_deg=radius_deg, dest=dest, return_job=True,
+            downsample=2 if shape[1] > DOWNSAMPLE_ABOVE_PX else None)
+    if center is not None:
+        log(f'searching within {radius_deg:g} deg of RA {center[0]:.3f} Dec {center[1]:+.3f}')
+        try:
+            path, job = solve(center)
+        except Exception as e:
+            if cancel is not None and cancel.is_set():
+                raise
+            log(f'not solved near the expected position ({e}); trying the whole sky')
+            path, job = solve(None)
+    else:
+        path, job = solve(None)
     wcs = load_wcs(path)
     o = orientation(wcs, shape)
     fw, fh = field_size(wcs, shape)
@@ -131,7 +148,8 @@ def solve_stack(image: np.ndarray, header: dict, n_stars: int = 5, workdir: str 
 
 def solve_fits(path: str, n_stars: int = 5, scale_arcsec: Optional[float] = None,
                use_simbad: bool = True, log: Callable[[str], None] = print,
-               cancel: Optional[threading.Event] = None) -> dict:
+               cancel: Optional[threading.Event] = None,
+               center: Optional[tuple[float, float]] = None, radius_deg: float = 2.0) -> dict:
     """solve_stack for a FITS file; writes <stem>.wcs.fit and <stem>.solve.json next to it."""
     from astropy.io import fits
     p = Path(path)
@@ -139,7 +157,8 @@ def solve_fits(path: str, n_stars: int = 5, scale_arcsec: Optional[float] = None
         img, header = hdul[0].data, dict(hdul[0].header)
     out = solve_stack(img, header, n_stars, workdir=str(p.parent),
                       dest=str(p.with_name(p.stem + '.wcs.fit')), scale_arcsec=scale_arcsec,
-                      use_simbad=use_simbad, log=log, cancel=cancel)
+                      use_simbad=use_simbad, log=log, cancel=cancel, center=center,
+                      radius_deg=radius_deg)
     out['stack'] = str(p)
     p.with_name(p.stem + '.solve.json').write_text(json.dumps(out, indent=1, default=_json))
     return out
