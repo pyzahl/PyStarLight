@@ -11,7 +11,7 @@ PyOTE source: `../py-ote`. PySyzygos (formerly PyOccult; sites, local Gaia extra
 ## Working rules (from the owner)
 
 - **Do not commit or push** unless asked. When asked, give the command; the owner runs it.
-- **Never write into `OTEVideo/`, `CZ-Data/` or `DarkLight/`** (owner data, git-ignored; OTEVideo is a symlink to the owner's recordings on an external drive,
+- **Never write into `OTEVideo/`, `CZ-Data/`, `DarkLight/` or `Data/`** (owner data, git-ignored; OTEVideo is a symlink to the owner's recordings on an external drive,
   git-ignored). Test on a scratch copy: a folder with a symlink to the `.ravf` plus copies of
   `<movie>.wcs.fit/.wcs.json/.stars.json/.apertures.json`. A real `apertures.json` was once
   overwritten by a test run; the viewer saves next to the movie on run and on `s`.

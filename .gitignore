@@ -30,6 +30,7 @@ pystarlight.toml
 # Local observation data sets
 CZ-Data
 DarkLight
+Data
 
 # scratch output of local test runs
 .wcs-work/
