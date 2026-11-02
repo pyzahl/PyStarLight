@@ -1172,12 +1172,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def fetch_favorites(self):
         """Favorites button: ask the PySyzygos server (worker thread) for the next 12 h."""
         url, token = favorites.server_settings(getattr(self.args, "pysyzygos", None))
+        past = favorites.past_hours()
         self.fav_button.setEnabled(False)
-        self.event_info.setText(f"asking {url or 'PySyzygos'} for the next 12 h ...")
+        self.event_info.setText(f"asking {url or 'PySyzygos'} for the next 12 h"
+                                + (f" (and the last {past:g} h)" if past else "") + " ...")
 
         def work():
             try:
-                self.favorites_ready.emit(favorites.fetch_favorites(url, token))
+                self.favorites_ready.emit(favorites.fetch_favorites(url, token, past=past))
             except Exception as e:          # no server, refused token, bad answer
                 self.favorites_ready.emit(f"favorites: {e}")
         threading.Thread(target=work, daemon=True).start()
@@ -1188,13 +1190,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.event_info.setText(result)
             return
         if not result:
-            self.event_info.setText("no favorites in the next 12 h")
+            self.event_info.setText("no favorites in the time window")
             return
         fav = result[0]
         if len(result) > 1:
             items = [favorites.describe(f) for f in result]
             choice, ok = QtWidgets.QInputDialog.getItem(self, "PySyzygos favorites",
-                                                        f"{len(result)} events in the next 12 h:",
+                                                        f"{len(result)} events:",
                                                         items, 0, False)
             if not ok:
                 self.event_info.setText("")
@@ -1214,6 +1216,8 @@ class MainWindow(QtWidgets.QMainWindow):
         start = plan["start"].replace(microsecond=0)            # the start field has whole seconds
         end = plan["event"] + timedelta(seconds=favorites.TRAIL_S)
         now = datetime.now(timezone.utc)
+        if end <= now:                          # over (past_hours, tests): the same length, now
+            end = now + timedelta(seconds=plan["duration_s"])
         if start <= now:
             self.start_now.setChecked(True)
             dur = (end - now).total_seconds()
@@ -1226,7 +1230,9 @@ class MainWindow(QtWidgets.QMainWindow):
         star = fav.get("star") or {}
         alt = (f", star alt {star['alt']:.0f} az {star['az']:.0f}"
                if star.get("alt") is not None and star.get("az") is not None else "")
-        self.event_info.setText(f"event {plan['event'].strftime('%H:%M:%S.%f')[:12]} UTC: "
+        past = " (over: test recording from now)" if plan["event"] + timedelta(
+            seconds=favorites.TRAIL_S) <= now else ""
+        self.event_info.setText(f"event {plan['event'].strftime('%H:%M:%S.%f')[:12]} UTC{past}: "
                                 f"{favorites.describe(fav)}{alt}")
         print(f"Favorite {fav.get('key')}: recording {self.start_time.time().toString('HH:mm:ss')}"
               f" UTC for {self.dur_spin.value():.1f} s")

@@ -152,6 +152,7 @@ gaia_dir = ""
 # (not needed for a local-mode PySyzygos on 127.0.0.1). Also: --pysyzygos URL, $PYSYZYGOS_TOKEN.
 url = ""
 token = ""
+past_hours = 0             # also list events up to this many hours ago (tests: record a recent one now)
 
 [output]
 # Stacked field image after each run: all analysed frames shifted/rotated back by the tracking

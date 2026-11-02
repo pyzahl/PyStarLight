@@ -293,7 +293,9 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
   window: start now, stop at event + 40 s). The line below shows the event time and the star's
   altitude and azimuth for pointing. Server and token: `[pysyzygos_server] url / token` in the
   private config (the token from `pysyzygos gui --new-token PyStarLight`; a local-mode PySyzygos
-  on 127.0.0.1 needs none), or `--pysyzygos URL` and `$PYSYZYGOS_URL` / `$PYSYZYGOS_TOKEN`. Works
+  on 127.0.0.1 needs none), or `--pysyzygos URL` and `$PYSYZYGOS_URL` / `$PYSYZYGOS_TOKEN`. `past_hours`
+  (default 0) lists events that many hours back too, for tests: a chosen event that is over
+  records the same 80 s from now. Works
   with the system Python too (standard library only; the config is read directly).
 
 ## Review player

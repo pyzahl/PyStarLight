@@ -34,7 +34,8 @@ uses [Semantic Versioning](https://semver.org/).
 - Camera: **Favorites** button and **Asteroid** field (`capture/favorites.py`, `--pysyzygos URL`,
   `[pysyzygos_server]`): tonight's events (next 12 h) from a PySyzygos server's favorites API,
   a list when there are several; fills asteroid, target star, its Gaia DR3 id to verify, and the
-  recording window (event - 40 s to + 40 s). The asteroid goes into the file name before the star
+  recording window (event - 40 s to + 40 s; `past_hours` lists recent events too, for tests).
+  The asteroid goes into the file name before the star
   and into OBJNAME.
 - Viewer star field: a target star by Gaia DR3 id, UCAC4, TYC, HIP name, RA/Dec or SIMBAD name
   (`wcs.identify.find_star`, `localcat.parse_star_id`, `LocalGaia.find`: the solved field searched
