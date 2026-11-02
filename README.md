@@ -1,14 +1,60 @@
 # PyStarLight <img src="src/pystarlight/pystarlight_logo.svg" alt="" width="96" align="right">
 
-Light curves from occultation videos, as a Python library: movie readers for every common
-format, frame timestamps (embedded or read from a VTI overlay), star tracking through wind-shake
-and field rotation, aperture photometry, and reference-star normalisation. A minimal matplotlib
-viewer (`pystarlight-view`) for marking stars; results open in PyOTE.
+**Occultation light curves from start to finish:** record GPS-timed video at the telescope,
+check it, measure the stars and time the event. The results open directly in
+[PyOTE](https://github.com/bob-anderson-ok/py-ote).
 
-Most of the processing is derived from [PyMovie](https://github.com/bob-anderson-ok/pymovie) 4.2.8
-by Bob Anderson, and tests check that it gives the same numbers.
+PyStarLight is a Python library with three small programs on top of it:
 
-Additional tools: player for video+info review, experimental GPS time stamping video recorder for RPi MIPI cameras (veye,...) with hardware trigger and M8N GPS module.
+- **`pystarlight-view`, the analysis viewer.** It opens a recording in any common format and
+  plate-solves the field (online or offline). It finds the target by name (Gaia DR3, UCAC4,
+  TYC, SIMBAD), even when the star is too faint to see. You mark target, reference and check
+  stars and press Run. The tracking follows wind-shake, drift and field rotation, with the
+  target interpolated through the event. The output is:
+  - a light curve in PyMovie's CSV layout, ready for PyOTE;
+  - summary figures in flux and catalogue magnitudes;
+  - an **automatic step fit** that gives each disappearance and reappearance time, with a
+    1 sigma error;
+  - magnitude histograms;
+  - an `event.json` with every detail of the event.
+- **`pystarlight-camera`, capture on a Raspberry Pi 5 (experimental).** It records frames GPS-triggered and
+  stamped in UTC (VEYE MIPI or Aravis cameras, u-blox GPS) to RAVF or SER, with a live stack and
+  plate solve. Tonight's events can be loaded from a [PySyzygos](https://github.com/pyzahl/PySyzygos)
+  favorites server: target star, asteroid and the recording window are filled in for you.
+- **`pystarlight-review`, a player for a recording.** It checks the time stamps (dropped and
+  irregular frames), and stacks and plate-solves a frame range.
+
+The processing is derived from [PyMovie](https://github.com/bob-anderson-ok/pymovie) 4.2.8 by
+Bob Anderson. There are two analysis modes:
+
+- **PyMovie mode** (`analyze()`) reproduces PyMovie's numbers bit for bit, and the tests run
+  PyMovie's own code to check this;
+- **global mode** (`analyze_global()`, the viewer's default) is new. It uses peak fits, one
+  weighted rigid transform for all stars, and sub-pixel apertures. On a faint star it gives
+  about a quarter of the normalised scatter.
+
+Supported recordings: RAVF (ASTRID), SER, ADV/AAV, AVI/MOV, FITS folders. Timestamps come from
+the file or are read from a VTI overlay. MIT licence.
+
+## Contents
+
+- [Install](#install)
+- [The tools](#the-tools)
+- [Getting started](#getting-started)
+  - [1. Install and configure (once)](#1-install-and-configure-once)
+  - [2. Mark the stars](#2-mark-the-stars)
+  - [3. Run](#3-run)
+  - [Event timing: the automatic step fit](#event-timing-the-automatic-step-fit)
+  - [4. Open in PyOTE](#4-open-in-pyote)
+  - [Same thing from Python](#same-thing-from-python)
+- [Example](#example)
+  - [Analog video with a VTI](#analog-video-with-a-vti)
+  - [Dark / flat calibration](#dark--flat-calibration)
+  - [Figures](#figures)
+  - [Locate the target](#locate-the-target)
+- [Package layout](#package-layout)
+- [Things to know](#things-to-know)
+- [Licence](#licence)
 
 ## Install
 
