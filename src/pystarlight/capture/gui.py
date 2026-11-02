@@ -82,6 +82,7 @@ class ImageView(QtWidgets.QWidget):
         self.hline = None           # (row, QColor): a dashed line across the image
         self.hspan = 0              # rows above/below it: dotted lines (0: none)
         self.circles = []           # [(x, y, radius, text, QColor)]: stars (image pixels)
+        self.markers = []           # [(x, y, radius, text, QColor)]: ticks around, star left free
         self.banner = ""            # shown at the bottom (e.g. while the stack is displayed)
         self.cursor_img = None      # image point under the mouse
 
@@ -171,6 +172,7 @@ class ImageView(QtWidgets.QWidget):
             p.drawEllipse(QtCore.QPointF(cx, cy), rs, rs)
             if text:
                 p.drawText(QtCore.QPointF(cx + rs + 3, cy - 3), text)
+        self.paint_markers(p)
         if self.zoom > 1.0:
             p.setPen(QtCore.Qt.yellow)
             p.drawText(8, 18, f"zoom {self.zoom:.1f}×  (double-click: fit)")
@@ -181,6 +183,27 @@ class ImageView(QtWidgets.QWidget):
             p.setPen(QtCore.Qt.white)
             p.drawText(r, QtCore.Qt.AlignCenter, self.banner)
         p.end()
+
+    def paint_markers(self, p):
+        """Four ticks around each star, starting outside its image (the star stays visible),
+        and the label up and to the right of the upper-right tick, on a dark box."""
+        for x, y, r, text, color in self.markers:
+            cx, cy = self.to_screen(x + 0.5, y + 0.5)
+            if not (-50 < cx < self.width() + 50 and -50 < cy < self.height() + 50):
+                continue
+            r0 = max(12.0, r * self.map[4] + 4.0)       # gap: the star's radius on screen
+            r1 = r0 + 12.0
+            pen = QtGui.QPen(color, 2)
+            pen.setCosmetic(True)
+            p.setPen(pen)
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                p.drawLine(QtCore.QPointF(cx + dx * r0, cy + dy * r0),
+                           QtCore.QPointF(cx + dx * r1, cy + dy * r1))
+            if text:
+                br = p.fontMetrics().boundingRect(text).adjusted(-3, -1, 3, 1)
+                br.moveBottomLeft(QtCore.QPoint(int(cx + 0.7 * r1), int(cy - 0.7 * r1)))
+                p.fillRect(br, QtGui.QColor(0, 0, 0, 150))
+                p.drawText(br, QtCore.Qt.AlignCenter, text)
 
     def wheelEvent(self, e):
         if self.map is None:
@@ -462,12 +485,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.solution = None                # result dict of the last solve
         self.solved_path = None             # the stack it belongs to
         self.auto_solved = None             # stack already sent by "Plate-solve when done"
+        # markers (brightest stars + target, catalogue names) from the solution, in sensor
+        # pixels of the stack's first frame: [{"x", "y", "r", "label", "kind"}]
+        self.marks = []
+        self.marks_key = None               # (solution, target text, n) they were made for
+        self.marks_roi = (0, 0)             # the stack's region offset
+        self.marks_thread = None            # naming them (worker thread: network)
+        self.marks_log = ""
+        self.marks_shift = (0.0, 0.0)       # field drift since the stack (live frames)
+        self.marks_frame = None             # frame id the drift was last measured on
         self.roi_seen = 0                   # controller.roi_changes already followed
         self.roi_pending = None             # selected/typed region not applied yet
         # last requested values (keys step from these, not from a lagging camera read-back)
         self.target = {"exposure": ctx.controller.exposure_us, "gain": ctx.controller.gain_db}
 
-        self.settings = QtCore.QSettings("PyStarLight", "camera")     # panel layout only
+        self.settings = QtCore.QSettings("PyStarLight", "camera")  # layout, target, observer, telescope
         self.view = ImageView()
         self.view.changed.connect(self.on_view_changed)
         self.view.selected.connect(self.on_roi_selected)
@@ -521,6 +553,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         ("t", self.software_trigger),
                         ("s", self.on_stack_button),
                         ("c", self.continue_live),
+                        ("m", self.marks_check.toggle),
                         ("Esc", self.continue_live),
                         ("q", self.close)):
             QShortcut(QtGui.QKeySequence(key), self, fn)
@@ -1026,8 +1059,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dir_edit = QtWidgets.QLineEdit(self.args.record_dir)
         browse = QtWidgets.QToolButton(text="…")
         browse.clicked.connect(self.browse_dir)
-        self.observer_edit = QtWidgets.QLineEdit(self.args.observer)
-        self.telescope_edit = QtWidgets.QLineEdit(self.args.telescope)
+        # the command line wins; else the last values typed (remembered across runs)
+        self.observer_edit = QtWidgets.QLineEdit(
+            self.args.observer or self.settings.value("observer", "", type=str))
+        self.telescope_edit = QtWidgets.QLineEdit(
+            self.args.telescope or self.settings.value("telescope", "", type=str))
+        self.telescope_edit.setPlaceholderText("e.g. 67 mm f/6 refractor, 400 mm")
+        for key, edit in (("observer", self.observer_edit), ("telescope", self.telescope_edit)):
+            edit.editingFinished.connect(
+                lambda key=key, edit=edit: self.settings.setValue(key, edit.text().strip()))
         self.format_combo = QtWidgets.QComboBox()
         self.format_combo.addItems([f.upper() for f in RECORD_FORMATS])
         self.format_combo.setCurrentIndex(RECORD_FORMATS.index(self.args.record_format))
@@ -1133,6 +1173,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         rec.out_dir = os.path.expanduser(self.dir_edit.text().strip() or self.args.record_dir)
         rec.text.update(observer=self.observer_edit.text(), telescope=self.telescope_edit.text())
+        self.settings.setValue("observer", self.observer_edit.text().strip())
+        self.settings.setValue("telescope", self.telescope_edit.text().strip())
         rec.fmt = RECORD_FORMATS[self.format_combo.currentIndex()]
         start_ns = None
         if self.start_at.isChecked():
@@ -1211,9 +1253,12 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.levels.auto_levels()
             if self.stack_img is not None:
                 img, n, scale = self.stack_img, STACK_FULL + 1, STACK_FULL / c.decode.max_value
+        if new_frame and self.marks and self.marks_check.isChecked() and not self.stack_show.isChecked():
+            self.track_marks(self.img)
         if img is None or not self.redraw:
             return
         self.redraw = False
+        self.place_marks()
         # Order: debayer (needs full res) -> crop + scale to the view -> levels + gamma LUT
         frame = cv2.cvtColor(img, c.decode.bayer_code) if c.decode.bayer_code is not None else img
         self.view.render(frame, self.display_lut(n, scale))
@@ -1481,6 +1526,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stack_show.setToolTip("the view shows the stack (with the identified stars) "
                                    "instead of the live frames")
         self.stack_show.toggled.connect(self.on_stack_show)
+        self.target_edit = QtWidgets.QLineEdit(self.settings.value("target", "", type=str))
+        self.target_edit.setPlaceholderText("Gaia DR3 id, UCAC4 zzz-nnnnnn or RA Dec")
+        self.target_edit.setToolTip("occultation target, marked on the view after a plate solve "
+                                    "(looked up online at GAVO / ESA)")
+        self.target_edit.editingFinished.connect(self.on_target)
+        self.verify_edit = QtWidgets.QLineEdit(self.settings.value("verify", "", type=str))
+        self.verify_edit.setPlaceholderText("another ID of the target, to check (DR3 / UCAC4 / TYC)")
+        self.verify_edit.setToolTip("e.g. the prediction's UCAC4 or TYC number: marked too, and "
+                                    "the panel says whether it is the same star as Target")
+        self.verify_edit.editingFinished.connect(self.on_target)
+        self.marks_spin = QtWidgets.QSpinBox(minimum=0, maximum=10, prefix="mark ",
+                                             suffix=" brightest")
+        self.marks_spin.setValue(self.settings.value("mark_stars", 3, type=int))
+        self.marks_spin.valueChanged.connect(self.on_target)
+        self.marks_check = QtWidgets.QCheckBox("Markers  (m)", checked=True)
+        self.marks_check.setToolTip("ticks and catalogue names (UCAC4, else TYC, else Gaia DR3) "
+                                    "for the target and the brightest stars; they follow the "
+                                    "field's drift on the live frames")
+        self.marks_check.toggled.connect(lambda _: self.on_view_changed())
         self.stack_info = QtWidgets.QLabel(wordWrap=True)
         self.stack_info.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         self.stack_info.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
@@ -1493,10 +1557,16 @@ class MainWindow(QtWidgets.QMainWindow):
         g.addWidget(self.solve_check, 2, 0, 1, 2)
         g.addWidget(self.simbad_check, 2, 2)
         g.addWidget(self.stars_spin, 3, 0, 1, 3)
+        g.addWidget(QtWidgets.QLabel("Target"), 4, 0)
+        g.addWidget(self.target_edit, 4, 1, 1, 2)
+        g.addWidget(QtWidgets.QLabel("Verify"), 5, 0)
+        g.addWidget(self.verify_edit, 5, 1, 1, 2)
+        g.addWidget(self.marks_spin, 6, 1)
+        g.addWidget(self.marks_check, 6, 2)
         buttons = QtWidgets.QHBoxLayout()
         for w in (self.stack_button, self.solve_button, self.stack_show):
             buttons.addWidget(w)
-        g.addLayout(buttons, 4, 0, 1, 3)
+        g.addLayout(buttons, 7, 0, 1, 3)
         self.live_button = QtWidgets.QPushButton("▶  Continue live view  (c)")
         self.live_button.setMinimumHeight(32)
         self.live_button.setStyleSheet("font-weight: bold;")
@@ -1504,8 +1574,8 @@ class MainWindow(QtWidgets.QMainWindow):
                                     "stack and its solution stay ('Show stack' brings them back)")
         self.live_button.clicked.connect(self.continue_live)
         self.live_button.setVisible(False)
-        g.addWidget(self.live_button, 5, 0, 1, 3)
-        g.addWidget(self.stack_info, 6, 0, 1, 3)
+        g.addWidget(self.live_button, 8, 0, 1, 3)
+        g.addWidget(self.stack_info, 9, 0, 1, 3)
         self.on_focal(self.c.focal_mm)
         return box
 
@@ -1590,6 +1660,165 @@ class MainWindow(QtWidgets.QMainWindow):
                              for i, s in enumerate(sol.get("stars", []), 1)]
         self.view.update()
 
+    # ---- markers: target and brightest stars with catalogue names ----
+    def on_target(self):
+        self.settings.setValue("target", self.target_edit.text().strip())
+        self.settings.setValue("verify", self.verify_edit.text().strip())
+        self.settings.setValue("mark_stars", self.marks_spin.value())
+        self.marks_key = None                   # made again (update_stack_box starts it)
+
+    def start_marks(self, sol, key):
+        """Name the brightest stars and find the target (worker thread: VO look-ups)."""
+        text, n, check = key[1], key[2], key[3]
+
+        def log(msg):
+            self.marks_log = msg
+            print(f"markers: {msg}")
+
+        def work():
+            marks, notes = [], []
+            try:
+                from astropy.io import fits
+                from astropy.wcs import WCS
+
+                from pystarlight.wcs.catnames import catalog_name, decimal_year, resolve_target, verify
+                try:
+                    hdr = fits.getheader(sol["stack"])
+                    roi = (int(hdr.get("ROIX", 0)), int(hdr.get("ROIY", 0)))
+                except Exception:
+                    roi = (0, 0)
+                epoch = decimal_year(sol["time"]) if sol.get("time") else None
+                radius = max(5.0, 3.0 * sol["scale_arcsec"])
+                for i, s in enumerate(sol.get("stars", [])[:n], 1):
+                    log(f"naming star {i}")
+                    hit = catalog_name(s["ra"], s["dec"], radius, epoch, log=log)
+                    name = hit["name"] if hit else (s.get("name") or s.get("ra_hms", ""))
+                    mag = f"  {hit['mag']:.1f}" if hit and np.isfinite(hit["mag"]) else ""
+                    marks.append({"x": s["x"], "y": s["y"], "r": max(4.0, 1.5 * (s.get("fwhm") or 3)),
+                                  "label": f"{i} {name}{mag}", "kind": "star"})
+                wcs = WCS(fits.getheader(sol["wcs"]))
+                found = {}
+                for kind, query, tag in (("target", text, "T"), ("verify", check, "V")):
+                    if not query:
+                        continue
+                    log(f"looking up {query}")
+                    try:
+                        t = resolve_target(query, epoch, log=log)
+                    except Exception as e:
+                        notes.append(f"{kind}: {e}")
+                        continue
+                    found[kind] = t
+                    x, y = (float(v) for v in wcs.all_world2pix(t["ra"], t["dec"], 0))
+                    mag = f"  {t['band']} {t['mag']:.1f}" if np.isfinite(t["mag"]) else ""
+                    marks.append({"x": x, "y": y, "r": 8.0 if kind == "target" else 14.0,
+                                  "label": f"{tag} {t['name']}{mag}", "kind": kind})
+                    ids = ", ".join(v for k, v in t["ids"].items() if v != t["name"])
+                    notes.append(f"{tag} {t['name']}" + (f" = {ids}" if ids else "")
+                                 + f"{mag} at x {x + roi[0]:.0f}, y {y + roi[1]:.0f}"
+                                 + ("" if 0 <= x < sol["width"] and 0 <= y < sol["height"]
+                                    else "  (OUTSIDE the stacked field)"))
+                    if kind == "target":
+                        notes.append("   " + self.detect_text(sol, x, y))
+                if len(found) == 2:
+                    v = verify(found["target"], found["verify"])
+                    notes.append(v["text"])
+                    if v["same"]:                   # one marker, the verify label under it
+                        vm = marks.pop()
+                        marks[-1]["label"] += "  ✓ " + vm["label"][2:].split("  ")[0]
+                for m in marks:                     # stack pixels -> sensor pixels
+                    m["x"] += roi[0]
+                    m["y"] += roi[1]
+                self.marks_roi = roi
+            except Exception as e:
+                notes.append(f"markers: {e}")
+            self.marks, self.marks_shift, self.marks_frame = marks, (0.0, 0.0), None
+            self.marks_log = "\n".join(notes)
+            print(f"markers: {self.marks_log}" if notes else f"markers: {len(marks)}")
+            self.redraw = True
+            self.marks_thread = None
+
+        self.marks_key = key
+        self.marks_log = "naming the stars..."
+        self.marks_thread = threading.Thread(target=work, daemon=True)
+        self.marks_thread.start()
+
+    @staticmethod
+    def detect_text(sol, x, y, half=15):
+        """Is there a star at (x, y) of the solved stack? Offset and significance of the
+        brightest smoothed peak within `half` px."""
+        try:
+            from astropy.io import fits
+            img = np.asarray(fits.getdata(sol["stack"]), dtype=np.float32)
+        except Exception as e:
+            return f"not checked in the stack ({e})"
+        H, W = img.shape[:2]
+        x0, y0 = int(round(x)) - 3 * half, int(round(y)) - 3 * half
+        if x0 < 0 or y0 < 0 or x0 + 6 * half >= W or y0 + 6 * half >= H:
+            return "too near the edge to check in the stack"
+        box = cv2.GaussianBlur(img[y0:y0 + 6 * half + 1, x0:x0 + 6 * half + 1], (7, 7), 2.0)
+        sky = float(np.median(box))
+        noise = 1.4826 * float(np.median(np.abs(box - sky))) + 1e-6
+        inner = box[2 * half:4 * half + 1, 2 * half:4 * half + 1]
+        j, i = np.unravel_index(int(np.argmax(inner)), inner.shape)
+        snr = (inner[j, i] - sky) / noise
+        dx, dy = x0 + 2 * half + i - x, y0 + 2 * half + j - y
+        sep = float(np.hypot(dx, dy)) * sol["scale_arcsec"]
+        if snr < 5:
+            return f"NO star detected at the target in the stack (best {snr:.1f} sigma)"
+        return (f"detected in the stack: {snr:.0f} sigma, {np.hypot(dx, dy):.1f} px "
+                f"({sep:.1f}\") from the catalogue position")
+
+    def track_marks(self, img):
+        """Field drift of a live frame against the stack: the bright marked stars' centroids
+        near where they were (the target is too faint to steer by)."""
+        if self.frame_id == self.marks_frame or img is None or img.ndim != 2:
+            return
+        self.marks_frame = self.frame_id
+        rx, ry = self.c.region[:2]
+        H, W = img.shape
+        half = 40                               # search box: drift between measurements
+        found = []
+        for m in self.marks:
+            if m["kind"] != "star":
+                continue
+            px = m["x"] - rx + self.marks_shift[0]
+            py = m["y"] - ry + self.marks_shift[1]
+            x0, y0 = int(px) - half, int(py) - half
+            if x0 < 0 or y0 < 0 or x0 + 2 * half >= W or y0 + 2 * half >= H:
+                continue
+            box = cv2.GaussianBlur(img[y0:y0 + 2 * half + 1, x0:x0 + 2 * half + 1].astype(np.float32),
+                                   (5, 5), 1.5)
+            sky = float(np.median(box))
+            noise = 1.4826 * float(np.median(np.abs(box - sky))) + 1e-3
+            j, i = np.unravel_index(int(np.argmax(box)), box.shape)
+            if box[j, i] - sky < 10 * noise:
+                continue
+            r = max(4, int(m["r"]))
+            ys, xs = slice(max(0, j - r), j + r + 1), slice(max(0, i - r), i + r + 1)
+            w = np.clip(box[ys, xs] - sky - 3 * noise, 0, None)
+            if w.sum() <= 0:
+                continue
+            yy, xx = np.mgrid[ys, xs]
+            found.append((x0 + (xx * w).sum() / w.sum() - (m["x"] - rx),
+                          y0 + (yy * w).sum() / w.sum() - (m["y"] - ry)))
+        if found:
+            self.marks_shift = tuple(float(v) for v in np.median(np.array(found), axis=0))
+
+    def place_marks(self):
+        """The markers in the shown image's pixels (the stack: as solved; live: drift followed)."""
+        if not self.marks or not self.marks_check.isChecked():
+            self.view.markers = []
+            return
+        if self.stack_show.isChecked():
+            ox, oy, (dx, dy) = *self.marks_roi, (0.0, 0.0)
+        else:
+            ox, oy = self.c.region[:2]
+            dx, dy = self.marks_shift
+        colors = {"star": QtGui.QColor("#40c4ff"), "target": QtGui.QColor("#ff4081"),
+                  "verify": QtGui.QColor("#ffd740")}
+        self.view.markers = [(m["x"] - ox + dx, m["y"] - oy + dy, m["r"], m["label"],
+                              colors[m["kind"]]) for m in self.marks]
+
     def update_stack_box(self):
         st = self.c.stacker
         if st.state == "stacking":
@@ -1620,6 +1849,13 @@ class MainWindow(QtWidgets.QMainWindow):
             text += ("\n" if text else "") + describe(sol)
             if not self.view.circles:
                 self.show_solution_marks()
+        if sol is not None and self.marks_thread is None:
+            key = (id(sol), self.target_edit.text().strip(), self.marks_spin.value(),
+                   self.verify_edit.text().strip())
+            if key != self.marks_key:
+                self.start_marks(sol, key)
+        if self.marks_log:
+            text += ("\n" if text else "") + self.marks_log
         if text != self.stack_info.text():
             self.stack_info.setText(text)
         banner = ""

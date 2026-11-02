@@ -252,6 +252,27 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
   frame, solved offline in 7.8 s: centre RA 22h34m27s Dec +46°12' (Lacerta), 17.34° x 11.64°,
   20.37"/px (nominal 20.6"), north 102° from up; the five brightest stars named by SIMBAD
   (α Lac, 1 Lac, 5 Lac, HD 211073, ο And; V 3.6-4.5).
+- **Target and markers**: after a solve the view marks the target (pink) and the `mark N
+  brightest` stars (blue, default 3) with four ticks around each star (the star itself stays
+  free) and a label: the catalogue name an occultation prediction uses, UCAC4, else TYC, else
+  Gaia DR3, and the magnitude (`pystarlight.wcs.catnames`). **Target** takes `Gaia DR3 <id>`,
+  `UCAC4 zzz-nnnnnn` or RA Dec (`21:24:59.4 +36:40:45` or degrees); it is remembered. Names come
+  from the local Gaia catalogue when there is one, else online (UCAC4 and Gaia DR3 at GAVO,
+  Gaia DR3 also at ESA; CDS is not needed). On the live frames the markers follow the field's
+  drift: each new frame the bright marked stars are re-centred within ±40 px and their median
+  shift moves all markers (the target is usually too faint to steer by). Key `m` hides them.
+- **Verify**: a second ID of the target (e.g. the prediction's UCAC4 or TYC while Target holds the
+  Gaia DR3 id; any of DR3 / UCAC4 / TYC in either field). Both are looked up and cross-identified
+  (all their UCAC4 / TYC / DR3 IDs listed in the panel); within 1.5" and without a conflicting
+  ID they are the SAME STAR: one marker, the label gets `✓ <verify id>`. Otherwise the panel says
+  DIFFERENT STARS with the separation and the verify ID gets its own (yellow) marker. The panel
+  also says whether a star is detected at the target in the solved stack (sigma, offset from
+  the catalogue position). Tycho-2 is looked up at ESA (`public.tycho2`, retried when ESA says
+  "overloaded"), else VizieR. Target and Verify are remembered between runs.
+- **Observer** and **Telescope** (Recording panel) are remembered between runs too; the command
+  line (`--observer`, `--telescope`) wins when given. They go into the RAVF/SER header.
+  First use (2026-11-01, 400 mm f/6, 1.24"/px): Gaia DR3 1963716673315870848 -> UCAC4
+  634-113397, G 11.2; brightest UCAC4 637-109640, 638-109181, 636-111806.
 
 ## Review player
 
