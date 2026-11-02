@@ -497,6 +497,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.marks_shift = (0.0, 0.0)       # field drift since the stack (live frames)
         self.marks_frame = None             # frame id the drift was last measured on
         self.target_radec = None            # (ra, dec) of the target once looked up
+        self.target_found = None            # (text typed, catalogue name) of that look-up
         self.roi_seen = 0                   # controller.roi_changes already followed
         self.roi_pending = None             # selected/typed region not applied yet
         # last requested values (keys step from these, not from a lagging camera read-back)
@@ -1175,7 +1176,9 @@ class MainWindow(QtWidgets.QMainWindow):
             rec.stop()
             return
         rec.out_dir = os.path.expanduser(self.dir_edit.text().strip() or self.args.record_dir)
-        rec.text.update(observer=self.observer_edit.text(), telescope=self.telescope_edit.text())
+        rec.text.update(observer=self.observer_edit.text(), telescope=self.telescope_edit.text(),
+                        objname=self.target_name())
+        rec.tag = self.target_name()
         self.settings.setValue("observer", self.observer_edit.text().strip())
         self.settings.setValue("telescope", self.telescope_edit.text().strip())
         rec.fmt = RECORD_FORMATS[self.format_combo.currentIndex()]
@@ -1668,6 +1671,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.solve_thread = threading.Thread(target=work, daemon=True)
         self.solve_thread.start()
 
+    def target_name(self):
+        """The target for file names and headers: its catalogue name once looked up (UCAC4,
+        else TYC, else Gaia DR3), else as typed."""
+        text = self.target_edit.text().strip()
+        if self.target_found and self.target_found[0] == text:
+            return self.target_found[1]
+        return text
+
     def solve_hint(self):
         """Where the field probably is: the last solution's centre (this run or the last one),
         else the target's position (from the markers). None: search the whole sky."""
@@ -1742,6 +1753,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     found[kind] = t
                     if kind == "target":
                         self.target_radec = (t["ra"], t["dec"])
+                        self.target_found = (query, t["name"])
                     x, y = (float(v) for v in wcs.all_world2pix(t["ra"], t["dec"], 0))
                     mag = f"  {t['band']} {t['mag']:.1f}" if np.isfinite(t["mag"]) else ""
                     marks.append({"x": x, "y": y, "r": 8.0 if kind == "target" else 14.0,

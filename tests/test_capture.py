@@ -147,6 +147,7 @@ def test_recorder_writes_frames(tmp_path, fmt):
     imgs = frames(8)
     rec = recorder.Recorder(lambda raw: np.frombuffer(raw, "<u2").reshape(H, W),
                             lambda: (W, H, 12), str(tmp_path), "cam", fmt=fmt)
+    rec.tag = "UCAC4 634-113397"                # the target, before the time stamp
     rec.arm(start_ns=T0, max_frames=6)
     for i, img in enumerate(imgs):
         if rec.wants(T0 + i):
@@ -157,7 +158,14 @@ def test_recorder_writes_frames(tmp_path, fmt):
     rec.close()
     assert rec.state == "idle" and rec.last_frames == 6
     assert rec.last_path.endswith("." + fmt)
+    assert os.path.basename(rec.last_path).startswith("cam_UCAC4-634-113397_20")
     check(movie.open_movie(rec.last_path), imgs[:6])
+
+
+def test_file_tag():
+    assert recorder.file_tag("Gaia DR3 1963716673315870848") == "Gaia-DR3-1963716673315870848"
+    assert recorder.file_tag(" (2) Pallas / TYC 1-2-3 ") == "2-Pallas-TYC-1-2-3"
+    assert recorder.file_tag("") == "" and recorder.file_tag(None) == ""
 
 
 # ---------------------------------------------------------------------------

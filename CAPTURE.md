@@ -276,6 +276,10 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
   3.7 s with scale and position on the Pi 5. The SIMBAD checkbox is remembered too.
 - **Observer** and **Telescope** (Recording panel) are remembered between runs too; the command
   line (`--observer`, `--telescope`) wins when given. They go into the RAVF/SER header.
+- **File names** carry the target before the time:
+  `MV-MIPI-IMX178M_UCAC4-634-113397_20261102T001500Z.ravf` (the catalogue name once the target was
+  looked up, else the Target text as typed; spaces and other characters become `-`). No target:
+  `<camera>_<time>Z` as before. The target name also goes into the RAVF header as OBJNAME.
   First use (2026-11-01, 400 mm f/6, 1.24"/px): Gaia DR3 1963716673315870848 -> UCAC4
   634-113397, G 11.2; brightest UCAC4 637-109640, 638-109181, 636-111806.
 

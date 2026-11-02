@@ -10,6 +10,7 @@ Repair from the command line:  python3 -m pystarlight.capture.recorder FILE.ravf
 """
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -38,6 +39,7 @@ class Recorder(threading.Thread):
         self.fmt = fmt                  # "ravf" / "ser", for the next recording
         self.header_info = header_info
         self.text = {}                  # observer, telescope ... set by the GUI (override)
+        self.tag = ""                   # file name part before the time (e.g. the target)
         w, h, _ = frame_format()
         self.queue = queue.Queue(maxsize=max(4, int(max_queue_bytes // (w * h * 2))))
 
@@ -131,7 +133,9 @@ class Recorder(threading.Thread):
         stamp = datetime.fromtimestamp(frame_ns / 1e9, timezone.utc).strftime("%Y%m%dT%H%M%S")
         writer = WRITERS[self.fmt]
         os.makedirs(self.out_dir, exist_ok=True)
-        self.path = os.path.join(self.out_dir, f"{self.name}_{stamp}Z{writer.extension}")
+        tag = file_tag(self.tag)
+        self.path = os.path.join(self.out_dir, f"{self.name}_{tag + '_' if tag else ''}{stamp}Z"
+                                 f"{writer.extension}")
         width, height, depth = self.frame_format()
         meta = {**self.header_info(), **self.text, "start_ns": frame_ns}
         self.writer = writer(self.path, width, height, depth, meta)
@@ -157,6 +161,12 @@ class Recorder(threading.Thread):
         while self.state != "idle" and time.monotonic() < deadline:
             time.sleep(0.05)
         self.running = False
+
+
+def file_tag(text):
+    """Text for a file name: 'UCAC4 634-113397' -> 'UCAC4-634-113397' (letters, digits, '.',
+    '+', '-' only; '' for none)."""
+    return re.sub(r"[^A-Za-z0-9.+-]+", "-", text or "").strip("-.")[:60]
 
 
 def repair(path):
