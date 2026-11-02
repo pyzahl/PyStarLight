@@ -97,7 +97,7 @@ uv run pystarlight-camera --repair ~/data/*.ravf                   # finish cras
 | **Sensor region (ROI)** | x / y / w / h boxes, **Select** (then drag a rectangle on the image; shown in yellow until applied), **Apply**, **Full sensor**; current region |
 | **Trigger** | **GPS trigger** checkbox (off = free run, or the `--trigger hw/sw` mode), **GPS frame rate**: pick 30 / 20 / 15 / 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1.5 / 1 / 0.5 fps or type fps or a period (`250 ms`) and press Enter, **Trigger delay** (ms), **y-trigger row** (VEYE, GPS mode; see below), warnings (exposure longer than the pulse period, rate too high for the camera, pulses skipped because of the delay, no fix, anchoring to GPS UTC, frames or TIM-TP pulses off the grid), missed pulses |
 | **GPS** | UTC, fix, satellites (used / tracked / in view), DOP, position, altitude, timepulse rate, **time base** (GPS UTC since when, the Pi clock's rate error in ppm, the GPS message burst's lag after the second; or what anchoring waits for), exposure start of the newest frame (marked GPS UTC or Pi clock), its trigger pulse, pulse → frame delay, rolling-shutter line time, heading if a compass is found |
-| **Recording** | folder, format (RAVF / SER), observer, telescope, start **Now** or **At UTC** (with "next min"), stop after N s and/or N frames; Record button (orange = anchoring / armed / Cancel, red = recording / Stop), frame count, elapsed time, countdown, last file saved |
+| **Recording** | folder, format (RAVF / SER), observer, telescope, **Asteroid** with **Favorites** (tonight's events from PySyzygos, see below), start **Now** or **At UTC** (with "next min"), stop after N s and/or N frames; Record button (orange = anchoring / armed / Cancel, red = recording / Stop), frame count, elapsed time, countdown, last file saved |
 | status bar | exposure, gain, camera and display fps, lost frames, bad buffers, restarts, frame ID, trigger count / lost, sensor position and raw value under the mouse |
 
 Keys: `e/E` exposure, `g/G` gain, `d/D` gamma, `a` auto levels, `r` record / stop, `t` software trigger (in `sw`
@@ -282,6 +282,19 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
   `<camera>_<time>Z` as before. The target name also goes into the RAVF header as OBJNAME.
   First use (2026-11-01, 400 mm f/6, 1.24"/px): Gaia DR3 1963716673315870848 -> UCAC4
   634-113397, G 11.2; brightest UCAC4 637-109640, 638-109181, 636-111806.
+  With an **Asteroid** the name carries it before the star,
+  `MV-MIPI-IMX178M_158772-2003-SB60_UCAC4-521-006590_20261017T043548Z.ravf`, and OBJNAME is the
+  asteroid (the star is in the file name and the viewer's identification).
+- **Favorites** (Recording panel): asks a PySyzygos server (its `SERVER_MODE.md`, favorites API
+  `/api/v1/favorites`) for the events of the next 12 h. One event is taken at once; several give
+  a list (time, asteroid, star, G, drop, duration, altitude, chance, site). The chosen one fills
+  **Asteroid**, **Target** (the star's UCAC4 / TYC / DR3 name), **Verify** (its Gaia DR3 id),
+  start **At UTC** = event - 40 s and **Stop after** 80 s (to event + 40 s; already inside the
+  window: start now, stop at event + 40 s). The line below shows the event time and the star's
+  altitude and azimuth for pointing. Server and token: `[pysyzygos_server] url / token` in the
+  private config (the token from `pysyzygos gui --new-token PyStarLight`; a local-mode PySyzygos
+  on 127.0.0.1 needs none), or `--pysyzygos URL` and `$PYSYZYGOS_URL` / `$PYSYZYGOS_TOKEN`. Works
+  with the system Python too (standard library only; the config is read directly).
 
 ## Review player
 

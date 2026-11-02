@@ -222,6 +222,7 @@ All keys:
 | `p` | plate-solve again (offline with a local astrometry.net, else uploads to nova.astrometry.net) |
 | `i` | identify the stars in the apertures (local catalogue, else SIMBAD); stars without a name are tried again automatically |
 | `N`, button **Names** | star names on the image on / off (default `[display] star_names`) |
+| field **star**, button **Set target** | type the target star (Gaia DR3 id, `UCAC4 634-113397`, `TYC 3574-1718-1`, `HIP ...`, RA Dec, or any SIMBAD name) and Enter: found in the local catalogue around the plate solution (offline; also stars too faint to see) and marked with open ticks and its name, following the drift frame by frame. **Set target** puts the target aperture exactly there (`u` then centres it on the peak) and names it after that star. Kept in `<movie>.target.json`; an empty field removes the marker |
 | Esc | stop plate solving / star identification |
 | ctrl+o, button **Open** | open another recording (file dialog) |
 | `f` | full screen (matplotlib) |

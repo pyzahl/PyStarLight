@@ -126,6 +126,10 @@ parser.add_argument("--pixel-um", type=float, default=None,
                     help="pixel pitch in um (default: from the sensor, e.g. IMX178 2.4)")
 parser.add_argument("--observer", default="", help="observer name for the file header")
 parser.add_argument("--telescope", default="", help="telescope for the file header")
+parser.add_argument("--pysyzygos", default=None, metavar="URL",
+                    help="PySyzygos server for the Favorites button, e.g. http://home:8080 "
+                         "(default [pysyzygos_server] url in the config; token: its token or "
+                         "$PYSYZYGOS_TOKEN)")
 
 
 def hardware_name():

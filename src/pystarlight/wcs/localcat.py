@@ -19,6 +19,7 @@ import functools
 import json
 import math
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -41,6 +42,41 @@ def ucac4_name(v: int) -> str:
 
 def tyc_name(v: int) -> str:
     return f'TYC {v // 4 // 20000}-{v // 4 % 20000}-{v % 4}' if v else ''
+
+
+def parse_star_id(text: str) -> Optional[tuple[str, int]]:
+    """('source_id' | 'ucac4' | 'tyc' | 'hip', number as stored in the catalogue) of a star
+    name as Occult, OWC and Gaia write it: 'Gaia DR3 2071...', 'DR3 2071...', a bare source id,
+    'UCAC4 677-089123', 'TYC 3574-1718-1', 'HIP 101769'. None if it is none of these."""
+    t = ' '.join(text.strip().upper().replace('_', ' ').split())
+    m = re.fullmatch(r'(?:GAIA\s*)?(?:DR3\s*)?(\d{6,20})', t)
+    if m:
+        return 'source_id', int(m.group(1))
+    m = re.fullmatch(r'UCAC4\s*(\d{1,3})[-\s]+(\d{1,6})', t)
+    if m:
+        return 'ucac4', int(m.group(1)) * 1_000_000 + int(m.group(2))
+    m = re.fullmatch(r'TYC\s*(\d{1,4})[-\s]+(\d{1,5})[-\s]+(\d)', t)
+    if m:
+        return 'tyc', (int(m.group(1)) * 20000 + int(m.group(2))) * 4 + int(m.group(3))
+    m = re.fullmatch(r'HIP\s*(\d{1,6})', t)
+    if m:
+        return 'hip', int(m.group(1))
+    return None
+
+
+def star_entry(s: dict) -> dict:
+    """A cone() row as a named star: {'name': TYC, else UCAC4, else Gaia DR3, 'ids', 'gmag',
+    'sep_arcsec', 'ra', 'dec'}."""
+    ids = {'Gaia DR3': f"Gaia DR3 {s['source_id']}"}
+    if s.get('tyc'):
+        ids['TYC'] = tyc_name(s['tyc'])
+    if s.get('ucac4'):
+        ids['UCAC4'] = ucac4_name(s['ucac4'])
+    if s.get('hip'):
+        ids['HIP'] = f"HIP {s['hip']}"
+    name = ids.get('TYC') or ids.get('UCAC4') or ids['Gaia DR3']
+    return {'name': name, 'ids': ids, 'gmag': s['g'], 'sep_arcsec': s.get('sep_arcsec'), 'ra': s['ra'],
+            'dec': s['dec']}
 
 
 def _manifest(d) -> dict:
@@ -171,14 +207,15 @@ class LocalGaia:
         if not stars:
             return None
         bright = min(s['g'] for s in stars)
-        s = next(s for s in stars if s['g'] <= bright + 2.0)
-        ids = {'Gaia DR3': f"Gaia DR3 {s['source_id']}"}
-        if s['tyc']:
-            ids['TYC'] = tyc_name(s['tyc'])
-        if s['ucac4']:
-            ids['UCAC4'] = ucac4_name(s['ucac4'])
-        if s['hip']:
-            ids['HIP'] = f"HIP {s['hip']}"
-        name = ids.get('TYC') or ids.get('UCAC4') or ids['Gaia DR3']
-        return {'name': name, 'ids': ids, 'gmag': s['g'], 'sep_arcsec': s['sep_arcsec'], 'ra': s['ra'],
-                'dec': s['dec']}
+        return star_entry(next(s for s in stars if s['g'] <= bright + 2.0))
+
+    def find(self, text: str, ra: float, dec: float, radius_arcsec: float = 2400.0,
+             epoch: Optional[float] = None) -> Optional[dict]:
+        """The star named `text` (parse_star_id) within the radius of (ra, dec), e.g. the plate
+        solution's field: star_entry at `epoch`, or None (not in the field, fainter than the
+        catalogue, or a UCAC4/TYC/HIP name without the xref part)."""
+        key = parse_star_id(text)
+        if key is None or (key[0] != 'source_id' and self.xref is None):
+            return None
+        hit = next((s for s in self.cone(ra, dec, radius_arcsec, epoch) if s[key[0]] == key[1]), None)
+        return star_entry(hit) if hit else None

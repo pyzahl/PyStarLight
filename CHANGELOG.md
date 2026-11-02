@@ -31,6 +31,16 @@ uses [Semantic Versioning](https://semver.org/).
   (chi^2 + 1 interval or Monte Carlo, the larger; calibrated on simulated events). Drawn on the
   magnitude summary with level bands, time error bars and transition close-ups (`plot.stepmodel`,
   `plot.stepzoom`); the times in UTC in the viewer's status line. No false events in noise.
+- Camera: **Favorites** button and **Asteroid** field (`capture/favorites.py`, `--pysyzygos URL`,
+  `[pysyzygos_server]`): tonight's events (next 12 h) from a PySyzygos server's favorites API,
+  a list when there are several; fills asteroid, target star, its Gaia DR3 id to verify, and the
+  recording window (event - 40 s to + 40 s). The asteroid goes into the file name before the star
+  and into OBJNAME.
+- Viewer star field: a target star by Gaia DR3 id, UCAC4, TYC, HIP name, RA/Dec or SIMBAD name
+  (`wcs.identify.find_star`, `localcat.parse_star_id`, `LocalGaia.find`: the solved field searched
+  in the local catalogue, offline) is marked on the image with open ticks and its name, following
+  the drift; **Set target** moves or creates the target aperture there and names it after the star.
+  Saved in `<movie>.target.json` and in the event file (`marked_star`).
 - `<movie>.event.json` with every result (`steps.event_report`, `movie.object_name`): object,
   target star, references, check stars, fitted levels in flux and magnitude, D/R times in UTC with
   errors, nested D/R pairs and durations, recording metadata. The magnitude summary lists each

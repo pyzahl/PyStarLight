@@ -19,10 +19,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from . import favorites
 from .cameras import VEYE_MIN_ROI
 from .decode import format_bits, format_for_bits
 from .qt import QShortcut, QtCore, QtGui, QtWidgets, Signal, Slot, event_pos
-from .recorder import RECORD_FORMATS
+from .recorder import RECORD_FORMATS, file_tag
 from .timing import (
     GPS_RATES,
     LAG_EXTRA_NS,
@@ -457,6 +458,8 @@ class LevelsBox(QtWidgets.QGroupBox):
 
 
 class MainWindow(QtWidgets.QMainWindow):
+    favorites_ready = Signal(object)         # PySyzygos favorites (list) or an error message (str)
+
     def __init__(self, ctx, args):
         super().__init__()
         self.args = args
@@ -1069,6 +1072,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.telescope_edit = QtWidgets.QLineEdit(
             self.args.telescope or self.settings.value("telescope", "", type=str))
         self.telescope_edit.setPlaceholderText("e.g. 67 mm f/6 refractor, 400 mm")
+        self.asteroid_edit = QtWidgets.QLineEdit(self.settings.value("asteroid", "", type=str))
+        self.asteroid_edit.setPlaceholderText("occulting asteroid, e.g. 158772 (2003 SB60)")
+        self.asteroid_edit.setToolTip("goes into the file name (before the star) and the "
+                                      "header's OBJNAME")
+        self.asteroid_edit.editingFinished.connect(
+            lambda: self.settings.setValue("asteroid", self.asteroid_edit.text().strip()))
+        self.fav_button = QtWidgets.QPushButton("Favorites")
+        self.fav_button.setToolTip("events of the next 12 h from the PySyzygos server "
+                                   "([pysyzygos_server] in the config, or --pysyzygos URL): "
+                                   "fills asteroid, target star and the recording window "
+                                   f"(event -{favorites.LEAD_S:.0f} s to +{favorites.TRAIL_S:.0f} s)")
+        self.fav_button.clicked.connect(self.fetch_favorites)
+        self.favorites_ready.connect(self.on_favorites)
+        self.event_info = QtWidgets.QLabel(wordWrap=True)
+        self.event_info.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         for key, edit in (("observer", self.observer_edit), ("telescope", self.telescope_edit)):
             edit.editingFinished.connect(
                 lambda key=key, edit=edit: self.settings.setValue(key, edit.text().strip()))
@@ -1123,28 +1141,95 @@ class MainWindow(QtWidgets.QMainWindow):
         g.addWidget(self.observer_edit, 2, 1, 1, 3)
         g.addWidget(QtWidgets.QLabel("Telescope"), 3, 0)
         g.addWidget(self.telescope_edit, 3, 1, 1, 3)
-        g.addWidget(QtWidgets.QLabel("Start"), 4, 0)
-        g.addWidget(self.start_now, 4, 1)
-        g.addWidget(self.start_at, 5, 1)
-        g.addWidget(self.start_time, 5, 2)
-        g.addWidget(next_min, 5, 3)
-        g.addWidget(self.dur_check, 6, 0, 1, 2)
-        g.addWidget(self.dur_spin, 6, 2, 1, 2)
-        g.addWidget(self.frames_check, 7, 0, 1, 2)
-        g.addWidget(self.frames_spin, 7, 2, 1, 2)
-        g.addWidget(self.rec_button, 8, 0, 1, 4)
-        g.addWidget(self.rec_info, 9, 0, 1, 4)
+        g.addWidget(QtWidgets.QLabel("Asteroid"), 4, 0)
+        g.addWidget(self.asteroid_edit, 4, 1, 1, 2)
+        g.addWidget(self.fav_button, 4, 3)
+        g.addWidget(self.event_info, 5, 0, 1, 4)
+        g.addWidget(QtWidgets.QLabel("Start"), 6, 0)
+        g.addWidget(self.start_now, 6, 1)
+        g.addWidget(self.start_at, 7, 1)
+        g.addWidget(self.start_time, 7, 2)
+        g.addWidget(next_min, 7, 3)
+        g.addWidget(self.dur_check, 8, 0, 1, 2)
+        g.addWidget(self.dur_spin, 8, 2, 1, 2)
+        g.addWidget(self.frames_check, 9, 0, 1, 2)
+        g.addWidget(self.frames_spin, 9, 2, 1, 2)
+        g.addWidget(self.rec_button, 10, 0, 1, 4)
+        g.addWidget(self.rec_info, 11, 0, 1, 4)
         self.review_button = QtWidgets.QPushButton("Review last clip")
         self.review_button.setToolTip("open the last recording in the review player (time "
                                       "stamps, frame status, stack & plate solve)")
         self.review_button.clicked.connect(self.review_last)
         self.review_button.setEnabled(False)
-        g.addWidget(self.review_button, 10, 0, 1, 4)
+        g.addWidget(self.review_button, 12, 0, 1, 4)
         self.rec_widgets = [self.dir_edit, browse, self.format_combo, self.observer_edit,
-                            self.telescope_edit,
+                            self.telescope_edit, self.asteroid_edit, self.fav_button,
                             self.start_now, self.start_at, self.start_time, next_min,
                             self.dur_check, self.dur_spin, self.frames_check, self.frames_spin]
         return box
+
+    # ---- PySyzygos favorites: tonight's events ----
+    def fetch_favorites(self):
+        """Favorites button: ask the PySyzygos server (worker thread) for the next 12 h."""
+        url, token = favorites.server_settings(getattr(self.args, "pysyzygos", None))
+        self.fav_button.setEnabled(False)
+        self.event_info.setText(f"asking {url or 'PySyzygos'} for the next 12 h ...")
+
+        def work():
+            try:
+                self.favorites_ready.emit(favorites.fetch_favorites(url, token))
+            except Exception as e:          # no server, refused token, bad answer
+                self.favorites_ready.emit(f"favorites: {e}")
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_favorites(self, result):
+        self.fav_button.setEnabled(self.c.recorder.state == "idle")
+        if isinstance(result, str):
+            self.event_info.setText(result)
+            return
+        if not result:
+            self.event_info.setText("no favorites in the next 12 h")
+            return
+        fav = result[0]
+        if len(result) > 1:
+            items = [favorites.describe(f) for f in result]
+            choice, ok = QtWidgets.QInputDialog.getItem(self, "PySyzygos favorites",
+                                                        f"{len(result)} events in the next 12 h:",
+                                                        items, 0, False)
+            if not ok:
+                self.event_info.setText("")
+                return
+            fav = result[items.index(choice)]
+        self.apply_favorite(fav)
+
+    def apply_favorite(self, fav):
+        """Asteroid, target star (and its Gaia DR3 id to verify), start at the event - 40 s
+        and stop 40 s after it."""
+        plan = favorites.recording_plan(fav)
+        self.asteroid_edit.setText(plan["asteroid"])
+        self.settings.setValue("asteroid", plan["asteroid"])
+        self.target_edit.setText(plan["target"])
+        self.verify_edit.setText(plan["verify"])
+        self.on_target()
+        start = plan["start"].replace(microsecond=0)            # the start field has whole seconds
+        end = plan["event"] + timedelta(seconds=favorites.TRAIL_S)
+        now = datetime.now(timezone.utc)
+        if start <= now:
+            self.start_now.setChecked(True)
+            dur = (end - now).total_seconds()
+        else:
+            self.start_time.setTime(QtCore.QTime(start.hour, start.minute, start.second))
+            self.start_at.setChecked(True)
+            dur = (end - start).total_seconds()
+        self.dur_check.setChecked(True)
+        self.dur_spin.setValue(max(1.0, round(dur, 1)))
+        star = fav.get("star") or {}
+        alt = (f", star alt {star['alt']:.0f} az {star['az']:.0f}"
+               if star.get("alt") is not None and star.get("az") is not None else "")
+        self.event_info.setText(f"event {plan['event'].strftime('%H:%M:%S.%f')[:12]} UTC: "
+                                f"{favorites.describe(fav)}{alt}")
+        print(f"Favorite {fav.get('key')}: recording {self.start_time.time().toString('HH:mm:ss')}"
+              f" UTC for {self.dur_spin.value():.1f} s")
 
     def review_last(self):
         path = self.c.recorder.last_path
@@ -1176,9 +1261,12 @@ class MainWindow(QtWidgets.QMainWindow):
             rec.stop()
             return
         rec.out_dir = os.path.expanduser(self.dir_edit.text().strip() or self.args.record_dir)
+        asteroid = self.asteroid_edit.text().strip()
         rec.text.update(observer=self.observer_edit.text(), telescope=self.telescope_edit.text(),
-                        objname=self.target_name())
-        rec.tag = self.target_name()
+                        objname=asteroid or self.target_name())
+        # file name: <camera>_<asteroid>_<star>_<UTC>
+        rec.tag = "_".join(t for t in (file_tag(asteroid), file_tag(self.target_name())) if t)
+        self.settings.setValue("asteroid", asteroid)
         self.settings.setValue("observer", self.observer_edit.text().strip())
         self.settings.setValue("telescope", self.telescope_edit.text().strip())
         rec.fmt = RECORD_FORMATS[self.format_combo.currentIndex()]

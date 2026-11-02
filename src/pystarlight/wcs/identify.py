@@ -222,6 +222,98 @@ def name_star(s: FieldStar, wcs, annotations: list, use_simbad: bool = True,
     return s
 
 
+def simbad_object(name: str, timeout: float = SIMBAD_TIMEOUT_S) -> Optional[dict]:
+    """SIMBAD's object of that name: {'name', 'ra', 'dec', 'vmag', 'ids'} or None; gives up
+    after `timeout` s (TimeoutError)."""
+    box = {}
+
+    def work():
+        try:
+            from astroquery.simbad import Simbad
+            q = Simbad()
+            q.add_votable_fields('V', 'ids')
+            r = q.query_object(name)
+            if r is not None and len(r):
+                ids = {}
+                for ident in str(r['ids'][0]).split('|'):
+                    ident = ident.strip()
+                    for cat in PREFERRED_IDS:
+                        if ident.startswith(cat + ' ') and cat not in ids:
+                            ids[cat] = ident
+                v = r['V'][0]
+                box['hit'] = {'name': ' '.join(str(r['main_id'][0]).split()), 'ra': float(r['ra'][0]),
+                              'dec': float(r['dec'][0]), 'ids': ids,
+                              'vmag': None if np.ma.is_masked(v) else float(v)}
+        except Exception as e:
+            box['error'] = e
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise TimeoutError(f'SIMBAD did not answer within {timeout:.0f} s')
+    if 'error' in box:
+        raise box['error']
+    return box.get('hit')
+
+
+def parse_radec(text: str) -> Optional[tuple[float, float]]:
+    """(ra, dec) in degrees from '20:40:52.0 +45:14:06', '20 40 52.0 +45 14 06' (hours, deg) or
+    '310.2168 45.2349' (deg); None if the text is not coordinates."""
+    t = text.strip()
+    if not t or any(ch.isalpha() for ch in t.replace('h', '').replace('m', '').replace('s', '')
+                    .replace('d', '')):
+        return None
+    try:
+        from astropy import units as u
+        from astropy.coordinates import SkyCoord
+        parts = t.replace(',', ' ').split()
+        if len(parts) == 2 and ':' not in t and 'h' not in t:
+            c = SkyCoord(float(parts[0]), float(parts[1]), unit='deg')
+        else:
+            c = SkyCoord(t, unit=(u.hourangle, u.deg))
+    except (ValueError, TypeError):
+        return None
+    return float(c.ra.deg), float(c.dec.deg)
+
+
+def find_star(text: str, wcs, shape: tuple, catalog=None, epoch: Optional[float] = None,
+              simbad: bool = True, log=print) -> Optional[dict]:
+    """A star given by name or position for marking it on the image: {'name', 'ids', 'gmag',
+    'vmag', 'ra', 'dec', 'source'} or None.
+    Gaia DR3 / UCAC4 / TYC / HIP names are looked for in the local catalogue in the solved field
+    (offline, also stars too faint to show); RA/Dec text is named after the catalogue star within
+    5"; anything else (HD 197161, ...) is asked from SIMBAD (simbad=True)."""
+    from .localcat import parse_star_id, star_entry
+    h, w = shape[:2]
+    ra0, dec0 = (float(v) for v in wcs.pixel_to_world_values((w - 1) / 2, (h - 1) / 2))
+    from astropy.wcs.utils import proj_plane_pixel_scales
+    scale = float(np.mean(proj_plane_pixel_scales(wcs.celestial))) * 3600.0
+    radius = 0.6 * math.hypot(w, h) * scale                  # the field and a little more
+    out = None
+    if catalog is not None and parse_star_id(text) is not None:
+        out = catalog.find(text, ra0, dec0, radius, epoch)
+        if out is None:
+            log(f'{text}: not in the local catalogue within {radius / 60:.0f}\' of the field centre')
+    pos = parse_radec(text) if out is None else None
+    if pos is not None:
+        hit = catalog.cone(*pos, 5.0, epoch) if catalog is not None else []
+        out = star_entry(hit[0]) if hit else {'name': f'{pos[0]:.5f} {pos[1]:+.5f}', 'ids': {},
+                                              'gmag': None, 'ra': pos[0], 'dec': pos[1]}
+    if out is not None:
+        out.setdefault('vmag', None)
+        out['source'] = 'Gaia DR3 (local)' if out.get('ids') else 'position'
+        return out
+    if simbad:
+        try:
+            hit = simbad_object(text)
+        except Exception as e:                  # no network, no astroquery, timeout
+            log(f'SIMBAD: {e}')
+            return None
+        if hit is not None:
+            return {**hit, 'gmag': None, 'source': 'SIMBAD'}
+    return None
+
+
 def simbad_radius(wcs) -> float:
     """SIMBAD search radius for a solution: 10", or 2 pixels on coarse scales (a 24 mm lens:
     20"/px, where peak fit and solution are good to a pixel or so)."""

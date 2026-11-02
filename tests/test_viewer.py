@@ -644,3 +644,50 @@ def test_result_title_names_the_candidate_star(movie):
     assert v._result_title('target') == movie.stem                   # not identified: the movie only
     v.ap_stars = {'target': FieldStar(1, 1, 1, 3, False, name='TYC 3574-1718-1')}
     assert v._result_title('target') == f'{movie.stem} - candidate TYC 3574-1718-1'
+
+
+def test_star_field_marks_a_catalogue_star_and_sets_the_target(movie, monkeypatch):
+    from astropy.wcs import WCS
+
+    from pystarlight.wcs import identify, localcat, orientation
+    v = Viewer(str(movie))
+    (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
+    click(v, c1, r1)
+    key(v, 't', c1, r1)                             # the target on the wrong star first
+    v._star_box.set_val('TYC 3574-1718-1')
+    assert 'needs the plate solution' in v.status.get_text()
+    w = WCS(naxis=2)
+    w.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    w.wcs.crval = (310.36, 45.1)
+    w.wcs.crpix = (160, 120)
+    w.wcs.cd = [[0, 2.07 / 3600], [2.07 / 3600, 0]]
+    v.wcs, v.orient = w, orientation(w, v.image.shape)
+    ra, dec = (float(q) for q in w.wcs_pix2world(c0, r0, 0))
+
+    class Cat:
+        def find(self, text, ra0, dec0, radius_arcsec, epoch=None):
+            if localcat.parse_star_id(text) == localcat.parse_star_id('TYC 3574-1718-1'):
+                return localcat.star_entry({'source_id': 7, 'tyc': localcat.parse_star_id(text)[1],
+                                            'ucac4': 0, 'hip': 0, 'g': 9.89, 'ra': ra, 'dec': dec})
+
+        def cone(self, *a, **kw):
+            return []
+    monkeypatch.setattr(localcat, 'local_catalog', lambda cfg=None: Cat())
+    monkeypatch.setattr(identify, 'simbad_object', lambda name, timeout=0: None)
+    v._star_box.set_val('tyc 3574 1718 1')
+    assert v.status.get_text().startswith('marked TYC 3574-1718-1  G 9.9 at')
+    x, y = v.marker_xy()
+    dx, dy = v._marker_shift[0]                     # the solution's stack vs this (shaken) frame
+    assert abs(x - (c0 - dx)) < 0.01 and abs(y - (r0 - dy)) < 0.01 and abs(dx) < 5
+    assert len(v._marker_artists) == 5 and v._marker_artists[-1].get_text() == 'T TYC 3574-1718-1  G 9.9'
+    assert json.loads(v.marker_file.read_text())['query'] == 'tyc 3574 1718 1'
+    v.target_to_marker()
+    t = next(a for a in v.apertures if a.role == 'target')
+    assert len(v.apertures) == 1 and abs(t.center[0] - x) <= 1 and abs(t.center[1] - y) <= 1
+    assert v.ap_stars[t.name].name == 'TYC 3574-1718-1' and v.ap_stars[t.name].gmag == 9.89
+    v._star_box.set_val('HD 1')                     # not in the field, SIMBAD has nothing
+    assert 'not found' in v.status.get_text() and v.marker['name'] == 'TYC 3574-1718-1'
+    v2 = Viewer(str(movie))                         # the entry comes back with the movie
+    assert v2.marker['name'] == 'TYC 3574-1718-1' and v2._star_box.text == 'tyc 3574 1718 1'
+    v2._star_box.set_val('')
+    assert v2.marker is None and not v2.marker_file.exists() and v2._marker_artists == []

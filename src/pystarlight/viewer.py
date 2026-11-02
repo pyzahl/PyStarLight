@@ -58,6 +58,7 @@ from .tracking import Aperture
 AP_FIELDS = ('name', 'x0', 'y0', 'size', 'color', 'thresh', 'default_mask_radius', 'role')
 PYMOVIE_KEYS = {'Y': 'yellow', 'R': 'red', 'G': 'green', 'W': 'white'}
 CURVE_COLORS = ('yellow', 'green', 'white')     # global mode: chosen curve colours (red = automatic)
+MARKER_COLOR = '#ff3d7f'                        # the star entered in the star field
 MOVIE_PATTERNS = '*.ravf *.ser *.adv *.aav *.avi *.mov *.fit *.fits *.fts'
 FITS_SUFFIXES = ('.fit', '.fits', '.fts')
 NAV_KEYS = ('left', 'right', 'pageup', 'pagedown', 'home', 'end', 'n', 'N', 'a', 's', 'l', 'p', 'i', 'u',
@@ -313,12 +314,25 @@ class Viewer:
             x += width + gap
         self.fig.add_artist(self.cheat_sheet())
         # rename (n): a text box at the top, shown while typing
-        self._rename_ax = self.fig.add_axes([0.66, 0.951, 0.18, 0.032])
+        self._rename_ax = self.fig.add_axes([0.70, 0.951, 0.14, 0.032])
         self._rename_box = TextBox(self._rename_ax, 'new name ')
         self._rename_box.on_submit(self._rename_submit)
         self._rename_ax.set_visible(False)
         self._rename_box.set_active(False)
         self._renaming = None         # the aperture being renamed
+        # star field (top): Gaia DR3 / UCAC4 / TYC / HIP name or RA/Dec -> marker; Set target puts
+        # the target aperture there
+        self._star_ax = self.fig.add_axes([0.47, 0.951, 0.15, 0.032])
+        self._star_box = TextBox(self._star_ax, 'star ')
+        self._star_box.on_submit(self._star_submit)
+        self._star_setting = False    # set_val submits too: not a lookup then
+        self._set_target_ax = self.fig.add_axes([0.625, 0.951, 0.065, 0.032])
+        self._set_target_button = Button(self._set_target_ax, 'Set target')
+        self._set_target_button.on_clicked(lambda e: self.target_to_marker())
+        self.marker = None            # the star entered: wcs.identify.find_star dict
+        self._marker_artists = []
+        self._solved_stack = None     # (wcs, median stack of the solved frames) for the drift
+        self._marker_shift = {}       # frame -> (dx, dy) to the solved frames
 
         # two zoomed aperture views (keys 1 / 2 over an aperture), ~4-5x the main image
         self.zoom_names: list[Optional[str]] = ['target', 'ref1']
@@ -352,6 +366,7 @@ class Viewer:
         self._ident_job = None
         self._ident_msg = ''
         self._skip_ident = False      # Esc: no more catalogue lookups until p / i
+        self.load_marker()
         self.show(0)
         keys = ' '.join(f'{r["key"]}:{name}' for name, r in self.roles.items())
         if not self.status.get_text():           # keep a note from loading the apertures
@@ -430,6 +445,8 @@ class Viewer:
             'a run  s/l save/load',
             'p plate-solve' + (' (offline)' if self.local_solver else ' (upload)'),
             'i identify  N names',
+            'star field: DR3/UCAC4/TYC',
+            '  name or RA Dec -> marker',
             'Esc stop solve/naming',
             'ctrl+o open movie',
             'f full screen  o zoom',
@@ -536,6 +553,7 @@ class Viewer:
         self.im.set_data(fr.image)
         if self.per_frame and self.levels_auto and hasattr(self, 'levels'):
             self.set_levels(*plot.zscale(fr.image), manual=False)
+        self._frame_date = (fr.date, fr.time)
         t = f'{fr.date or ""} {fr.time or "(no timestamp)"}'.strip()
         self.info.set_text(f'frame {i:6d} / {self.n - 1}    UTC {t}')
         self.update_frame_mags()
@@ -653,6 +671,7 @@ class Viewer:
         for p in self.patches:
             p.remove()
         self.patches = []
+        self.draw_marker()
         for a in self.apertures:
             col = self.color_of(a)
             self.patches.append(self.ax.add_patch(
@@ -716,6 +735,8 @@ class Viewer:
             self.start_identify()
 
     def _show_solution(self, note: str = ''):
+        self._solved_stack, self._marker_shift = None, {}
+        self.draw_marker()
         self.draw_compass()
         self.draw_stars()
         names = '; '.join(s.label() for s in self.stars)
@@ -1196,12 +1217,167 @@ class Viewer:
         self.draw_apertures()
         self.update_result()
 
+    # ---------------------------------------------------------------- star marker
+
+    @property
+    def marker_file(self) -> Path:
+        return self.path.with_name(self.path.stem + '.target.json')
+
+    def load_marker(self):
+        try:
+            self.marker = json.loads(self.marker_file.read_text()) if self.marker_file.exists() else None
+        except (OSError, ValueError):
+            self.marker = None
+        if self.marker:
+            self._star_setting = True
+            self._star_box.set_val(self.marker.get('query') or self.marker.get('name', ''))
+            self._star_setting = False
+
+    def _star_submit(self, text):
+        """Enter in the star field: look the star up (wcs.identify.find_star: local Gaia DR3 by
+        DR3 / UCAC4 / TYC / HIP name in the solved field, RA/Dec, else SIMBAD) and mark it.
+        An empty field removes the marker."""
+        if self._star_setting:
+            return
+        text = text.strip()
+        if not text:
+            self.marker = None
+            self.marker_file.unlink(missing_ok=True)
+            self.draw_marker()
+            self.say('star marker removed')
+            return
+        if self.wcs is None:
+            self.say('the star marker needs the plate solution: press p first')
+            return
+        from .wcs.identify import find_star
+        from .wcs.localcat import local_catalog
+        from .wcs.reduce import decimal_year
+        try:
+            catalog = local_catalog(self.cfg)
+        except Exception:
+            catalog = None
+        date, tm = getattr(self, '_frame_date', (None, None))
+        self.say(f'looking up {text} ...')
+        st = find_star(text, self.wcs, self.image.shape, catalog, decimal_year(date, tm),
+                       simbad=not self._skip_ident, log=self.say_job)
+        if st is None:
+            self.say(f'{text}: not found (DR3, UCAC4, TYC, HIP name in the field, RA Dec, or a SIMBAD name)')
+            return
+        self.marker = {**st, 'query': text}
+        try:
+            self.marker_file.write_text(json.dumps(self.marker, indent=1))
+        except OSError:
+            pass
+        self.draw_marker()
+        xy = self.marker_xy()
+        where = (f'at x={xy[0]:.1f} y={xy[1]:.1f}' if xy is not None and self._inside(*xy)
+                 else 'outside this frame')
+        self.say(f'marked {self.marker_label()} {where}; Set target puts the target aperture there')
+
+    def marker_label(self) -> str:
+        m = self.marker or {}
+        mag = (f"  G {m['gmag']:.1f}" if m.get('gmag') is not None
+               else f"  V {m['vmag']:.1f}" if m.get('vmag') is not None else '')
+        return f"{m.get('name', '')}{mag}"
+
+    def _inside(self, x, y) -> bool:
+        h, w = self.image.shape[:2]
+        return -0.5 <= x < w - 0.5 and -0.5 <= y < h - 0.5
+
+    def _shift_to_solved(self) -> tuple[float, float]:
+        """(dx, dy): a star at pixel p of the frame shown is at p + (dx, dy) in the solved stack
+        (phase correlation, cached per frame; while playing the last one)."""
+        if self.index in self._marker_shift:
+            return self._marker_shift[self.index]
+        if self._playing and self._marker_shift:
+            return next(reversed(self._marker_shift.values()))
+        from skimage.registration import phase_cross_correlation
+
+        from .wcs.solve import solution_path, stack_frames
+        if self._solved_stack is None or self._solved_stack[0] is not self.wcs:
+            meta_p = solution_path(self.path).with_suffix('.json')
+            meta = json.loads(meta_p.read_text()) if meta_p.exists() else {}
+            with open_movie(str(self.path)) as mv:
+                stack = stack_frames(mv, int(meta.get('stack_start', 0)),
+                                     int(self.cfg['astrometry']['stack_frames']))
+                mv.close()
+            self._solved_stack = (self.wcs, stack)
+        try:
+            cur = np.asarray(self.image, np.float32)
+            (dy, dx), _, _ = phase_cross_correlation(self._solved_stack[1], cur, upsample_factor=10,
+                                                     normalization=None)
+        except ValueError:
+            dx = dy = 0.0
+        self._marker_shift[self.index] = (float(dx), float(dy))
+        return self._marker_shift[self.index]
+
+    def marker_xy(self) -> Optional[tuple[float, float]]:
+        """The marked star's pixel on the frame shown (plate solution, drift removed)."""
+        if self.marker is None or self.wcs is None:
+            return None
+        x, y = self.wcs.world_to_pixel_values(self.marker['ra'], self.marker['dec'])
+        dx, dy = self._shift_to_solved()
+        return float(x) - dx, float(y) - dy
+
+    def draw_marker(self):
+        """Four ticks around the marked star, open in the middle (the star stays visible), and
+        its name on a dark label."""
+        for art in getattr(self, '_marker_artists', []):
+            art.remove()
+        self._marker_artists = []
+        xy = self.marker_xy() if getattr(self, 'marker', None) else None
+        if xy is None or not self._inside(*xy):
+            return
+        x, y = xy
+        col, r1, r2 = MARKER_COLOR, 6, 16
+        for ux, uy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            self._marker_artists += self.ax.plot([x + ux * r1, x + ux * r2], [y + uy * r1, y + uy * r2],
+                                                 '-', color=col, lw=1.3, scalex=False, scaley=False)
+        self._marker_artists.append(self.ax.annotate(
+            f'T {self.marker_label()}', (x + r1, y - r1), xytext=(4, 4), textcoords='offset points',
+            color=col, fontsize=8, va='bottom', ha='left', clip_on=True,
+            bbox={'boxstyle': 'square,pad=0.2', 'fc': '0.1', 'ec': 'none', 'alpha': 0.75}))
+        self.fig.canvas.draw_idle()
+
+    def target_to_marker(self):
+        """Set target: the target aperture (new, or the existing one moved) centred on the marked
+        star, which also becomes its identification."""
+        from .wcs.identify import FieldStar
+        xy = self.marker_xy()
+        if xy is None:
+            self.say('enter a star in the star field first (needs the plate solution)')
+            return
+        x, y = xy
+        if not self._inside(x, y):
+            self.say(f'{self.marker_label()} is outside this frame')
+            return
+        x0, y0 = self.place_sky(x, y)               # exactly there: the star may be faint
+        t = next((a for a in self.apertures if a.role == 'target'), None)
+        if t is None:
+            pm = self.cfg['pymovie']
+            t = Aperture(self._free_name('ap'), x0, y0, self.size,
+                         thresh=pm['threshold'], default_mask_radius=pm['default_mask_radius'])
+            self.apertures.append(t)
+            self.set_role(x, y, 'target')
+        else:
+            t.x0, t.y0 = x0, y0
+        m = self.marker
+        self.ap_stars[t.name] = FieldStar(x, y, float('nan'), float('nan'), False, m['ra'], m['dec'],
+                                          m.get('name', ''), dict(m.get('ids') or {}), m.get('vmag'),
+                                          m.get('source', ''), None, m.get('gmag'))
+        self.ap_checks.pop(t.name, None)            # the astrometric check was of the old place
+        self.draw_apertures()
+        self.update_zooms()
+        self.say(f'target aperture on {self.marker_label()}; u over it centres on the peak, s saves')
+
     def start_rename(self, a):
         """n: type the new name in the text box at the top; Enter applies, Esc cancels."""
         self._renaming = None               # set_val submits: not a rename yet
         self._rename_box.label.set_text(f'new name for {a.name} ')
         self._rename_box.set_val(a.name)
         self._rename_ax.set_visible(True)
+        self._star_ax.set_visible(False)        # the rename label runs over them
+        self._set_target_ax.set_visible(False)
         self._rename_box.set_active(True)
         self._rename_box.begin_typing()
         self._rename_box.cursor_index = len(a.name)
@@ -1214,6 +1390,8 @@ class Viewer:
         self._rename_box.stop_typing()      # gives the keys back (submit is ignored now)
         self._rename_box.set_active(False)
         self._rename_ax.set_visible(False)
+        self._star_ax.set_visible(True)
+        self._set_target_ax.set_visible(True)
         self.fig.canvas.draw_idle()
 
     def _rename_submit(self, text):
@@ -1279,6 +1457,10 @@ class Viewer:
         if self._renaming is not None:      # the text box has the keys; Esc cancels
             if k == 'escape':
                 self._close_rename()
+            return
+        if self._star_box.capturekeystrokes:    # typing a star name
+            if k == 'escape':
+                self._star_box.stop_typing()
             return
         steps = {'right': 1, 'left': -1, 'pagedown': 25, 'pageup': -25}
         if k in steps:
@@ -1585,6 +1767,7 @@ class Viewer:
             'object': object_name(meta, self.path),
             'target': star(target),
             'candidate': (self.ap_stars[target].name if target in self.ap_stars else '') or '',
+            'marked_star': self.marker,
             'references': [star(r) for r in refs],
             'checks': [star(c) for c in checks],
             'recording': {'date': date, 'first_utc': plot.hms(np.nanmin(t)),

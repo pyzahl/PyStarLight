@@ -88,3 +88,20 @@ def test_name_star_prefers_local_names_and_skips_simbad(tmp_path, monkeypatch):
     monkeypatch.setattr(ident, 'simbad_lookup', lambda *a, **k: None)
     s = ident.name_star(ident.FieldStar(500.0, 500.0, 1, 3, False), w, [], catalog=cat)
     assert s.name == ''                                       # not in the catalogue: SIMBAD's turn
+
+
+def test_star_names_and_positions_parse():
+    from pystarlight.wcs.identify import parse_radec
+    from pystarlight.wcs.localcat import parse_star_id, tyc_name, ucac4_name
+    assert parse_star_id('Gaia DR3 2070314016396710016') == ('source_id', 2070314016396710016)
+    assert parse_star_id('dr3 2070314016396710016') == parse_star_id('2070314016396710016')
+    k, v = parse_star_id('UCAC4 677-084999')
+    assert k == 'ucac4' and ucac4_name(v) == 'UCAC4 677-084999'
+    k, v = parse_star_id(' tyc 3574-1718-1 ')
+    assert k == 'tyc' and tyc_name(v) == 'TYC 3574-1718-1'
+    assert parse_star_id('HIP 101769') == ('hip', 101769)
+    assert parse_star_id('HD 197161') is None and parse_star_id('Deneb') is None
+    ra, dec = parse_radec('20:40:52.04 +45:14:05.8')
+    assert abs(ra - 310.21683) < 1e-4 and abs(dec - 45.23494) < 1e-4
+    assert parse_radec('310.2168 45.2349') == (310.2168, 45.2349)
+    assert parse_radec('HD 197161') is None and parse_radec('TYC 3574-1718-1') is None
