@@ -81,6 +81,7 @@ def test_gga_geoid_separation_parsed():
     from pystarlight.capture import gps_ublox
     gps = gps_ublox.Gps.__new__(gps_ublox.Gps)            # no serial port
     gps.lock = threading.Lock()
+    gps.valid, gps.fix, gps.lat, gps.lon, gps.utc, gps.last_fix = True, 3, 46.99, 9.64, None, None
     gps._on_nmea("GPGGA,043600.50,4659.5492,N,00938.4091,E,1,11,0.80,972.8,M,48.2,M,,".split(","))
     assert gps.alt == 972.8 and gps.geoid_sep == 48.2 and gps.sats_used == 11 and gps.hdop == 0.8
     gps._on_nmea("GPGGA,043601.00,,,,,0,00,,,M,,M,,".split(","))
@@ -355,3 +356,99 @@ def test_station_dialog(monkeypatch):
     assert v["observing_method"] == "a" and v["telescope_type"] == "SCT" and v["aperture_cm"] == 35.6
     assert v["camera_delay_applied"] is False and abs(v["latitude"] - 46.5) < 1e-9
     assert app is not None
+
+
+# ---------------------------------------------------------------------------
+# camera -> copied to the analysis computer -> PyStarLight: station data kept and checked
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("fmt", ["ravf", "ser"])
+def test_station_data_survive_the_transfer_unchanged(tmp_path, fmt):
+    import os
+    import shutil
+    import stat
+    if fmt == "ravf":
+        pytest.importorskip("ravf")
+    cls = ravf_writer.RavfWriter if fmt == "ravf" else ser_writer.SerWriter
+    cam = tmp_path / "pi"
+    cam.mkdir()
+    path = cam / f"rec.{fmt}"
+    write(cls, path, header())
+    made = [path] + ([cam / "rec.ser.meta.json"] if fmt == "ser" else [])
+    for p in made:                                          # finished: read-only
+        assert not os.stat(p).st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH), p
+    lab = tmp_path / "analysis"                             # copied to the analysis computer
+    lab.mkdir()
+    for p in made:
+        shutil.copy(p, lab / p.name)                        # cp: keeps the read-only mode
+        assert not os.access(lab / p.name, os.W_OK)
+    md = movie.open_movie(lab / path.name).metadata
+    st = station_of(md, movie_format(lab / path.name))
+    assert st["integrity"] == "ok" and md["STATION-DIGEST"].startswith("sha256:")
+    assert st["station"] == "Test Station (TS)"
+    assert st["observers"] == ["A. Observer", "B. Second", "C. Third", "D. Fourth"]
+    assert st["equipment"]["telescope"] == "C-14 EHD" and st["equipment"]["focal_length_cm"] == 62.2
+    assert st["equipment"]["telescope_type"] == "SCT" and st["equipment"]["mount"] == "GM2000"
+    assert st["site"]["lat"] == 46.9924869 and st["site"]["source"] == "GPS"
+    assert st["timing"]["source"] == "GPS" and st["timing"]["accuracy_s"] == 1e-4
+
+    # changed by accident on the way: detected
+    bad = tmp_path / "edited"
+    bad.mkdir()
+    if fmt == "ravf":
+        data = (lab / path.name).read_bytes()
+        assert data.count(b"Test Station (TS)") == 1
+        (bad / path.name).write_bytes(data.replace(b"Test Station (TS)", b"Test Statiom (TS)"))
+    else:
+        shutil.copy(lab / path.name, bad / path.name)
+        side = json.loads((lab / "rec.ser.meta.json").read_text())
+        side["APERTURE-CM"] = 36.0
+        (bad / "rec.ser.meta.json").write_text(json.dumps(side))
+    st = station_of(movie.open_movie(bad / path.name).metadata, fmt.upper())
+    assert st["integrity"] == "changed"
+    if fmt == "ser":                                        # the sidecar left behind: no station data
+        lost = tmp_path / "lost"
+        lost.mkdir()
+        shutil.copy(lab / path.name, lost / path.name)
+        st = station_of(movie.open_movie(lost / path.name).metadata, "SER")
+        assert st["integrity"] == "none" and "station" not in st and st["site"] == {"source": "none"}
+
+
+def test_repair_leaves_a_finished_read_only_file_alone(tmp_path):
+    from pystarlight.capture import recorder
+    for cls, name in ((ravf_writer.RavfWriter, "a.ravf"), (ser_writer.SerWriter, "a.ser")):
+        p = tmp_path / name
+        write(cls, p, header())
+        assert "complete" in recorder.repair(str(p))
+
+
+def test_position_is_the_gps_fix_at_the_start():
+    gps = FakeGps()
+    s = station_header.site_meta(gps)
+    assert s["site_source"] == "GPS" and "gps_fix_age_s" not in s
+    # the fix lost just at the start: the receiver's last fixed position, with its age
+    gps._fix = False
+    gps.last_fix = {"lat": 46.99248691, "lon": 9.64015187, "alt": 972.84, "geoid_sep": 48.2, "fix": 3,
+                    "sats": 9, "hdop": 1.1, "utc": gps.utc, "mono": 1000.0}
+    s = station_header.site_meta(gps, OBSERVER, now=1012.5)
+    assert s["site_source"] == "GPS" and s["latitude_text"] == "46.9924869" and s["gps_fix_age_s"] == 12.5
+    assert s["gps_satellites"] == 9 and s["altitude_text"] == "972.8"
+    # too old: the config's site, marked as such
+    assert station_header.site_meta(gps, OBSERVER, now=1000.0 + 3600)["site_source"] == "config"
+
+
+def test_nmea_keeps_the_last_fix():
+    pytest.importorskip("serial")
+    from pystarlight.capture import gps_ublox
+    gps = gps_ublox.Gps.__new__(gps_ublox.Gps)
+    gps.lock = threading.Lock()
+    gps.utc, gps.valid, gps.fix, gps.quality, gps.last_fix = None, False, 1, 0, None
+    gps.lat = gps.lon = None
+    gps._on_nmea("GPRMC,043600.50,A,4059.5492,N,07255.6717,W,0.0,,031126,,,A".split(","))
+    gps._on_nmea("GPGSA,A,3,01,02,03,04,05,06,07,08,,,,,1.5,0.8,1.2".split(","))
+    gps._on_nmea("GPGGA,043600.50,4059.5492,N,07255.6717,W,1,08,0.80,79.2,M,-34.1,M,,".split(","))
+    f = gps.last_fix
+    assert f["fix"] == 3 and f["sats"] == 8 and f["alt"] == 79.2 and f["geoid_sep"] == -34.1
+    assert abs(f["lat"] - 40.99248667) < 1e-6 and f["lon"] < 0 and f["utc"].hour == 4
+    gps._on_nmea("GPRMC,043601.00,V,,,,,,,031126,,,N".split(","))          # fix lost
+    gps._on_nmea("GPGGA,043601.00,,,,,0,00,,,M,,M,,".split(","))
+    assert gps.last_fix is f                                               # kept

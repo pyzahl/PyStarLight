@@ -310,7 +310,10 @@ class Camera:
         fmt = vm._Format(type=CAPTURE)
         fcntl.ioctl(self.fd, VIDIOC_G_FMT, fmt)
         current = fourcc_name(fmt.fmt.pix.pixelformat)
-        self.pixel_format = current if current in self.formats else self.formats[0]
+        # the device's current format, unless compressed (another program, e.g. VLC, may have left
+        # it in MJPG): then the first uncompressed one (SUPPORTED order); --format / the GUI choose
+        self.pixel_format = (current if current in self.formats and current != "MJPG"
+                             else self.formats[0])
         self.size = tuple(info.get("size") or (fmt.fmt.pix.width, fmt.fmt.pix.height))
         self._fit_size()
         self.region = (0, 0, *self.size)

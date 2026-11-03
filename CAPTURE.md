@@ -505,14 +505,29 @@ it starts, so that it reaches the occultation report unchanged (PySyzygos'
   telescope, telescope type, aperture, focal length, mount, observing method, and without a
   GPS receiver the fallback latitude / longitude. Record (button, `r`, or `--record-start`)
   with anything missing opens the dialog first and does not arm until it is complete.
-- **Site from the GPS, only with a fix.** With a fix: `LATITUDE` / `LONGITUDE` plus 7-decimal
-  text copies (RAVF keeps the numbers as float32, about 0.5 m), `ALTITUDE` above mean sea level
-  only with a 3D fix (`ALTITUDE-REF = "MSL"`, `GEOID-SEPARATION-M` from GGA field 11: the
-  ellipsoid height is the sum), `DATUM` blank (WGS84), and the fix it came from (`GPS-FIX`,
-  `GPS-SATELLITES`, `GPS-HDOP`, `GPS-POSITION-UTC`); `SITE-SOURCE = "GPS"`. Without a fix: the
-  config's `[observer]` latitude / longitude / altitude, marked `SITE-SOURCE = "config"`; if
-  those are 0, no position at all (`SITE-SOURCE = "none"`, NaN in the RAVF's required position
-  entries). Earlier versions wrote the last position even without a fix.
+- **Site from the GPS, only with a fix, taken when the recording starts.** With a GPS
+  receiver, Record arms only once it has a fix (the button shows "Waiting for a GPS fix",
+  Cancel stops waiting; `--record-start` at program start waits the same way). The header then
+  gets the fix at the first frame: `LATITUDE` / `LONGITUDE` plus 7-decimal text copies (RAVF
+  keeps the numbers as float32, about 0.5 m), `ALTITUDE` above mean sea level only with a 3D
+  fix (`ALTITUDE-REF = "MSL"`, `GEOID-SEPARATION-M` from GGA field 11: the ellipsoid height is
+  the sum), `DATUM` blank (WGS84), and the fix it came from (`GPS-FIX`, `GPS-SATELLITES`,
+  `GPS-HDOP`, `GPS-POSITION-UTC`); `SITE-SOURCE = "GPS"`. Lost just at that moment: the
+  receiver's last fixed position (at most 10 min old), still `"GPS"`, with `GPS-FIX-AGE-S`.
+  Without a GPS receiver: the config's `[observer]` latitude / longitude / altitude, marked
+  `SITE-SOURCE = "config"` (required then); none at all: `SITE-SOURCE = "none"`, NaN in the
+  RAVF's required position entries. Earlier versions wrote the last position even without a
+  fix.
+- **Kept as recorded, on the way to the report.** The header (RAVF) or the sidecar (SER)
+  carries `STATION-DIGEST`, a SHA-256 over the station, site, timing and camera entries; a
+  finished recording and its `.ser.meta.json` are made read-only (`chmod u+w` undoes it; a copy
+  with `cp`, `rsync` or a file manager keeps the mode). Not a signature, a guard against
+  accidents: the viewer checks the digest and writes the result into `event.json`
+  (`recording.station.integrity`: `ok`, `changed`, or `none` for another program's file or a
+  SER file whose sidecar was left behind; it prints a warning on `changed`). Nothing in
+  PyStarLight writes into a recording after it is finished, except `--repair` of an
+  interrupted one. **Copy a SER file together with its `.ser.meta.json`**: the SER header
+  itself holds only observer, instrument and telescope.
 
 **Crash safety.** Both writers update the header's frame count and `fsync` to disk every
 second.
@@ -541,7 +556,8 @@ device (`--camera /dev/video2`) or its name. Nodes of the Pi's own camera pipeli
 uv run pystarlight-camera --camera v4l2 --video-std PAL --video-input 0 --video-size 720x576
 ```
 
-- **Frames as they come:** full size and unscaled, an interlaced frame with both fields
+- **Frames as they come:** an uncompressed format by default (a device left in MJPG by another
+  program, e.g. VLC, is switched to YUYV / GREY; `--format MJPG` or the GUI list to keep it), full size and unscaled, an interlaced frame with both fields
   woven, only the luminance (YUYV / UYVY: the Y bytes; GREY, Y16 as sent; MJPG decoded to
   gray, compressed: worse for photometry and for reading a time code, so take YUYV when the
   device offers it). The GUI's Depth list offers the device's formats instead. Region: cut

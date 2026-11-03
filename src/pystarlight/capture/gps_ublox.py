@@ -132,6 +132,7 @@ class Gps(threading.Thread):
         self.hdop = self.pdop = self.vdop = None
         self.lat = self.lon = self.alt = None    # alt: GGA, above mean sea level
         self.geoid_sep = None       # GGA field 11: geoid above the WGS84 ellipsoid, m
+        self.last_fix = None        # the newest position with a fix (dict, "mono": its time.monotonic())
         self.speed_kmh = None
         self.last_rx = 0.0          # time.monotonic() of the last good sentence
         # timepulse
@@ -239,6 +240,11 @@ class Gps(threading.Thread):
                 self.hdop = float(f[8]) if f[8] else None
                 self.alt = float(f[9]) if f[9] else None
                 self.geoid_sep = float(f[11]) if len(f) > 11 and f[11] else None
+                if self.valid and self.fix >= 2 and self.quality > 0 and self.lat is not None:
+                    self.last_fix = {"lat": self.lat, "lon": self.lon, "alt": self.alt,
+                                     "geoid_sep": self.geoid_sep, "fix": self.fix,
+                                     "sats": self.sats_used, "hdop": self.hdop, "utc": self.utc,
+                                     "mono": now}
             elif kind == "GSA":
                 self.fix = int(f[2] or 1)
                 self.pdop = float(f[15]) if f[15] else None

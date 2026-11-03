@@ -15,12 +15,19 @@ them into
 Values that are not in the recording are left out (never filled from the config). site.source
 says where the position came from: "GPS" (the capture's GPS fix), "config" (the capture's
 fallback, no fix), "recorder" (an ADV or older file: GPS or typed in, unknown) or "none".
+
+"integrity": the recording's STATION-DIGEST checked against its values
+(capture.station_header.check): "ok" (as recorded), "changed" (a value was edited after
+recording), "none" (no digest: another program's file, an older capture, or a SER file whose
+.ser.meta.json did not come along).
 """
 
 from __future__ import annotations
 
 import math
 import os
+
+from .capture.station_header import check
 
 FORMATS = {'.ravf': 'RAVF', '.adv': 'ADV', '.aav': 'AAV', '.ser': 'SER', '.avi': 'AVI', '.mov': 'MOV',
            '.mp4': 'MP4'}
@@ -79,7 +86,7 @@ def station_of(metadata: dict, fmt: str = '') -> dict:
     """The station block of event.json from a movie's metadata (keys in any case)."""
     m = _upper(metadata)
     fmt = (fmt or '').upper()
-    out: dict = {'format': fmt}
+    out: dict = {'format': fmt, 'integrity': check(metadata)}
     rec = _first(m, 'RECORDER-SOFTWARE', 'RECORDER')
     ver = _first(m, 'RECORDER-SOFTWARE-VERSION')
     if rec:

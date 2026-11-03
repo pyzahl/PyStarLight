@@ -7,6 +7,12 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Station data kept as recorded: `STATION-DIGEST` (SHA-256 of the station, site, timing and
+  camera entries) in the RAVF header / SER sidecar, finished recordings and sidecars made
+  read-only, `recording.station.integrity` (`ok` / `changed` / `none`) in event.json.
+- Camera: with a GPS receiver, Record arms only with a fix (waits for one); the header's
+  position is the fix at the first frame (or the last fix, at most 10 min old, with
+  `GPS-FIX-AGE-S`). `Gps.last_fix`.
 - Camera: any Linux video device (`/dev/videoN`, `capture/v4l2_cam.py`): USB grabbers for
   analog cameras, UVC webcams. Luminance of GREY / Y16 / YUYV / UYVY / MJPG, frames unscaled
   (fields woven), region cut in software, `--video-std`, `--video-input`, `--video-size`, the

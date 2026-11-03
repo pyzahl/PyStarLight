@@ -27,6 +27,8 @@ import time
 
 import numpy as np
 
+from .station_header import digest, protect
+
 HEADER_MAGIC = 0x46564152           # 'RAVF'
 VERSION = 1
 FRAME_MAGIC = 0xAF8ABD3C2A98CA3F
@@ -145,6 +147,7 @@ STATION_ENTRIES = (
     ("gps_satellites", "GPS-SATELLITES", UINT8),
     ("gps_hdop", "GPS-HDOP", FLOAT64),
     ("gps_position_utc", "GPS-POSITION-UTC", UTF8),
+    ("gps_fix_age_s", "GPS-FIX-AGE-S", FLOAT64),
 )
 
 
@@ -165,7 +168,7 @@ def header_entries(width, height, depth, meta):
     """The entries the ravf package requires, in its order, then PyStarLight's own."""
     m = meta.get
     color = COLOR_TYPES.get(str(m("pixel_format", ""))[:7], COLOR_MONO)
-    return [
+    entries = [
         ["OFFSET-FRAMES", UINT64, 0],
         ["OFFSET-INDEX", UINT64, 0],
         ["FRAMES-COUNT", UINT32, 0],
@@ -215,6 +218,9 @@ def header_entries(width, height, depth, meta):
         ["TRIGGER-DELAY-NS", UINT64, int(m("trigger_delay_ns") or 0)],
         *station_entries(meta),
     ]
+    # light protection: a digest of the station, timing and identity entries (station_header)
+    entries.append(["STATION-DIGEST", UTF8, digest({n: v for n, _, v in entries})])
+    return entries
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +284,7 @@ class RavfWriter:
         _finish(self.f, self.entries, self.index)
         self.f.close()
         self.f = None
+        protect(self.path)                  # finished: read-only from here on
 
 
 def _finish(f, entries, index):
@@ -327,10 +334,11 @@ def is_finished(f):
 def repair(path):
     """Finish an interrupted RAVF recording in place: drop a partial last frame, append the
     index rebuilt from the frames, update the header. Returns a message."""
-    with open(path, "r+b") as f:
+    with open(path, "rb") as f:             # a complete (read-only) file is left alone
         if is_finished(f):
             n = _get(read_header(f)[0], "FRAMES-COUNT")
             return f"{path}: complete, {n} frames"
+    with open(path, "r+b") as f:
         entries, _ = read_header(f)
         frames = scan_frames(f, _get(entries, "OFFSET-FRAMES"))
         if frames:
@@ -341,4 +349,5 @@ def repair(path):
             end = _get(entries, "OFFSET-FRAMES")
         f.truncate(end)
         _finish(f, entries, frames)
+    protect(path)
     return f"{path}: repaired, {len(frames)} frames"

@@ -1807,6 +1807,8 @@ class Viewer:
         t = plot.seconds(lc)
         meta = getattr(lc, 'metadata', {}) or {}
         station = station_of(meta, movie_format(self.path))
+        if station['integrity'] == 'changed':
+            print(f'{self.path.name}: station data changed after recording (STATION-DIGEST differs)')
         report = st.event_report(fit, date, m0, self._mag_band)
         tm = station['timing']
         base = {'time_base_accuracy_s': tm.get('accuracy_s'), 'time_source': tm.get('source', ''),

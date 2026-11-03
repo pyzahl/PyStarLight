@@ -462,10 +462,10 @@ class StationDialog(QtWidgets.QDialog):
     says about where, with what and by whom (station_header.FIELDS). Saved into the config file;
     required fields are marked * and must be filled in before a recording can be armed."""
 
-    def __init__(self, parent, observer, path, need_site=False, why=""):
+    def __init__(self, parent, observer, path, need_site=False, why="", pixel_um=None):
         super().__init__(parent)
         self.setWindowTitle("Station & equipment")
-        self.path, self.need_site = path, need_site
+        self.path, self.need_site, self.pixel_um = path, need_site, pixel_um
         lay = QtWidgets.QVBoxLayout(self)
         if why:
             note = QtWidgets.QLabel(why, wordWrap=True)
@@ -482,14 +482,19 @@ class StationDialog(QtWidgets.QDialog):
             elif kind is float:
                 w = QtWidgets.QDoubleSpinBox(decimals=7 if key in ("latitude", "longitude") else 3,
                                              minimum=-1e6, maximum=1e6)
-                if key in ("aperture_cm", "focal_length_cm", "altitude"):
+                if key in station_header.MM_FIELDS or key == "altitude":
                     w.setDecimals(1)
+                if key in station_header.MM_FIELDS:
+                    w.setSuffix(" mm")
                 try:
-                    w.setValue(float(v or 0))
+                    w.setValue(float(v or 0) * (10 if key in station_header.MM_FIELDS else 1))
                 except (TypeError, ValueError):
                     w.setValue(0)
             elif choices:
-                w = QtWidgets.QComboBox(editable=True)
+                # the telescope type is one of the report form's; the method code may be another
+                w = QtWidgets.QComboBox(editable=key != "telescope_type")
+                if key == "telescope_type" and v and str(v) not in choices:
+                    choices = (*choices, str(v))        # shown, so it can be seen and replaced
                 w.addItems(["", *choices])
                 text = str(v or "")
                 match = [c for c in choices if c == text or c.split(" ")[0] == text]
@@ -500,6 +505,10 @@ class StationDialog(QtWidgets.QDialog):
                 w.setToolTip(hint)
             self.widgets[key] = (w, kind)
             form.addRow(label + (" *" if required else ""), w)
+        self.optics_label = QtWidgets.QLabel(wordWrap=True)
+        self.optics_label.setToolTip("what these values imply: compare the plate scale with a "
+                                     "plate solve of the stack")
+        lay.addWidget(self.optics_label)
         self.missing_label = QtWidgets.QLabel(wordWrap=True)
         self.missing_label.setStyleSheet("color: #c0392b")
         lay.addWidget(self.missing_label)
@@ -524,7 +533,7 @@ class StationDialog(QtWidgets.QDialog):
             if kind is bool:
                 out[key] = w.isChecked()
             elif kind is float:
-                out[key] = float(w.value())
+                out[key] = float(w.value()) / (10 if key in station_header.MM_FIELDS else 1)
             elif isinstance(w, QtWidgets.QComboBox):
                 t = w.currentText().strip()
                 out[key] = t.split(" ")[0] if key == "observing_method" else t
@@ -533,7 +542,9 @@ class StationDialog(QtWidgets.QDialog):
         return out
 
     def show_missing(self, *_):
-        miss = station_header.missing(self.values(), self.need_site)
+        values = self.values()
+        self.optics_label.setText(station_header.optics_line(values, self.pixel_um))
+        miss = station_header.missing(values, self.need_site)
         self.missing_label.setText(("still missing: " + ", ".join(miss)) if miss else "complete")
         self.missing_label.setStyleSheet("color: #c0392b" if miss else "color: #27ae60")
 
@@ -560,6 +571,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # record pressed in GPS mode: anchor on GPS UTC again first, then arm the recorder
         # ({"args": arm() arguments, "begin_ns": when to start anchoring, "anchoring": bool})
         self.pending_rec = None
+        self.wait_fix = False           # Record pressed without a GPS fix: arms once there is one
         self.last_saved = ""
         self.stack_seen = -1                # stacker.version shown
         self.stack_mean = None              # stack shown (float, raw values)
@@ -1377,7 +1389,8 @@ class MainWindow(QtWidgets.QMainWindow):
             if not observer.get(key):
                 observer[key] = self.settings.value(old, "", type=str)
         path = localconfig.config_path() or localconfig.user_config_path()
-        dlg = StationDialog(self, observer, path, need_site=self.c.gps is None, why=why)
+        dlg = StationDialog(self, observer, path, need_site=self.c.gps is None, why=why,
+                            pixel_um=self.c.pixel_um)
         if not (dlg.exec() if hasattr(dlg, "exec") else dlg.exec_()):
             return False
         try:
@@ -1398,6 +1411,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.pending_rec is not None:        # cancel while anchoring
             self.pending_rec = None
             return
+        if self.wait_fix:                       # cancel while waiting for the GPS fix
+            self.wait_fix = False
+            return
         if rec.state != "idle":
             rec.stop()
             return
@@ -1407,6 +1423,12 @@ class MainWindow(QtWidgets.QMainWindow):
             if not self.edit_station(why="Fill in the station data before recording. Missing: "
                                      + ", ".join(miss)) or self.station_missing():
                 return
+        gps = self.c.gps
+        if gps is not None and not gps.has_fix():   # the recording's position is this GPS fix
+            self.wait_fix = True
+            print("Record: waiting for a GPS fix before arming")
+            self.on_status_timer()
+            return
         rec.out_dir = os.path.expanduser(self.dir_edit.text().strip() or self.args.record_dir)
         asteroid = self.asteroid_edit.text().strip()
         # observer / telescope come from the config ([observer], station_header); the command line overrides
@@ -1535,6 +1557,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.last_exposure = c.controller.exposure_us
             stamper.lag_ns = self.predicted_lag_ns()
         self.follow_pending_record()
+        if self.wait_fix and c.gps is not None and c.gps.has_fix():
+            self.wait_fix = False
+            print("GPS fix: arming the recording")
+            self.on_record_button()
         # GPS clock just anchored (at 1 Hz): go to the selected rate (not while recording)
         anchored = c.gps is not None and c.gps.clock.anchored
         if anchored != self.clock_seen and not (anchored and rec.state != "idle"):
@@ -1550,7 +1576,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_stack_box()
 
         # ---- trigger ----
-        busy = rec.state != "idle" or self.pending_rec is not None
+        busy = rec.state != "idle" or self.pending_rec is not None or self.wait_fix
         self.gps_check.setEnabled(not busy and c.can_trigger)
         self.rate_combo.setEnabled(not busy and mode == "gps" and not self.gps_busy)
         self.follow_y_trigger(busy)
@@ -1664,6 +1690,12 @@ class MainWindow(QtWidgets.QMainWindow):
                     + f"<br>{os.path.basename(rec.path or '')}")
             if rec.stop_ns:
                 text += f"<br>stops at {utc_str(rec.stop_ns, 0)} UTC"
+        elif self.wait_fix:
+            self.rec_button.setText("Cancel  (r)")
+            self.rec_button.setStyleSheet("background: #ef6c00; color: white; font-weight: bold;")
+            gps = c.gps
+            text = ("<b>Waiting for a GPS fix</b> before arming: the recording's position is the "
+                    f"GPS fix at its start ({gps.sats_used if gps else 0} satellites used)")
         elif self.pending_rec is not None:
             self.rec_button.setText("Cancel  (r)")
             self.rec_button.setStyleSheet("background: #ef6c00; color: white; font-weight: bold;")

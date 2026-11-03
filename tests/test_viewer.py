@@ -15,6 +15,12 @@ from pystarlight.viewer import Viewer, load_apertures, save_apertures  # noqa: E
 from test_pipeline import STARS, render, truth, write_ser  # noqa: E402
 
 
+def movie_shape(path):
+    from pystarlight import open_movie
+    with open_movie(path) as m:
+        return m.shape
+
+
 @pytest.fixture(autouse=True)
 def no_local_solver(monkeypatch):
     """solve-field may be installed here: the viewer would plate-solve every test movie."""
@@ -27,10 +33,12 @@ def movie(tmp_path):
     rng = np.random.default_rng(0)
     p = tmp_path / 'shake.ser'
     write_ser(p, [render(i, rng) for i in range(40)])
-    p.with_name('shake.ser.meta.json').write_text(json.dumps({     # as PyStarLight's capture writes it
-        'STATION': 'Test (T)', 'SITE-SOURCE': 'GPS', 'LATITUDE': 46.99249, 'LONGITUDE': 9.64015,
-        'LATITUDE-TEXT': '46.9924869', 'LONGITUDE-TEXT': '9.6401519', 'GPS-FIX': '3D',
-        'FRAME-TIMING-ACCURACY': 100000, 'TIMESTAMP-SOURCE': 'GPS trigger pulse, GPS UTC'}))
+    from pystarlight.capture import ser_writer  # the sidecar as the capture writes it
+    h, w = movie_shape(str(p))
+    ser_writer.write_meta(str(p), w, h, 16, {
+        'station': 'Test (T)', 'site_source': 'GPS', 'latitude': 46.99249, 'longitude': 9.64015,
+        'latitude_text': '46.9924869', 'longitude_text': '9.6401519', 'gps_fix': '3D',
+        'timing_accuracy_ns': 100000, 'timestamp_source': 'GPS trigger pulse, GPS UTC'})
     return p
 
 
@@ -96,6 +104,7 @@ def test_viewer_workflow(movie):
     assert meta['STATION'] == 'Test (T)' and meta['LATITUDE-TEXT'] == '46.9924869' and meta['Observer'] == ''
     st = ev['recording']['station']
     assert st['format'] == 'SER' and st['station'] == 'Test (T)' and st['site']['source'] == 'GPS'
+    assert st['integrity'] == 'ok' and meta['STATION-DIGEST'].startswith('sha256:')   # as recorded
     assert ev['recording']['site_source'] == 'GPS' and ev['recording']['gps_fix'] == '3D'
     assert st['timing']['accuracy_s'] == 1e-4 and ev['step_fit']['time_base']['time_base_accuracy_s'] == 1e-4
     assert ev['light_curve']['pyote_csv'] == 'shake.csv'

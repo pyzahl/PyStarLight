@@ -54,23 +54,40 @@ def station_meta(observer):
     return out
 
 
-def site_meta(gps, observer=None):
-    """The site of a new recording. With a GPS fix: its position (altitude above mean sea level
-    only with a 3D fix), the geoid separation, the fix, satellites, HDOP and the fix's UTC,
-    SITE-SOURCE 'GPS'. Without a fix: the config's [observer] latitude / longitude / altitude
-    if set, SITE-SOURCE 'config'; else SITE-SOURCE 'none' and no position."""
+LAST_FIX_MAX_AGE_S = 600.0     # a fix lost at the start: its last position, if this recent
+
+
+def site_meta(gps, observer=None, now=None):
+    """The site of a new recording, taken when it starts. With a GPS fix: its position (altitude
+    above mean sea level only with a 3D fix), the geoid separation, the fix, satellites, HDOP and
+    the fix's UTC, SITE-SOURCE 'GPS'. The fix lost just then (the GUI arms only with a fix): the
+    receiver's last fixed position if at most LAST_FIX_MAX_AGE_S old, still 'GPS', with
+    GPS-FIX-AGE-S. Else the config's [observer] latitude / longitude / altitude if set,
+    SITE-SOURCE 'config'; else SITE-SOURCE 'none' and no position."""
+    import time
+    fix = None
     if gps is not None and gps.has_fix() and gps.lat is not None and gps.lon is not None:
-        fix = getattr(gps, "fix", 3)
-        out = {"latitude": gps.lat, "longitude": gps.lon, "site_source": "GPS", "datum": "",
-               "gps_fix": FIX_NAMES.get(fix, str(fix)), "gps_satellites": int(gps.sats_used or 0)}
-        if gps.hdop is not None:
-            out["gps_hdop"] = float(gps.hdop)
-        if fix >= 3 and gps.alt is not None:
-            out.update(altitude=float(gps.alt), altitude_ref="MSL")
-            if getattr(gps, "geoid_sep", None) is not None:
-                out["geoid_separation_m"] = float(gps.geoid_sep)
-        if gps.utc is not None:
-            out["gps_position_utc"] = gps.utc.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-4] + "Z"
+        fix = {"lat": gps.lat, "lon": gps.lon, "alt": gps.alt, "geoid_sep": getattr(gps, "geoid_sep", None),
+               "fix": getattr(gps, "fix", 3), "sats": gps.sats_used, "hdop": gps.hdop, "utc": gps.utc}
+        age = 0.0
+    elif gps is not None and getattr(gps, "last_fix", None):
+        age = (time.monotonic() if now is None else now) - gps.last_fix["mono"]
+        if age <= LAST_FIX_MAX_AGE_S:
+            fix = gps.last_fix
+    if fix is not None:
+        kind = fix["fix"]
+        out = {"latitude": fix["lat"], "longitude": fix["lon"], "site_source": "GPS", "datum": "",
+               "gps_fix": FIX_NAMES.get(kind, str(kind)), "gps_satellites": int(fix["sats"] or 0)}
+        if fix["hdop"] is not None:
+            out["gps_hdop"] = float(fix["hdop"])
+        if kind >= 3 and fix["alt"] is not None:
+            out.update(altitude=float(fix["alt"]), altitude_ref="MSL")
+            if fix["geoid_sep"] is not None:
+                out["geoid_separation_m"] = float(fix["geoid_sep"])
+        if fix["utc"] is not None:
+            out["gps_position_utc"] = fix["utc"].strftime("%Y-%m-%dT%H:%M:%S.%f")[:-4] + "Z"
+        if age > 0:
+            out["gps_fix_age_s"] = round(age, 1)
         return _texts(out)
     observer = observer or {}
     try:
@@ -108,9 +125,10 @@ FIELDS = (
     ("station", "Station", str, True, (), 'station name, e.g. "Sternwarte Seewis Dorf (SWD)"'),
     ("telescope", "Telescope", str, True, (), 'description, e.g. "C-14 EHD" or "APO107"'),
     ("telescope_type", "Telescope type", str, True, TELESCOPE_TYPES, "as in the IOTA-ES report form"),
-    ("aperture_cm", "Aperture (cm)", float, True, (), ""),
-    ("focal_length_cm", "Focal length (cm)", float, True, (),
-     "EFFECTIVE focal length, with the reducer / Barlow"),
+    ("aperture_cm", "Aperture (mm)", float, True, (), "entered in mm, stored in cm (the report form's unit)"),
+    ("focal_length_cm", "Focal length (mm, effective)", float, True, (),
+     "EFFECTIVE focal length, with the reducer / Barlow (e.g. 750 mm x 0.5 = 375 mm); "
+     "entered in mm, stored in cm"),
     ("focal_reducer", "Focal reducer / Barlow", str, False, (), 'e.g. "0.5x"; empty = none'),
     ("mount", "Mount", str, True, (), ""),
     ("camera", "Camera (notes)", str, False, (), "the recording names the camera model itself"),
@@ -136,9 +154,50 @@ def effective(observer, args_observer="", args_telescope=""):
     return out
 
 
+MM_FIELDS = ("aperture_cm", "focal_length_cm")    # the dialog shows these in mm
+
+
+def implausible(observer):
+    """Values that cannot be right (mm typed where cm are stored, a native focal length...):
+    aperture 1 cm .. 1 m, focal length 5 cm .. 20 m, focal ratio f/1 .. f/40, telescope type
+    one of TELESCOPE_TYPES."""
+    o = observer or {}
+    out = []
+    try:
+        d, f = float(o.get("aperture_cm") or 0), float(o.get("focal_length_cm") or 0)
+    except (TypeError, ValueError):
+        return ["aperture / focal length are not numbers"]
+    if d and not 1 <= d <= 100:
+        out.append(f"aperture {d * 10:g} mm?")
+    if f and not 5 <= f <= 2000:
+        out.append(f"focal length {f * 10:g} mm?")
+    if d and f and not 1 <= f / d <= 40:
+        out.append(f"focal ratio f/{f / d:.1f}?")
+    t = str(o.get("telescope_type") or "").strip()
+    if t and t not in TELESCOPE_TYPES:
+        out.append(f'telescope type "{t}" (one of {", ".join(TELESCOPE_TYPES)})')
+    return out
+
+
+def optics_line(observer, pixel_um=None):
+    """'107 mm, effective 375 mm f/3.5, 1.32"/px (2.4 um pixels)' (what the values imply)."""
+    o = observer or {}
+    try:
+        d, f = float(o.get("aperture_cm") or 0) * 10, float(o.get("focal_length_cm") or 0) * 10
+    except (TypeError, ValueError):
+        return ""
+    parts = [f"{d:g} mm" if d else "", f"effective {f:g} mm" if f else ""]
+    if d and f:
+        parts.append(f"f/{f / d:.1f}")
+    if f and pixel_um:
+        parts.append(f'{206.265 * pixel_um / f:.2f}"/px ({pixel_um:g} um pixels)')
+    return ", ".join(p for p in parts if p)
+
+
 def missing(observer, need_site=False):
-    """Labels of the required station fields that are empty (or 0); need_site: no GPS receiver,
-    so the fallback latitude / longitude are required too."""
+    """Labels of the required station fields that are empty (or 0), and values that cannot be
+    right (implausible); need_site: no GPS receiver, so the fallback latitude / longitude are
+    required too."""
     observer = observer or {}
     out = []
     for key, label, kind, required, *_ in FIELDS:
@@ -161,7 +220,7 @@ def missing(observer, need_site=False):
             ok = False
         if not ok:
             out.append("site (no GPS: fallback latitude / longitude)")
-    return out
+    return out + implausible(observer)
 
 
 def summary(observer):
@@ -175,3 +234,60 @@ def summary(observer):
     except (TypeError, ValueError):
         pass
     return " - ".join(p for p in parts if p)
+
+
+# ---- light protection: a digest of what describes the observation ----
+# Not a signature (anyone can recompute it): it catches a value changed by accident, e.g. by
+# an editor or another program rewriting the header or the SER sidecar, on the way from the
+# camera to the report. The RAVF header / SER sidecar carry it as STATION-DIGEST.
+DIGEST_KEYS = (
+    "OBSERVER", "OBSERVER-2", "OBSERVERS-MORE", "STATION", "TELESCOPE", "TELESCOPE-TYPE", "APERTURE-CM",
+    "FOCAL-LENGTH-CM", "FOCAL-REDUCER", "MOUNT", "OBSERVING-METHOD", "CAMERA-DELAY-S", "CAMERA-DELAY-APPLIED",
+    "SITE-SOURCE", "LATITUDE-TEXT", "LONGITUDE-TEXT", "ALTITUDE-TEXT", "ALTITUDE-REF", "GEOID-SEPARATION-M",
+    "DATUM", "GPS-FIX", "GPS-SATELLITES", "GPS-HDOP", "GPS-POSITION-UTC", "GPS-FIX-AGE-S",
+    "INSTRUMENT", "INSTRUMENT-VENDOR", "INSTRUMENT-SERIAL", "INSTRUMENT-SENSOR", "INSTRUMENT-SHUTTER",
+    "RECORDER-SOFTWARE", "RECORDER-SOFTWARE-VERSION", "TIMESTAMP-SOURCE", "TIMESTAMP-ROW",
+    "FRAME-TIMING-ACCURACY", "TRIGGER-DELAY-NS", "OBJNAME",
+)
+DIGEST_ENTRY = "STATION-DIGEST"
+
+
+def _norm(v):
+    if isinstance(v, bytes):
+        v = v.decode("utf-8", "replace")
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, float):
+        return repr(v)
+    if isinstance(v, int):
+        return str(v)
+    return str(v).rstrip("\0")
+
+
+def digest(entries):
+    """'sha256:<32 hex>' over the DIGEST_KEYS present in entries (RAVF names -> values)."""
+    import hashlib
+    import json
+    data = {k: _norm(entries[k]) for k in DIGEST_KEYS if k in entries and entries[k] is not None}
+    text = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
+
+
+def check(metadata):
+    """'ok' (as recorded), 'changed' (a value differs from the recording's digest) or 'none'
+    (no digest: another program's recording, or a SER file without its .meta.json)."""
+    m = {str(k).upper(): v for k, v in (metadata or {}).items()}
+    want = m.get(DIGEST_ENTRY)
+    if not want:
+        return "none"
+    return "ok" if _norm(want) == digest(m) else "changed"
+
+
+def protect(path):
+    """Make a finished file read-only (owner, group, others): no accidental overwrite or edit;
+    a copy (cp, rsync) keeps the mode. chmod u+w undoes it."""
+    import os
+    try:
+        os.chmod(path, os.stat(path).st_mode & ~0o222)
+    except OSError:
+        pass

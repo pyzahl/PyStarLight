@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 
 import numpy as np
 
+from .station_header import protect
+
 SER_HEADER_SIZE = 178
 SER_HEADER = "<14s7i40s40s40sqq"
 TICKS_UNIX_EPOCH = 621355968000000000      # .NET ticks at 1970-01-01T00:00:00Z
@@ -67,6 +69,7 @@ def write_meta(path, width, height, depth, meta):
         out[name] = value
     with open(meta_path(path), "w") as f:
         json.dump(out, f, indent=1)
+    protect(meta_path(path))                # read-only: kept as recorded (with STATION-DIGEST)
 
 
 def _local_ticks(utc_ticks):
@@ -126,6 +129,7 @@ class SerWriter:
         self.f.close()
         self.f = None
         os.remove(times_path(self.path))
+        protect(self.path)                  # finished: read-only from here on
 
 
 def _header(width, height, depth, count, text, first_ticks):
@@ -167,5 +171,6 @@ def repair(path):
         f.write(_header(width, height, depth, frames, text, first))
     if os.path.exists(tpath):
         os.remove(tpath)
+    protect(path)
     return (f"{path}: repaired, {frames} frames"
             + ("" if ticks else " - NO timestamps (no .times sidecar)"))
