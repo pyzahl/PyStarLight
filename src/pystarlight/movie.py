@@ -18,6 +18,7 @@ optional corrections (see preprocess.py).
 from __future__ import annotations
 
 import glob
+import json
 import os
 import re
 import threading
@@ -206,6 +207,15 @@ class SerReader(MovieReader):
             DateTimeUTC=' '.join(_ticks_to_datetime(dt_utc)),
             BytesPerPixel=self.bytes_per_pixel, NumTimestamps=int(n_ts),
         )
+        # PyStarLight's capture: the rest of the header (station, site, timing) in a sidecar,
+        # under RAVF names (capture/ser_writer.write_meta)
+        try:
+            with open(self.path + '.meta.json') as f:
+                extra = json.load(f)
+            if isinstance(extra, dict):
+                self.metadata.update(extra)
+        except (OSError, ValueError):
+            pass
 
     def __len__(self):
         return self._count

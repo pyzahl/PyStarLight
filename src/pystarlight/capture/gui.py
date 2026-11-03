@@ -19,7 +19,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import favorites
+from . import favorites, localconfig, station_header
 from .cameras import VEYE_MIN_ROI
 from .decode import format_bits, format_for_bits
 from .qt import QShortcut, QtCore, QtGui, QtWidgets, Signal, Slot, event_pos
@@ -457,6 +457,87 @@ class LevelsBox(QtWidgets.QGroupBox):
         return np.round(255.0 * np.clip(x, 0.0, 1.0) ** (1.0 / self.gamma)).astype(np.uint8)
 
 
+class StationDialog(QtWidgets.QDialog):
+    """Station and equipment ([observer] of the private config): what every recording's header
+    says about where, with what and by whom (station_header.FIELDS). Saved into the config file;
+    required fields are marked * and must be filled in before a recording can be armed."""
+
+    def __init__(self, parent, observer, path, need_site=False, why=""):
+        super().__init__(parent)
+        self.setWindowTitle("Station & equipment")
+        self.path, self.need_site = path, need_site
+        lay = QtWidgets.QVBoxLayout(self)
+        if why:
+            note = QtWidgets.QLabel(why, wordWrap=True)
+            note.setStyleSheet("color: #c0392b; font-weight: bold")
+            lay.addWidget(note)
+        form = QtWidgets.QFormLayout()
+        lay.addLayout(form)
+        self.widgets = {}
+        for key, label, kind, required, choices, hint in station_header.FIELDS:
+            v = observer.get(key)
+            if kind is bool:
+                w = QtWidgets.QCheckBox()
+                w.setChecked(bool(v))
+            elif kind is float:
+                w = QtWidgets.QDoubleSpinBox(decimals=7 if key in ("latitude", "longitude") else 3,
+                                             minimum=-1e6, maximum=1e6)
+                if key in ("aperture_cm", "focal_length_cm", "altitude"):
+                    w.setDecimals(1)
+                try:
+                    w.setValue(float(v or 0))
+                except (TypeError, ValueError):
+                    w.setValue(0)
+            elif choices:
+                w = QtWidgets.QComboBox(editable=True)
+                w.addItems(["", *choices])
+                text = str(v or "")
+                match = [c for c in choices if c == text or c.split(" ")[0] == text]
+                w.setCurrentText(match[0] if match else text)
+            else:
+                w = QtWidgets.QLineEdit(str(v or ""))
+            if hint:
+                w.setToolTip(hint)
+            self.widgets[key] = (w, kind)
+            form.addRow(label + (" *" if required else ""), w)
+        self.missing_label = QtWidgets.QLabel(wordWrap=True)
+        self.missing_label.setStyleSheet("color: #c0392b")
+        lay.addWidget(self.missing_label)
+        where = QtWidgets.QLabel(f"saved in {path}  (* required; --observer / --telescope on the "
+                                 "command line override)", wordWrap=True)
+        where.setStyleSheet("color: gray")
+        lay.addWidget(where)
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Save
+                                             | QtWidgets.QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+        for w, kind in self.widgets.values():
+            sig = (w.toggled if kind is bool else w.valueChanged if kind is float else
+                   w.currentTextChanged if isinstance(w, QtWidgets.QComboBox) else w.textChanged)
+            sig.connect(self.show_missing)
+        self.show_missing()
+
+    def values(self):
+        out = {}
+        for key, (w, kind) in self.widgets.items():
+            if kind is bool:
+                out[key] = w.isChecked()
+            elif kind is float:
+                out[key] = float(w.value())
+            elif isinstance(w, QtWidgets.QComboBox):
+                t = w.currentText().strip()
+                out[key] = t.split(" ")[0] if key == "observing_method" else t
+            else:
+                out[key] = w.text().strip()
+        return out
+
+    def show_missing(self, *_):
+        miss = station_header.missing(self.values(), self.need_site)
+        self.missing_label.setText(("still missing: " + ", ".join(miss)) if miss else "complete")
+        self.missing_label.setStyleSheet("color: #c0392b" if miss else "color: #27ae60")
+
+
 class MainWindow(QtWidgets.QMainWindow):
     favorites_ready = Signal(object)         # PySyzygos favorites (list) or an error message (str)
 
@@ -608,6 +689,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bits_combo.addItems([f"{b} bit" for b in self.bits_choices])
         self.bits_combo.setToolTip("lower depth reads out faster (IMX178 full frame: "
                                    "12 bit 33.2, 10 bit 39.2, 8 bit 40.1 fps)")
+        if c.is_v4l2:                       # a video device: its pixel formats instead
+            self.bits_choices = list(c.available)
+            self.bits_combo.clear()
+            self.bits_combo.addItems(self.bits_choices)
+            self.bits_combo.setToolTip("the device's pixel format (luminance kept): YUYV / UYVY / "
+                                       "GREY as sent; MJPG is compressed (worse for photometry "
+                                       "and a time-code OCR)")
         self.show_bits()
         self.bits_combo.currentIndexChanged.connect(self.on_bits)
         g.addWidget(QtWidgets.QLabel("Depth"), 7, 0)
@@ -615,6 +703,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.set_exposure_widgets(self.target["exposure"])
         self.set_gain_widgets(self.target["gain"])
+        if c.is_v4l2:                       # a video device: its own controls, where it has them
+            self.gain_spin.setSuffix("")    # device units, not dB
+            cam = c.camera
+            for fixed, widgets, what in ((cam.exposure_fixed, (self.exp_slider, self.exp_spin), "exposure"),
+                                         (cam.gain_fixed, (self.gain_slider, self.gain_spin), "gain")):
+                for w in widgets:
+                    w.setEnabled(not fixed)
+                    if fixed:
+                        w.setToolTip(f"this video device has no {what} control: the camera sets it")
         self.exp_slider.valueChanged.connect(lambda p: self.set_exposure(self.slider_to_exp(p)))
         self.exp_spin.valueChanged.connect(lambda ms: self.set_exposure(ms * 1000))
         self.gain_slider.valueChanged.connect(
@@ -660,7 +757,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.c.controller.request("gain", db)
 
     def show_bits(self):
-        bits = format_bits(self.c.pixel_format)
+        bits = self.c.pixel_format if self.c.is_v4l2 else format_bits(self.c.pixel_format)
         if bits in self.bits_choices:
             self.bits_combo.blockSignals(True)
             self.bits_combo.setCurrentIndex(self.bits_choices.index(bits))
@@ -668,7 +765,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_bits(self, index):
         c = self.c
-        fmt = format_for_bits(self.bits_choices[index], c.available, c.pixel_format)
+        fmt = (self.bits_choices[index] if c.is_v4l2 else
+               format_for_bits(self.bits_choices[index], c.available, c.pixel_format))
         if fmt and fmt != c.pixel_format:
             self.roi_info.setText(f"switching to {fmt}...")
             c.controller.request("reconfigure", {"pixel_format": fmt})
@@ -825,6 +923,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ytrig_spin.setValue(self.c.height // 2 if self.args.y_trigger is None else self.args.y_trigger)
         self.ytrig_check.setVisible(self.c.is_veye)
         self.ytrig_spin.setVisible(self.c.is_veye)
+        if not self.c.can_trigger:          # a video device (/dev/videoN)
+            self.gps_check.setChecked(False)
+            self.gps_check.setText("GPS trigger  (not for a video device)")
+            self.gps_check.setToolTip("a video device cannot be triggered: frames carry the "
+                                      "driver's time (Pi clock, NTP). For the true time record an "
+                                      "embedded time code (VTI) or GPS LED flashes in the image")
+            self.delay_spin.setEnabled(False)
         g.addWidget(self.gps_check, 0, 0, 1, 2)
         g.addWidget(QtWidgets.QLabel("GPS frame rate"), 1, 0)
         g.addWidget(self.rate_combo, 1, 1)
@@ -902,7 +1007,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not initial:
             c.controller.request("trigger", mode)
         c.grabber.frame_period_ns = (c.camera.frame_period_ns
-                                     if c.is_veye and mode == "free" else None)
+                                     if (c.is_veye or c.is_v4l2) and mode == "free" else None)
         self.trig_button.setVisible(mode == "sw")
         if mode == "gps":
             if c.gps is not None and c.gps.clock.stale():
@@ -1066,12 +1171,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dir_edit = QtWidgets.QLineEdit(self.args.record_dir)
         browse = QtWidgets.QToolButton(text="…")
         browse.clicked.connect(self.browse_dir)
-        # the command line wins; else the last values typed (remembered across runs)
-        self.observer_edit = QtWidgets.QLineEdit(
-            self.args.observer or self.settings.value("observer", "", type=str))
-        self.telescope_edit = QtWidgets.QLineEdit(
-            self.args.telescope or self.settings.value("telescope", "", type=str))
-        self.telescope_edit.setPlaceholderText("e.g. 67 mm f/6 refractor, 400 mm")
+        # station and equipment: [observer] of the private config, edited in a dialog
+        self.station_button = QtWidgets.QPushButton("Station && equipment …")
+        self.station_button.setToolTip("observer(s), station, telescope, aperture, focal length, "
+                                       "mount, method, camera delay, fallback site: written into "
+                                       "every recording; required before recording")
+        self.station_button.clicked.connect(lambda: self.edit_station())
+        self.station_info = QtWidgets.QLabel(wordWrap=True)
         self.asteroid_edit = QtWidgets.QLineEdit(self.settings.value("asteroid", "", type=str))
         self.asteroid_edit.setPlaceholderText("occulting asteroid, e.g. 158772 (2003 SB60)")
         self.asteroid_edit.setToolTip("goes into the file name (before the star) and the "
@@ -1087,9 +1193,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.favorites_ready.connect(self.on_favorites)
         self.event_info = QtWidgets.QLabel(wordWrap=True)
         self.event_info.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-        for key, edit in (("observer", self.observer_edit), ("telescope", self.telescope_edit)):
-            edit.editingFinished.connect(
-                lambda key=key, edit=edit: self.settings.setValue(key, edit.text().strip()))
         self.format_combo = QtWidgets.QComboBox()
         self.format_combo.addItems([f.upper() for f in RECORD_FORMATS])
         self.format_combo.setCurrentIndex(RECORD_FORMATS.index(self.args.record_format))
@@ -1137,10 +1240,8 @@ class MainWindow(QtWidgets.QMainWindow):
         g.addWidget(browse, 0, 3)
         g.addWidget(QtWidgets.QLabel("Format"), 1, 0)
         g.addWidget(self.format_combo, 1, 1, 1, 3)
-        g.addWidget(QtWidgets.QLabel("Observer"), 2, 0)
-        g.addWidget(self.observer_edit, 2, 1, 1, 3)
-        g.addWidget(QtWidgets.QLabel("Telescope"), 3, 0)
-        g.addWidget(self.telescope_edit, 3, 1, 1, 3)
+        g.addWidget(self.station_button, 2, 0, 1, 4)
+        g.addWidget(self.station_info, 3, 0, 1, 4)
         g.addWidget(QtWidgets.QLabel("Asteroid"), 4, 0)
         g.addWidget(self.asteroid_edit, 4, 1, 1, 2)
         g.addWidget(self.fav_button, 4, 3)
@@ -1162,8 +1263,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.review_button.clicked.connect(self.review_last)
         self.review_button.setEnabled(False)
         g.addWidget(self.review_button, 12, 0, 1, 4)
-        self.rec_widgets = [self.dir_edit, browse, self.format_combo, self.observer_edit,
-                            self.telescope_edit, self.asteroid_edit, self.fav_button,
+        self.show_station()
+        self.rec_widgets = [self.dir_edit, browse, self.format_combo, self.station_button,
+                            self.asteroid_edit, self.fav_button,
                             self.start_now, self.start_at, self.start_time, next_min,
                             self.dur_check, self.dur_spin, self.frames_check, self.frames_spin]
         return box
@@ -1253,6 +1355,39 @@ class MainWindow(QtWidgets.QMainWindow):
         if d:
             self.dir_edit.setText(d)
 
+    # ---- station and equipment ([observer] in the private config) ----
+    def station(self):
+        """[observer] as it goes into the header (command line over name / telescope)."""
+        return station_header.effective(localconfig.section("observer"), self.args.observer,
+                                        self.args.telescope)
+
+    def station_missing(self):
+        return station_header.missing(self.station(), need_site=self.c.gps is None)
+
+    def show_station(self):
+        miss = self.station_missing()
+        line = station_header.summary(self.station()) or "no station data yet"
+        self.station_info.setText(line + (f"\nmissing: {', '.join(miss)}" if miss else ""))
+        self.station_info.setStyleSheet("color: #c0392b" if miss else "")
+
+    def edit_station(self, why=""):
+        """The station dialog; Save writes [observer] into the config. True when saved."""
+        observer = dict(localconfig.section("observer"))
+        for key, old in (("name", "observer"), ("telescope", "telescope")):   # typed in earlier versions
+            if not observer.get(key):
+                observer[key] = self.settings.value(old, "", type=str)
+        path = localconfig.config_path() or localconfig.user_config_path()
+        dlg = StationDialog(self, observer, path, need_site=self.c.gps is None, why=why)
+        if not (dlg.exec() if hasattr(dlg, "exec") else dlg.exec_()):
+            return False
+        try:
+            localconfig.update_section("observer", dlg.values(), path)
+        except Exception as e:                  # e.g. not writable
+            QtWidgets.QMessageBox.warning(self, "Station & equipment", f"could not save {path}: {e}")
+            return False
+        self.show_station()
+        return True
+
     def set_next_minute(self):
         t = datetime.now(timezone.utc) + timedelta(seconds=10)
         t = t.replace(second=0, microsecond=0) + timedelta(minutes=1)
@@ -1266,15 +1401,20 @@ class MainWindow(QtWidgets.QMainWindow):
         if rec.state != "idle":
             rec.stop()
             return
+        miss = self.station_missing()
+        if miss:                                # no recording without the station data
+            self.rec_info.setText("not armed: station data incomplete (" + ", ".join(miss) + ")")
+            if not self.edit_station(why="Fill in the station data before recording. Missing: "
+                                     + ", ".join(miss)) or self.station_missing():
+                return
         rec.out_dir = os.path.expanduser(self.dir_edit.text().strip() or self.args.record_dir)
         asteroid = self.asteroid_edit.text().strip()
-        rec.text.update(observer=self.observer_edit.text(), telescope=self.telescope_edit.text(),
+        # observer / telescope come from the config ([observer], station_header); the command line overrides
+        rec.text.update(observer=self.args.observer, telescope=self.args.telescope,
                         objname=asteroid or self.target_name())
         # file name: <camera>_<asteroid>_<star>_<UTC>
         rec.tag = "_".join(t for t in (file_tag(asteroid), file_tag(self.target_name())) if t)
         self.settings.setValue("asteroid", asteroid)
-        self.settings.setValue("observer", self.observer_edit.text().strip())
-        self.settings.setValue("telescope", self.telescope_edit.text().strip())
         rec.fmt = RECORD_FORMATS[self.format_combo.currentIndex()]
         start_ns = None
         if self.start_at.isChecked():
@@ -1411,11 +1551,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ---- trigger ----
         busy = rec.state != "idle" or self.pending_rec is not None
-        self.gps_check.setEnabled(not busy)
+        self.gps_check.setEnabled(not busy and c.can_trigger)
         self.rate_combo.setEnabled(not busy and mode == "gps" and not self.gps_busy)
         self.follow_y_trigger(busy)
         ytrig = self.view.hline is not None
-        self.delay_spin.setEnabled(not busy and not ytrig)
+        self.delay_spin.setEnabled(not busy and not ytrig and c.can_trigger)
         self.ytrig_check.setEnabled(not busy and mode == "gps")
         self.ytrig_spin.setEnabled(not busy and mode == "gps")
         info = []

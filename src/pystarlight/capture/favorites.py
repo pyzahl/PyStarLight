@@ -22,6 +22,9 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
+from .localconfig import read as _read_config  # noqa: F401  (tests)
+from .localconfig import section
+
 LEAD_S = 40.0           # recording starts this long before the event ...
 TRAIL_S = 40.0          # ... and ends this long after it
 
@@ -37,11 +40,7 @@ def server_settings(url=None, token=None):
 
 def _server_config():
     """The config's [pysyzygos_server] (package config, else the file read directly)."""
-    try:
-        from pystarlight.config import load
-        return load().get("pysyzygos_server") or {}
-    except Exception:                       # system Python without the package's needs
-        return _read_config().get("pysyzygos_server") or {}
+    return section("pysyzygos_server")
 
 
 def past_hours():
@@ -50,25 +49,6 @@ def past_hours():
         return max(0.0, float(_server_config().get("past_hours") or 0))
     except (TypeError, ValueError):
         return 0.0
-
-
-def _read_config():
-    """The private config read directly (as pystarlight.config finds it, without importing
-    the package): $PYSTARLIGHT_CONFIG ('none': no file), ./pystarlight.toml, the project root's."""
-    env = os.environ.get("PYSTARLIGHT_CONFIG")
-    if env == "none":
-        return {}
-    here = os.path.dirname(os.path.abspath(__file__))
-    root = os.path.normpath(os.path.join(here, "..", "..", ".."))        # src/pystarlight/capture
-    for p in (env, os.path.join(os.getcwd(), "pystarlight.toml"), os.path.join(root, "pystarlight.toml")):
-        if p and os.path.isfile(p):
-            try:
-                import tomllib
-                with open(p, "rb") as f:
-                    return tomllib.load(f)
-            except Exception:
-                return {}
-    return {}
 
 
 def parse_utc(text):

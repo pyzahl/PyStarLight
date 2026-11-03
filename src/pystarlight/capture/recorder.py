@@ -137,7 +137,8 @@ class Recorder(threading.Thread):
         self.path = os.path.join(self.out_dir, f"{self.name}_{tag + '_' if tag else ''}{stamp}Z"
                                  f"{writer.extension}")
         width, height, depth = self.frame_format()
-        meta = {**self.header_info(), **self.text, "start_ns": frame_ns}
+        text = {k: v for k, v in self.text.items() if v not in (None, "")}    # blank: keep the config's
+        meta = {**self.header_info(), **text, "start_ns": frame_ns}
         self.writer = writer(self.path, width, height, depth, meta)
         self.frames = self.dropped = self.synced = 0
         self.first_ns = self.last_ns = None

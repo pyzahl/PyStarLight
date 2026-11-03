@@ -115,6 +115,52 @@ def _f32(v):
     return float(v or 0.0)
 
 
+def _pos(v):
+    """Position entry: NaN when there is none (no GPS fix and no site in the config), not 0."""
+    return float("nan") if v is None else float(v)
+
+
+# station, equipment and site (capture/station_header.py), written only when there:
+# metadata key -> RAVF entry, type
+STATION_ENTRIES = (
+    ("observer2", "OBSERVER-2", UTF8),
+    ("observers_more", "OBSERVERS-MORE", UTF8),
+    ("station", "STATION", UTF8),
+    ("telescope_type", "TELESCOPE-TYPE", UTF8),
+    ("aperture_cm", "APERTURE-CM", FLOAT64),
+    ("focal_length_cm", "FOCAL-LENGTH-CM", FLOAT64),
+    ("focal_reducer", "FOCAL-REDUCER", UTF8),
+    ("mount", "MOUNT", UTF8),
+    ("observing_method", "OBSERVING-METHOD", UTF8),
+    ("camera_delay_s", "CAMERA-DELAY-S", FLOAT64),
+    ("camera_delay_applied", "CAMERA-DELAY-APPLIED", UTF8),
+    ("site_source", "SITE-SOURCE", UTF8),
+    ("latitude_text", "LATITUDE-TEXT", UTF8),
+    ("longitude_text", "LONGITUDE-TEXT", UTF8),
+    ("altitude_text", "ALTITUDE-TEXT", UTF8),
+    ("altitude_ref", "ALTITUDE-REF", UTF8),
+    ("geoid_separation_m", "GEOID-SEPARATION-M", FLOAT64),
+    ("datum", "DATUM", UTF8),
+    ("gps_fix", "GPS-FIX", UTF8),
+    ("gps_satellites", "GPS-SATELLITES", UINT8),
+    ("gps_hdop", "GPS-HDOP", FLOAT64),
+    ("gps_position_utc", "GPS-POSITION-UTC", UTF8),
+)
+
+
+def station_entries(meta):
+    """The STATION_ENTRIES present in meta, as [name, type, value]."""
+    out = []
+    for key, name, kind in STATION_ENTRIES:
+        v = meta.get(key)
+        if v is None:
+            continue
+        if isinstance(v, bool):
+            v = "true" if v else "false"
+        out.append([name, kind, float(v) if kind == FLOAT64 else int(v) if kind == UINT8 else str(v)])
+    return out
+
+
 def header_entries(width, height, depth, meta):
     """The entries the ravf package requires, in its order, then PyStarLight's own."""
     m = meta.get
@@ -148,9 +194,9 @@ def header_entries(width, height, depth, meta):
         ["TELESCOPE", UTF8, m("telescope", "")],
         ["OBSERVER", UTF8, m("observer", "")],
         ["OBSERVER-ID", UTF8, m("observer_id", "")],
-        ["LATITUDE", FLOAT32, _f32(m("latitude"))],
-        ["LONGITUDE", FLOAT32, _f32(m("longitude"))],
-        ["ALTITUDE", FLOAT32, _f32(m("altitude"))],
+        ["LATITUDE", FLOAT32, _pos(m("latitude"))],
+        ["LONGITUDE", FLOAT32, _pos(m("longitude"))],
+        ["ALTITUDE", FLOAT32, _pos(m("altitude"))],
         ["OBJNAME", UTF8, m("objname", "")],
         ["RA", FLOAT32, _f32(m("ra"))],
         ["DEC", FLOAT32, _f32(m("dec"))],
@@ -167,6 +213,7 @@ def header_entries(width, height, depth, meta):
         ["ROI-Y", UINT32, int(m("roi_y") or 0)],
         ["TRIGGER", UTF8, m("trigger", "")],
         ["TRIGGER-DELAY-NS", UINT64, int(m("trigger_delay_ns") or 0)],
+        *station_entries(meta),
     ]
 
 

@@ -62,7 +62,7 @@ MARKER_COLOR = '#ff3d7f'                        # the star entered in the star f
 MOVIE_PATTERNS = '*.ravf *.ser *.adv *.aav *.avi *.mov *.fit *.fits *.fts'
 FITS_SUFFIXES = ('.fit', '.fits', '.fts')
 NAV_KEYS = ('left', 'right', 'pageup', 'pagedown', 'home', 'end', 'n', 'N', 'a', 's', 'l', 'p', 'i', 'u',
-            '1', '2')
+            'e', '1', '2')
 
 
 def free_matplotlib_keys(keys):
@@ -298,6 +298,7 @@ class Viewer:
                    ('+10 s', lambda e: self.go(self.index + self.jump), 0.065),
                    ('>|', lambda e: self.go(self.n - 1), 0.065),
                    ('Run', lambda e: self.run(), 0.065),
+                   ('Send', lambda e: self.send_event(), 0.065),
                    (self._names_label(), lambda e: self.toggle_names(), 0.085)]
         gap = 0.01
         row_width = sum(width for _, _, width in buttons) + gap * (len(buttons) - 1)
@@ -443,6 +444,7 @@ class Viewer:
             'n rename  1 2 zoom view',
             '<- ->  1 frame  PgUp/Dn 25',
             'a run  s/l save/load',
+            'e send event.json',
             'p plate-solve' + (' (offline)' if self.local_solver else ' (upload)'),
             'i identify  N names',
             'star field: DR3/UCAC4/TYC',
@@ -1506,6 +1508,8 @@ class Viewer:
             self.stop_jobs()
         elif k == 'N':
             self.toggle_names()
+        elif k == 'e':
+            self.send_event()
 
     # ---------------------------------------------------------------- open another movie
 
@@ -1530,7 +1534,7 @@ class Viewer:
         return new
 
     def close(self):
-        for name in ('timer', '_play_timer', '_solve_timer', '_ident_timer', '_stack_timer'):
+        for name in ('timer', '_play_timer', '_solve_timer', '_ident_timer', '_stack_timer', '_send_timer'):
             t = getattr(self, name, None)
             if t is not None:
                 t.stop()
@@ -1614,6 +1618,8 @@ class Viewer:
         print(self.step_summary())
         if self.cfg.get('output', {}).get('stack_image'):
             self.start_stack(lc)
+        if (self.cfg.get('pysyzygos_observations') or {}).get('auto_send'):
+            self.send_event()
 
     # ---------------------------------------------------------------- stacked field image
 
@@ -1670,6 +1676,45 @@ class Viewer:
             self.say_job('stacked field: ' + ', '.join(names))
         else:
             self.say_job(self._stack_msg)
+
+    # ---------------------------------------------------------------- send to PySyzygos
+
+    def send_event(self):
+        """e / Send: <movie>.event.json to PySyzygos' observation GUI (report_push: its connection
+        file, else the config), in the background; its answer ('msg') goes to the job line. Not
+        running: copied into its inbox."""
+        from . import report_push as rp
+        path = self.event_path()
+        if not path.exists():
+            self.say_job(f'no {path.name} yet: press a (Run) first')
+            return
+        conn = rp.connection(self.cfg)      # PySyzygos' connection file, or the config
+        if conn['source'] == 'none' and not conn['inbox']:
+            self.say_job(rp.no_connection_message(conn))
+            return
+        job = getattr(self, '_send_job', None)
+        if job is not None and job.is_alive():
+            return
+        self._send_msg = f'sending {path.name} ...'
+
+        def work():
+            try:
+                self._send_msg = rp.push_with(path, conn)
+            except Exception as e:          # never let the token into a message: only the error type
+                self._send_msg = f'not sent: {type(e).__name__}'
+        self._send_job = threading.Thread(target=work, daemon=True)
+        self._send_job.start()
+        self.say_job(self._send_msg)
+        self._send_timer = self.fig.canvas.new_timer(interval=300)
+        self._send_timer.add_callback(self._poll_send)
+        self._send_timer.start()
+
+    def _poll_send(self):
+        if self._send_job.is_alive():
+            return
+        self._send_timer.stop()
+        self.say_job(self._send_msg)
+        print(self._send_msg)
 
     def show_result(self):
         """The summary figure of the last run (drawn again in its window if that is still open)
@@ -1732,6 +1777,7 @@ class Viewer:
         from . import __version__
         from . import steps as st
         from .movie import object_name
+        from .station import movie_format, station_of
 
         def clean(v):                       # JSON: no NaN, no numpy scalars
             if isinstance(v, dict):
@@ -1760,6 +1806,16 @@ class Viewer:
         date = next((d for d in lc.date if d), '')
         t = plot.seconds(lc)
         meta = getattr(lc, 'metadata', {}) or {}
+        station = station_of(meta, movie_format(self.path))
+        report = st.event_report(fit, date, m0, self._mag_band)
+        tm = station['timing']
+        base = {'time_base_accuracy_s': tm.get('accuracy_s'), 'time_source': tm.get('source', ''),
+                'camera_delay_s': tm.get('camera_delay_s'),
+                'camera_delay_applied': tm.get('delay_applied', False),
+                'trigger_delay_applied': tm.get('trigger_delay_applied')}
+        report['time_base'] = base
+        for ev in report['events']:         # sigma_s / duration_sigma_s are the fit's alone
+            ev.update(base)
         rec = {
             'software': f'PyStarLight {__version__}',
             'created_utc': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -1771,14 +1827,22 @@ class Viewer:
             'references': [star(r) for r in refs],
             'checks': [star(c) for c in checks],
             'recording': {'date': date, 'first_utc': plot.hms(np.nanmin(t)),
-                          'last_utc': plot.hms(np.nanmax(t)), 'rows': len(t), 'metadata': meta},
+                          'last_utc': plot.hms(np.nanmax(t)), 'rows': len(t), 'metadata': meta,
+                          'station': station, 'site_source': station['site'].get('source', 'none'),
+                          **{k: station['site'][k] for k in ('gps_fix', 'satellites', 'hdop', 'position_utc')
+                             if k in station['site']}},
+            'light_curve': {'pyote_csv': self.path.with_suffix('.csv').name,
+                            'all_columns_csv': self.path.with_suffix('.pystarlight.csv').name},
             'photometry': {'normalize_window': self.cfg['analysis']['normalize_window'],
                            'magnitudes': 'm = m0 - 2.5 log10(flux), flux = target signal / smoothed '
                                          'ensemble of the references',
                            'band': self._mag_band},
-            'step_fit': st.event_report(fit, date, m0, self._mag_band),
+            'step_fit': report,
             'notes': ['times are the frame time stamps as recorded (mid-exposure assumed, exposure = '
-                      'frame interval); no camera delay correction',
+                      'frame interval); no camera delay correction by the analysis (see '
+                      'step_fit.time_base)',
+                      'no event: step_fit.events is empty, searched from searched_start_utc to '
+                      'searched_end_utc',
                       'step model is sharp: no diffraction or stellar diameter',
                       'sigma_s: the larger of the chi^2 + 1 half width and the Monte Carlo scatter'],
         }

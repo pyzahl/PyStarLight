@@ -4,9 +4,12 @@ Backends:
   - AravisCamera: GenICam USB3 / GigE cameras (FLIR/Teledyne Grasshopper, Basler etc.) through
     Aravis; needs the system `gi` with Aravis 0.8, imported only when an Aravis camera is used.
   - veye_mvcam.Camera: VEYE MV-MIPI cameras on the Raspberry Pi 5 CSI ports.
+  - v4l2_cam.Camera: any Linux video device (/dev/videoN): USB grabbers for analog video
+    cameras, UVC webcams. No trigger; frames stamped by the driver and the Pi clock.
 
-Both offer the subset of Aravis.Camera that the capture app uses, plus:
-  kind               "aravis" / "veye"
+All offer the subset of Aravis.Camera that the capture app uses, plus:
+  kind               "aravis" / "veye" / "v4l2"
+  can_trigger        False: no trigger input (v4l2); missing: True
   success            buffer status of a complete frame
   create_stream(n)   a stream with n buffers queued
   close_stream(s)    release a stream before a new one is made
@@ -18,7 +21,7 @@ settings; the app attaches its threads and the GPS to it, and the GUI works from
 """
 import threading
 
-from . import veye_mvcam
+from . import v4l2_cam, veye_mvcam
 from .decode import FORMATS_BY_BITS, Decoder
 from .timing import IMX178, exposure_start, sensor_timing, trigger_delay_ns
 
@@ -74,7 +77,12 @@ def find_cameras():
                 "serial": Aravis.get_device_serial_nbr(i) or "",
                 "backend": "aravis",
             })
-    return cams + veye_mvcam.find_cameras()
+    cams += veye_mvcam.find_cameras()
+    try:
+        cams += v4l2_cam.find_cameras()
+    except Exception as e:                  # not Linux, no /dev/video*
+        print(f"V4L2 devices not listed ({e})")
+    return cams
 
 
 def select_camera(cams, key=None):
@@ -97,7 +105,12 @@ def select_camera(cams, key=None):
 
 
 def open_camera(info):
-    return veye_mvcam.Camera(info) if info.get("backend") == "veye" else AravisCamera(info)
+    backend = info.get("backend")
+    if backend == "veye":
+        return veye_mvcam.Camera(info)
+    if backend == "v4l2":
+        return v4l2_cam.Camera(info)
+    return AravisCamera(info)
 
 
 class AravisCamera:
@@ -160,6 +173,8 @@ class CameraSession:
     def __init__(self, camera, n_buffers=16, trigger_edge="rising", trigger_delay_us=None):
         self.camera = camera
         self.is_veye = camera.kind == "veye"
+        self.is_v4l2 = camera.kind == "v4l2"        # a video device: no trigger, driver time stamps
+        self.can_trigger = getattr(camera, "can_trigger", True)
         # how the camera times its exposures (VEYE: by sensor; others: not modelled)
         self.timing = sensor_timing(camera.get_model_name()) if self.is_veye else IMX178
         self.n_buffers = n_buffers
@@ -302,8 +317,15 @@ class CameraSession:
     def trigger_delay_ns(self):
         return trigger_delay_ns(self.trigger_delay_us, self.is_veye, self.timing)
 
+    def exposure_fixed(self):
+        """A video device without an exposure control: the exposure is not known."""
+        return self.is_v4l2 and self.camera.exposure_fixed
+
     def exposure_start(self, frame_ns, pulse_ns):
-        """Row-0 exposure start (UTC ns) of a frame, see timing.exposure_start."""
+        """Row-0 exposure start (UTC ns) of a frame, see timing.exposure_start. A video device
+        without an exposure control: the driver's time as it is (nothing known to shift by)."""
+        if self.exposure_fixed():
+            return int(frame_ns)
         return exposure_start(frame_ns, pulse_ns, self.controller.exposure_us,
                               self.trigger_delay_us, self.is_veye,
                               self.camera.frame_period_ns() if self.is_veye else None,

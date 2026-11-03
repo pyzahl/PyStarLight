@@ -7,6 +7,26 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Camera: any Linux video device (`/dev/videoN`, `capture/v4l2_cam.py`): USB grabbers for
+  analog cameras, UVC webcams. Luminance of GREY / Y16 / YUYV / UYVY / MJPG, frames unscaled
+  (fields woven), region cut in software, `--video-std`, `--video-input`, `--video-size`, the
+  device's exposure / gain controls where it has them. No trigger: driver time stamps (Pi
+  clock), marked as such in the header; the true time from an embedded VTI time code or GPS
+  LED flashes in the image.
+- Station data for the occultation report (PySyzygos `docs/observation_interface.md`): config
+  `[observer]` gains observer2, more_observers, station, telescope_type, aperture_cm,
+  focal_length_cm, focal_reducer, mount, observing_method, camera_delay_s(+_applied); the
+  capture writes them into every recording (`capture/station_header.py`), with the GPS site only
+  with a fix (text copies at 7 decimals, altitude MSL + geoid separation from GGA field 11, fix,
+  satellites, HDOP, fix time; else the config's site marked `SITE-SOURCE = "config"`, or none).
+  SER recordings carry the same keys in `<file>.ser.meta.json`, read by `SerReader`.
+- `station.station_of`: RAVF / ADV / SER station data in one layout, `event.json`
+  `recording.station`; event.json also gets the time base per event, the searched interval and
+  the light-curve file names.
+- `report_push`: viewer key `e` / **Send** (and `auto_send`) hands event.json to PySyzygos'
+  observation GUI, found through the connection file it writes at its start
+  (`observation_api.json`: url, key, inbox; no configuration); not running: copied into its
+  inbox. `[pysyzygos_observations]` url / token for a PySyzygos on another computer.
 - Docs: CAPTURE.md "PySyzygos favorites server link" (server mode, token, config, a check
   from the Pi, what the Favorites button fills in, error messages); README "Event timing: the
   automatic step fit" (what is fitted, change-point search, sub-frame timing and its sigma,
@@ -104,6 +124,11 @@ uses [Semantic Versioning](https://semver.org/).
   aperture on the displayed frame, without moving apertures; shown in the zoom views and status.
 
 ### Changed
+- Camera: the Observer / Telescope fields in the Recording panel are replaced by a **Station &
+  equipment** dialog (one button) for all `[observer]` keys, saved into the private config
+  (`localconfig.update_section`: only those lines change). Recording or arming needs the
+  required station data; with any missing, the dialog opens first.
+- Capture: no GPS position in the header without a fix (was the last position, or 0).
 - Result plots: the title names the candidate star (the identified star in the target
   aperture); axis units written as "in": `G in mag`, `Signal in ADU`, `Drift in px`,
   `x in px`, `Time ... UTC in s` (also the stack figure); the magnitude axis no longer says

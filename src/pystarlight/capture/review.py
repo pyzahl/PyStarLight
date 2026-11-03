@@ -22,6 +22,7 @@ c back to the frames, q quit.
 """
 import argparse
 import json
+import math
 import os
 import shutil
 import sys
@@ -643,8 +644,9 @@ class ReviewWindow(QtWidgets.QMainWindow):
                "focal_mm": self.focal_spin.value() or None}
         try:
             lat, lon = float(meta.get("LATITUDE", 0)), float(meta.get("LONGITUDE", 0))
-            if (lat, lon) != (0.0, 0.0):
-                out.update(latitude=lat, longitude=lon, altitude=float(meta.get("ALTITUDE", 0)))
+            alt = float(meta.get("ALTITUDE", 0))
+            if (lat, lon) != (0.0, 0.0) and math.isfinite(lat) and math.isfinite(lon):  # NaN: no GPS fix
+                out.update(latitude=lat, longitude=lon, altitude=alt if math.isfinite(alt) else 0.0)
         except (TypeError, ValueError):
             pass
         return out

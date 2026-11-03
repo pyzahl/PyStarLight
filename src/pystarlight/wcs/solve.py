@@ -406,9 +406,10 @@ def movie_hints(metadata: dict, site: Optional[dict] = None, max_km: float = 20.
     was made more than max_km from `site` (its optics, hence its plate scale, do not apply)."""
     def num(k):
         try:
-            return float(metadata[k])
+            x = float(metadata[k])
         except (KeyError, TypeError, ValueError):
             return None
+        return x if math.isfinite(x) else None          # NaN: PyStarLight capture without a GPS fix
     out = {'center': None, 'other_site': False}
     ra, dec = num('RA'), num('DEC')
     if ra is not None and dec is not None and -90 <= dec <= 90 and (ra, dec) != (0, 0):

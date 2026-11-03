@@ -130,7 +130,8 @@ class Gps(threading.Thread):
         self.sats_view = {}         # talker (GP, GL, GA, GB) -> satellites in view
         self.snr = {}               # (talker, prn) -> SNR dB of satellites in view
         self.hdop = self.pdop = self.vdop = None
-        self.lat = self.lon = self.alt = None
+        self.lat = self.lon = self.alt = None    # alt: GGA, above mean sea level
+        self.geoid_sep = None       # GGA field 11: geoid above the WGS84 ellipsoid, m
         self.speed_kmh = None
         self.last_rx = 0.0          # time.monotonic() of the last good sentence
         # timepulse
@@ -237,6 +238,7 @@ class Gps(threading.Thread):
                 self.sats_used = int(f[7] or 0)
                 self.hdop = float(f[8]) if f[8] else None
                 self.alt = float(f[9]) if f[9] else None
+                self.geoid_sep = float(f[11]) if len(f) > 11 and f[11] else None
             elif kind == "GSA":
                 self.fix = int(f[2] or 1)
                 self.pdop = float(f[15]) if f[15] else None

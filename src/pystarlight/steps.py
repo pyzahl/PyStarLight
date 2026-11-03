@@ -333,4 +333,5 @@ def event_report(fit: StepFit, date: str = '', m0: float = 0.0, band: str = '') 
                           'duration_sigma_s': num(math.hypot(dd.sigma, rr.sigma), 4)})
     return {'band': band, 'm0': num(m0, 4), 'frame_interval_s': num(fit.dt, 6),
             'noise_flux': num(fit.noise), 'rows_fitted': int(fit.t.size),
+            'searched_start_utc': utc(edges[0]), 'searched_end_utc': utc(edges[-1]),
             'levels': levels, 'transitions': transitions, 'events': sorted(pairs, key=lambda p: p['D'])}

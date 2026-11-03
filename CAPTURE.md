@@ -1,7 +1,8 @@
 # Capture on the Raspberry Pi 5 with GPS-timed frames
 
 `src/pystarlight/camera.py` starts a live viewer and recorder (RAVF or SER) for the Raspberry Pi 5. It drives a
-VEYE MV-MIPI camera on a CSI port, or any Aravis (GenICam USB3/GigE) camera. A u-blox GPS can
+VEYE MV-MIPI camera on a CSI port, any Aravis (GenICam USB3/GigE) camera, or any Linux video device
+(`/dev/videoN`: a USB grabber for an analog camera, a UVC webcam; [limited timing](#video-devices-devvideon)). A u-blox GPS can
 trigger the camera, so that each frame belongs to a known UTC instant. These notes describe the
 hardware, how to run the program, how it works, and the timing measurements behind its timestamps.
 
@@ -13,6 +14,7 @@ The code is the `src/pystarlight/capture/` package (`uv run pystarlight-camera`)
 | `app.py` | command line, wiring of camera, threads, GPS and GUI, shutdown |
 | `gui.py` | PyQt5 GUI: image view, control panel, status |
 | `cameras.py` | camera backends behind one interface (`AravisCamera`, VEYE) and `CameraSession`: pixel format, region, trigger, stream, reconfigure, exposure-start time stamps |
+| `v4l2_cam.py` | any Linux video device (`/dev/videoN`): V4L2 mmap capture, luminance of GREY / Y16 / YUYV / UYVY / MJPG, analog standard and input, the device's own exposure / gain controls; no trigger |
 | `veye_mvcam.py` | VEYE MV-MIPI camera through the `veye_mvcam` kernel driver: I2C registers, media pipeline, V4L2 buffers; the same interface as an Aravis camera |
 | `decode.py` | pixel formats, unpacking of packed 10/12-bit buffers |
 | `timing.py` | GPS pulse stamping (`PulseStamper`), VEYE timing constants, exposure-start formula |
@@ -23,6 +25,8 @@ The code is the `src/pystarlight/capture/` package (`uv run pystarlight-camera`)
 | `review.py` | review player `pystarlight-review` (needs the full package) |
 | `ravf_writer.py` | RAVF writer (as ASTRID writes), frame scan, repair |
 | `ser_writer.py` | SER v3 writer, one UTC timestamp per frame, `.times` sidecar, repair |
+| `station_header.py` | station, equipment (config `[observer]`) and GPS site for each new recording's header |
+| `localconfig.py` | the private config without the rest of the package (system Python) |
 | `favorites.py` | PySyzygos favorites API client: tonight's events -> asteroid, target star, recording window (standard library only) |
 | `gps_ublox.py` | u-blox GPS: NMEA status, timepulse rate (UBX-CFG-TP5), optional QMC5883L/HMC5883L compass |
 
@@ -98,7 +102,7 @@ uv run pystarlight-camera --repair ~/data/*.ravf                   # finish cras
 | **Sensor region (ROI)** | x / y / w / h boxes, **Select** (then drag a rectangle on the image; shown in yellow until applied), **Apply**, **Full sensor**; current region |
 | **Trigger** | **GPS trigger** checkbox (off = free run, or the `--trigger hw/sw` mode), **GPS frame rate**: pick 30 / 20 / 15 / 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1.5 / 1 / 0.5 fps or type fps or a period (`250 ms`) and press Enter, **Trigger delay** (ms), **y-trigger row** (VEYE, GPS mode; see below), warnings (exposure longer than the pulse period, rate too high for the camera, pulses skipped because of the delay, no fix, anchoring to GPS UTC, frames or TIM-TP pulses off the grid), missed pulses |
 | **GPS** | UTC, fix, satellites (used / tracked / in view), DOP, position, altitude, timepulse rate, **time base** (GPS UTC since when, the Pi clock's rate error in ppm, the GPS message burst's lag after the second; or what anchoring waits for), exposure start of the newest frame (marked GPS UTC or Pi clock), its trigger pulse, pulse → frame delay, rolling-shutter line time, heading if a compass is found |
-| **Recording** | folder, format (RAVF / SER), observer, telescope, **Asteroid** with **Favorites** (tonight's events from PySyzygos, see below), start **Now** or **At UTC** (with "next min"), stop after N s and/or N frames; Record button (orange = anchoring / armed / Cancel, red = recording / Stop), frame count, elapsed time, countdown, last file saved |
+| **Recording** | folder, format (RAVF / SER), **Station & equipment …** (dialog, below; its summary line turns red while required data are missing), **Asteroid** with **Favorites** (tonight's events from PySyzygos, see below), start **Now** or **At UTC** (with "next min"), stop after N s and/or N frames; Record button (orange = anchoring / armed / Cancel, red = recording / Stop), frame count, elapsed time, countdown, last file saved |
 | status bar | exposure, gain, camera and display fps, lost frames, bad buffers, restarts, frame ID, trigger count / lost, sensor position and raw value under the mouse |
 
 Keys: `e/E` exposure, `g/G` gain, `d/D` gamma, `a` auto levels, `r` record / stop, `t` software trigger (in `sw`
@@ -465,11 +469,50 @@ isn't needed on the Pi).
 - Header metadata: camera model, vendor and serial, Pi model, gain, exposure, GPS position,
   observer, telescope, `FRAME-TIMING-ACCURACY` (0.1 ms: GPS on the calibrated IMX178 at 12 bit,
   5 ms: GPS otherwise, 2 ms: Pi clock), and user entries `TIMESTAMP-SOURCE`, `ROW-TIME-NS`
-  (rolling-shutter line time), `ROI-X`/`ROI-Y`, `TRIGGER`, `TRIGGER-DELAY-NS`.
+  (rolling-shutter line time), `ROI-X`/`ROI-Y`, `TRIGGER`, `TRIGGER-DELAY-NS` (already in the
+  time stamps: a GPS-triggered frame is stamped at pulse + delay).
+- Station and site (see [Station data in the recording](#station-data-in-the-recording)):
+  `OBSERVER-2`, `OBSERVERS-MORE`, `STATION`, `TELESCOPE-TYPE`, `APERTURE-CM`, `FOCAL-LENGTH-CM`,
+  `FOCAL-REDUCER`, `MOUNT`, `OBSERVING-METHOD`, `CAMERA-DELAY-S` / `CAMERA-DELAY-APPLIED`,
+  `SITE-SOURCE`, `LATITUDE-TEXT` / `LONGITUDE-TEXT` / `ALTITUDE-TEXT`, `ALTITUDE-REF`,
+  `GEOID-SEPARATION-M`, `DATUM`, `GPS-FIX`, `GPS-SATELLITES`, `GPS-HDOP`, `GPS-POSITION-UTC`.
 - GPS fields per frame: only set for GPS-stamped frames (fix status 3, almanac 0 while the GPS
   has a fix); free-run frames carry fix 0, because their time comes from the Pi clock.
 
-**SER** (`--record-format ser`) keeps its timestamps in a trailer after the last frame.
+**SER** (`--record-format ser`) keeps its timestamps in a trailer after the last frame. Its
+header has room for observer, instrument and telescope only (40 characters each); everything
+else the RAVF header holds goes, under the same names, into `<file>.ser.meta.json` next to it
+(kept with the file; the viewer reads it into the movie's metadata).
+
+### Station data in the recording
+
+What describes the observation (where, with what, by whom) is written into the recording when
+it starts, so that it reaches the occultation report unchanged (PySyzygos'
+`docs/observation_interface.md`; the viewer passes it on in `<movie>.event.json`):
+
+- **Station and equipment** come from `[observer]` in the private config: `name`, `observer2`,
+  `more_observers`, `station`, `telescope`, `telescope_type` (the IOTA-ES form's Refractor,
+  Newtonian, SCT, ...), `aperture_cm`, `focal_length_cm` (effective, with reducer / Barlow),
+  `focal_reducer`, `mount`, `observing_method` (form code, `a` = video), `camera_delay_s` with
+  `camera_delay_applied`. Empty or 0 values are left out. `--observer` / `--telescope` on the
+  command line override name and telescope.
+- **Edited in the GUI:** the button **Station & equipment …** in the Recording panel opens a
+  dialog with all these fields (and the fallback site); **Save** writes them into `[observer]`
+  of the private config file in use (only those lines change; comments, other tables and keys
+  stay as they are; a new file is made at `~/.config/pystarlight/config.toml`, mode 600).
+  Observer and telescope typed into earlier versions' sidebar fields are offered there once.
+- **Complete before recording.** Required (marked * in the dialog): observer, station,
+  telescope, telescope type, aperture, focal length, mount, observing method, and without a
+  GPS receiver the fallback latitude / longitude. Record (button, `r`, or `--record-start`)
+  with anything missing opens the dialog first and does not arm until it is complete.
+- **Site from the GPS, only with a fix.** With a fix: `LATITUDE` / `LONGITUDE` plus 7-decimal
+  text copies (RAVF keeps the numbers as float32, about 0.5 m), `ALTITUDE` above mean sea level
+  only with a 3D fix (`ALTITUDE-REF = "MSL"`, `GEOID-SEPARATION-M` from GGA field 11: the
+  ellipsoid height is the sum), `DATUM` blank (WGS84), and the fix it came from (`GPS-FIX`,
+  `GPS-SATELLITES`, `GPS-HDOP`, `GPS-POSITION-UTC`); `SITE-SOURCE = "GPS"`. Without a fix: the
+  config's `[observer]` latitude / longitude / altitude, marked `SITE-SOURCE = "config"`; if
+  those are 0, no position at all (`SITE-SOURCE = "none"`, NaN in the RAVF's required position
+  entries). Earlier versions wrote the last position even without a fix.
 
 **Crash safety.** Both writers update the header's frame count and `fsync` to disk every
 second.
@@ -485,6 +528,47 @@ second.
   alone.
 - Tested 2026-10-26 by `kill -9` during 10 fps recordings: 80 RAVF and 77 SER frames, all
   readable before and after repair, with timestamps.
+
+## Video devices (/dev/videoN)
+
+Any V4L2 capture device shows up in the camera list (`--list`) next to the Aravis and VEYE
+cameras, e.g. a USB grabber (em28xx, stk1160, usbtv, MacroSilicon MS2109) with an analog
+video camera (Watec, PC164C, ...), or a UVC webcam. Pick it with `--camera v4l2`, the
+device (`--camera /dev/video2`) or its name. Nodes of the Pi's own camera pipeline
+(rp1-cfe, used by VEYE / libcamera), codecs and metadata-only nodes are left out.
+
+```bash
+uv run pystarlight-camera --camera v4l2 --video-std PAL --video-input 0 --video-size 720x576
+```
+
+- **Frames as they come:** full size and unscaled, an interlaced frame with both fields
+  woven, only the luminance (YUYV / UYVY: the Y bytes; GREY, Y16 as sent; MJPG decoded to
+  gray, compressed: worse for photometry and for reading a time code, so take YUYV when the
+  device offers it). The GUI's Depth list offers the device's formats instead. Region: cut
+  out of the full frame in software. `--video-std` (PAL / NTSC / SECAM) and `--video-input`
+  (composite / S-video) set the grabber; `--video-size WxH` the frame size.
+- **Exposure and gain** are the device's V4L2 controls where it has them (webcams; gain in
+  device units, not dB). An analog grabber has none: the camera sets them itself, the GUI
+  greys them out, and the recording says exposure 0 (unknown).
+- **No trigger:** GPS / hardware / software trigger are off (`--trigger` falls back to free
+  run). Each frame keeps the driver's time stamp (V4L2 buffer time, usually the start or end
+  of the frame's transfer over USB; turned into UTC by the Pi clock, NTP). That is not the
+  exposure: it lags by the camera's integration, the analog line, the grabber and USB
+  buffering, tens of ms and not constant (MJPG on an MS2109: frames bunched, 0 ms apart). A
+  device without an exposure control keeps that time as it is; one with a control gets it
+  minus the exposure. The header says so: `TIMESTAMP-SOURCE` ("V4L2 driver time ..., Pi
+  clock (NTP); not the exposure ..."), `TIMESTAMP-ROW` (transfer start / end), and
+  `FRAME-TIMING-ACCURACY` one frame period. PySyzygos reads the source as NTP.
+- **The true time comes from the image:** record the camera's own time code with it, e.g. an
+  IOTA-VTI / KIWI / GPSBOXSPRITE overlay, read later by the library's VTI OCR
+  (`timestamps.VtiReader`, `pipeline.analyze(..., vti=...)`; any recording format, as the
+  frames are kept unscaled), or GPS-driven LED flashes in the field (the u-blox timepulse on
+  an LED), whose frames mark known UTC seconds.
+- File names use the device's name made safe (`USB-Video-USB-Video_<UTC>.ravf`); a device
+  another program holds (VLC, a browser) is reported as busy.
+
+Tested with a MacroSilicon MS2109 (uvcvideo): YUYV 1920x1080 at 5 fps, 1280x720 at 10 fps,
+intervals 200.0 / 100.0 ms, driver stamp at the transfer start.
 
 ## Timestamps: what the recordings hold
 

@@ -25,11 +25,11 @@ import os
 import signal
 import socket
 
-from . import gps_ublox, ravf_writer
+from . import gps_ublox, localconfig, ravf_writer, station_header
 from .acquisition import Controller, Grabber
 from .cameras import CameraSession, find_cameras, open_camera, pixel_um, select_camera
 from .decode import format_bits
-from .recorder import RECORD_FORMATS, Recorder
+from .recorder import RECORD_FORMATS, Recorder, file_tag
 from .recorder import main as repair_main
 from .stacker import LiveStacker
 from .timing import parse_rate, rate_str
@@ -49,6 +49,13 @@ parser.add_argument("--camera", default=None,
                          "(e.g. Basler, a2A1920, Grasshopper, 2316xxxx, VEYE, IMX178). "
                          "Default: first found")
 parser.add_argument("--list", action="store_true", help="list connected cameras and exit")
+parser.add_argument("--video-std", default=None, metavar="STD",
+                    help="video device (/dev/videoN, e.g. a USB grabber for an analog camera): "
+                         "the analog standard, PAL / NTSC / SECAM (default: as the device is set)")
+parser.add_argument("--video-input", type=int, default=None, metavar="N",
+                    help="video device: the grabber's input (e.g. 0 composite, 1 S-video)")
+parser.add_argument("--video-size", default=None, metavar="WxH",
+                    help="video device: the frame size (default: the device's current one)")
 parser.add_argument("--repair", nargs="+", metavar="FILE",
                     help="finish recordings interrupted by a crash (.ravf / .ser) and exit")
 parser.add_argument("--bits", choices=["12", "10", "8"], default="12",
@@ -164,6 +171,14 @@ def main(argv=None):
     if args.list:
         return
     cam_info = select_camera(cams, args.camera)
+    if cam_info.get("backend") == "v4l2":
+        cam_info.update(std=args.video_std, input=args.video_input,
+                        size=tuple(int(v) for v in args.video_size.lower().split("x"))
+                        if args.video_size else None)
+        if args.trigger != "off":
+            print(f"{cam_info['model']}: a video device cannot be triggered; free run "
+                  "(time stamps: driver + Pi clock)")
+            args.trigger = "off"
 
     session = gps = None
     try:
@@ -194,6 +209,9 @@ def main(argv=None):
             camera.set_usb(args.usb_mode, args.bandwidth)   # before the stream is created
 
         s.controller = Controller(camera, s.apply_trigger, s.reconfigure)
+        # files start with the model name; a video device's ("USB Video: USB Video") made safe
+        file_name = (file_tag(camera.get_model_name()) if s.is_v4l2
+                     else camera.get_model_name().replace(" ", "_"))
         s.controller.start()
 
         def header_info():
@@ -213,34 +231,52 @@ def main(argv=None):
                 "pixel_format": s.pixel_format,
                 "hardware": hardware_name(),
                 "gain_db": s.controller.gain_db,
-                "exposure_ns": s.controller.exposure_us * 1000,
+                "exposure_ns": 0 if s.exposure_fixed() else s.controller.exposure_us * 1000,
                 "roi_x": s.region[0], "roi_y": s.region[1],
                 "trigger": f"GPS timepulse {rate_str(stamper.rate)}" if gps_stamped
                            else "free run / external",
                 "trigger_delay_ns": s.trigger_delay_ns() if gps_stamped else 0,
                 "timestamp_source": ("GPS trigger pulse, GPS UTC" if gps_utc else
                                      "GPS trigger pulse, Pi clock (NTP)" if gps_stamped else
+                                     "V4L2 driver time of the frame's transfer, Pi clock (NTP); "
+                                     "not the exposure: an embedded time code (VTI) or GPS LED "
+                                     "flashes in the image give the true time" if s.is_v4l2 else
                                      "Pi clock (NTP)"),
-                # measured on the IMX178 at 12 bit to ~0.1 ms; NTP ~1 ms; else unknown
+                # measured on the IMX178 at 12 bit to ~0.1 ms; NTP ~1 ms; a video device:
+                # transfer latency unknown, at least a frame; else unknown
                 "timing_accuracy_ns": (100_000 if gps_stamped and s.is_veye
                                        and s.timing.calibrated(bits) else
-                                       5_000_000 if gps_stamped else 2_000_000),
+                                       5_000_000 if gps_stamped else
+                                       int(camera.frame_period_ns() or 40e6) if s.is_v4l2 else
+                                       2_000_000),
                 "row_time_ns": s.timing.line(bits) if s.is_veye else 0,
             }
-            if gps is not None and gps.lat is not None:
-                info.update(latitude=gps.lat, longitude=gps.lon, altitude=gps.alt or 0.0)
+            if s.is_v4l2:
+                src = camera.describe_input()
+                info["timestamp_row"] = (("frame transfer start (driver)" if s.stream.ts_soe
+                                          else "frame transfer end (driver)")
+                                         + (", as it is (exposure unknown)" if s.exposure_fixed()
+                                            else ", minus the exposure"))
+                info["comment"] = (f"video device {camera.device} ({camera.driver}, "
+                                   f"{camera.pixel_format}{', ' + src if src else ''})")
+            # station and equipment from the config's [observer]; the site from the GPS only
+            # with a fix (else the config's, marked SITE-SOURCE "config")
+            observer = localconfig.section("observer")
+            info.update(station_header.station_meta(observer))
+            info.update(station_header.site_meta(gps, observer))
+            info["software_version"] = localconfig.software_version()
             return info
 
         s.recorder = Recorder(
             s.decode_raw, lambda: (s.width, s.height, s.decode.depth),     # follow a new ROI
-            args.record_dir, name=camera.get_model_name().replace(" ", "_"),
+            args.record_dir, name=file_name,
             fmt=args.record_format, header_info=header_info)
         s.recorder.text.update(observer=args.observer, telescope=args.telescope)
         s.grabber = Grabber(None, camera.success, s.recorder)
         s.grabber.exposure_start = s.exposure_start
 
         def frame_info():
-            info = {"exposure_ns": int(s.controller.exposure_us * 1000)}
+            info = {"exposure_ns": 0 if s.exposure_fixed() else int(s.controller.exposure_us * 1000)}
             if s.grabber.pulse_ns is not None:        # this frame is pulse-stamped
                 info.update(gps_frame_info(gps))
             return info
@@ -261,7 +297,7 @@ def main(argv=None):
             return info
 
         s.stacker = LiveStacker(s.decode_raw, args.record_dir,
-                                camera.get_model_name().replace(" ", "_"), stack_info)
+                                file_name, stack_info)
         s.grabber.stacker = s.stacker
 
         # the GUI's imports (Qt: ~1 s) before streaming, so they don't starve the grabber

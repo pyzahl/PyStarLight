@@ -13,14 +13,33 @@ pysyzygos_sites = ""       # e.g. "~/SVN/PySyzygos/sites.py"
 default_site = ""          # site id; $PYSYZYGOS_SITE also works (as in PySyzygos)
 
 [observer]
-name = ""
+# Station and equipment: the capture writes them into every recording (RAVF header, SER
+# sidecar .ser.meta.json), and the viewer passes them on in <movie>.event.json
+# (recording.station) for the occultation report (PySyzygos' observation GUI). The camera
+# edits them in its "Station & equipment" dialog and records only when the required ones
+# (name, station, telescope, telescope_type, aperture_cm, focal_length_cm, mount,
+# observing_method; without GPS also latitude / longitude) are set. --observer / --telescope
+# on its command line override name and telescope.
+name = ""                  # observer 1 (responsible for this station)
 email = ""
-# Site, used for reports (decimal degrees, metres)
+observer2 = ""             # further operators of this station
+more_observers = ""
+station = ""               # station name, e.g. "Sternwarte Seewis Dorf (SWD)"
+telescope = ""             # description, e.g. "C-14 EHD"
+telescope_type = ""        # IOTA-ES form: Refractor, Newtonian, SCT, Dobsonian, Binoculars, Other, None, Electronic
+aperture_cm = 0.0
+focal_length_cm = 0.0      # EFFECTIVE focal length, with the reducer / Barlow
+focal_reducer = ""         # e.g. "0.4x" ("" = none)
+mount = ""
+camera = ""
+observing_method = "a"     # IOTA-ES code: a video, d sequential images, ...
+camera_delay_s = 0.0       # known timing offset of the camera (0 = none known) ...
+camera_delay_applied = false   # ... and whether the time stamps already contain it
+# Fallback site (decimal degrees, metres above mean sea level): only used when the GPS has
+# no fix, and then marked SITE-SOURCE = "config" in the recording. 0 / 0 = no fallback.
 latitude = 0.0
 longitude = 0.0
 altitude = 0.0
-telescope = ""
-camera = ""
 
 [astrometry]
 # Personal API key from https://nova.astrometry.net (My Profile). Keep it private.
@@ -153,6 +172,19 @@ gaia_dir = ""
 url = ""
 token = ""
 past_hours = 0             # also list events up to this many hours ago (tests: record a recent one now)
+
+[pysyzygos_observations]
+# The viewer's "Send" (key e): <movie>.event.json to PySyzygos' observation GUI, which opens the
+# report of the matching favorite (its docs/observation_interface.md). On the computer that runs
+# PySyzygos nothing needs setting: its observation GUI writes a connection file at every start
+# (~/.config/pysyzygos/observation_api.json: url, token, inbox), and when it is not running the
+# file is copied into its inbox. Only for a PySyzygos on another computer (rare; there:
+# 'pysyzygos gui-observation --host 0.0.0.0'): url and token below override that file.
+# Also: $PYSYZYGOS_OBS_URL, $PYSYZYGOS_OBS_TOKEN. Not reached: queued in ~/.cache/pystarlight/outbox.
+url = ""                   # e.g. "http://home:8088"
+token = ""                 # there: pysyzygos gui --new-token PyStarLight
+inbox = ""                 # override the connection file's inbox folder ("" = from the file)
+auto_send = false          # hand over after every Run
 
 [output]
 # Stacked field image after each run: all analysed frames shifted/rotated back by the tracking

@@ -27,6 +27,10 @@ def movie(tmp_path):
     rng = np.random.default_rng(0)
     p = tmp_path / 'shake.ser'
     write_ser(p, [render(i, rng) for i in range(40)])
+    p.with_name('shake.ser.meta.json').write_text(json.dumps({     # as PyStarLight's capture writes it
+        'STATION': 'Test (T)', 'SITE-SOURCE': 'GPS', 'LATITUDE': 46.99249, 'LONGITUDE': 9.64015,
+        'LATITUDE-TEXT': '46.9924869', 'LONGITUDE-TEXT': '9.6401519', 'GPS-FIX': '3D',
+        'FRAME-TIMING-ACCURACY': 100000, 'TIMESTAMP-SOURCE': 'GPS trigger pulse, GPS UTC'}))
     return p
 
 
@@ -88,6 +92,17 @@ def test_viewer_workflow(movie):
     assert ev['movie'] == movie.name and ev['target']['aperture'] == 'target'
     assert ev['references'] and all(r['role'] == 'reference' for r in ev['references'])
     assert ev['step_fit']['levels'] and 'transitions' in ev['step_fit'] and ev['notes']
+    meta = ev['recording']['metadata']                    # the SER header and its sidecar, unchanged
+    assert meta['STATION'] == 'Test (T)' and meta['LATITUDE-TEXT'] == '46.9924869' and meta['Observer'] == ''
+    st = ev['recording']['station']
+    assert st['format'] == 'SER' and st['station'] == 'Test (T)' and st['site']['source'] == 'GPS'
+    assert ev['recording']['site_source'] == 'GPS' and ev['recording']['gps_fix'] == '3D'
+    assert st['timing']['accuracy_s'] == 1e-4 and ev['step_fit']['time_base']['time_base_accuracy_s'] == 1e-4
+    assert ev['light_curve']['pyote_csv'] == 'shake.csv'
+    assert ev['step_fit']['searched_start_utc'] and ev['step_fit']['searched_end_utc']
+    assert all(e['time_base_accuracy_s'] == 1e-4 for e in ev['step_fit']['events'])
+    key(v, 'e')                                           # no server in the test config: says so
+    assert 'pysyzygos_observations' in v.job_status.get_text()
     assert 'PyMovie' in movie.with_suffix('.csv').read_text().splitlines()[0]            # for PyOTE
     assert 'roles: target=target' in movie.with_suffix('.pystarlight.csv').read_text().splitlines()[0]
     key(v, 'right')                              # zoom now follows the tracked position

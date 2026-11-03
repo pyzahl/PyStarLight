@@ -13,11 +13,18 @@ recording would lose them all. While recording they are therefore also appended 
 file `<name>.ser.times` (the same int64 ticks), flushed every second together with the
 header's frame count; close() writes the trailer and deletes the sidecar. repair() turns an
 interrupted file back into a complete SER file from what is on disk.
+
+The SER header holds only observer, instrument and telescope (40 characters each). Everything
+else a RAVF header has (station, equipment, GPS site, time stamp source, ...) goes, under the
+same upper-case names, into a second sidecar `<name>.ser.meta.json` that stays with the file
+(movie.SerReader reads it into its metadata).
 """
+import json
+import math
 import os
 import struct
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -33,6 +40,33 @@ def ns_to_ticks(unix_ns):
 
 def times_path(path):
     return path + ".times"
+
+
+def meta_path(path):
+    return path + ".meta.json"
+
+
+# RAVF entries that describe the RAVF file itself, not the recording
+_LAYOUT = {"OFFSET-FRAMES", "OFFSET-INDEX", "FRAMES-COUNT", "IMAGE-ENDIANESS", "IMAGE-ROW-STRIDE",
+           "IMAGE-FORMAT", "EQUINOX"}
+
+
+def write_meta(path, width, height, depth, meta):
+    """`<path>.meta.json`: the recording's metadata with the names and values of a RAVF header."""
+    from .ravf_writer import TIMESTAMP, header_entries, ravf_to_unix
+    out = {}
+    for name, kind, value in header_entries(width, height, depth, meta):
+        if name in _LAYOUT:
+            continue
+        if kind == TIMESTAMP:
+            ns = ravf_to_unix(value)
+            value = (datetime.fromtimestamp(ns // 10**9, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+                     + f".{ns % 10**9 // 1000:06d}Z")
+        elif isinstance(value, float) and not math.isfinite(value):
+            value = None
+        out[name] = value
+    with open(meta_path(path), "w") as f:
+        json.dump(out, f, indent=1)
 
 
 def _local_ticks(utc_ticks):
@@ -53,6 +87,7 @@ class SerWriter:
         self.text = tuple(meta.get(k, "") for k in ("observer", "instrument", "telescope"))
         self.f = open(path, "wb")
         self.times = open(times_path(path), "wb")
+        write_meta(path, width, height, depth, meta)
         self._write_header()
         self.last_sync = time.monotonic()
 

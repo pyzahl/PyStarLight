@@ -306,11 +306,23 @@ Written next to the movie:
 | `<movie>-summary.pdf/.png` | field with apertures, raw signals (target red and on top), normalised light curve vs UTC, drift |
 | `<movie>-summary-mag.pdf/.png` | the same layout in **magnitudes** (fainter down): on the catalogue G scale of the identified references (their summed light, smoothed like the normalisation, gives each frame's zero point, so clouds drop out; V if they have no G), else Δmag to the references. On the target's curve: a multi-step fit (`steps.fit_steps`, in flux) with each level's 1 sigma band and every transition (D/R) with its UTC time and 1 sigma error bar, plus a close-up row of the transitions; the times are also in the viewer's status line (how it is fitted: [Event timing](#event-timing-the-automatic-step-fit)) |
 | `<movie>-mag-hist.pdf/.png` | magnitude histograms: the target in each level of the step fit (e.g. before D, between D and R, after R), and below for comparison all check stars (role `c`; without any, the two references closest to the target's magnitude), each with a fitted Gaussian envelope (mean and sigma in the legend) |
-| `<movie>.event.json` | the event: object (OBJNAME/OBJECT, else the ASTRID file-name prefix), target star (name, ids, G/V, RA/Dec, astrometric check), references and check stars, every fitted level (UTC span, flux and magnitude with error of the mean and per-frame scatter, or a 3 sigma 'fainter than' limit), every D/R (UTC, 1 sigma, chi^2 + 1 interval, Monte Carlo sigma, change, significance), D/R pairs nested from the inside with durations, recording metadata |
+| `<movie>.event.json` | the event: object (OBJNAME/OBJECT, else the ASTRID file-name prefix), target star (name, ids, G/V, RA/Dec, astrometric check), references and check stars, every fitted level (UTC span, flux and magnitude with error of the mean and per-frame scatter, or a 3 sigma 'fainter than' limit), every D/R (UTC, 1 sigma, chi^2 + 1 interval, Monte Carlo sigma, change, significance), D/R pairs nested from the inside with durations and the time base (accuracy, camera / trigger delay applied or not), the searched interval (no event: `events` is empty), the light-curve file names, the recording's metadata as read, and `recording.station`: site (with its source: GPS, config, recorder, none), observers, equipment and timing in one layout for RAVF, ADV and SER (`station.station_of`). Key `e` / **Send** posts it to PySyzygos (below) |
 | `<movie>.astrometry.json` | Gaia reduction (with the local catalogue): model, each star's O-C and magnitude, the apertures' RA/Dec and magnitudes |
 | `<movie>.apertures.json` | the apertures, reloaded next time |
 | `<movie>.wcs.fit` | the plate solution |
 | `<movie>-stack.fits/.svg/.png/.pdf` | **stacked field**: all analysed frames registered with the tracked shift + rotation and averaged (`[output] stack_image`); FITS with the plate solution, figure with apertures, names, catalogue IDs, compass and 1′ scale bar. In the SVG the image and the annotation layers (`apertures`, `aperture-labels`, `stars`, `compass`) are separate groups |
+
+**Sending the analysis to PySyzygos.** `e` (or **Send**) hands `<movie>.event.json` to
+PySyzygos' observation GUI (`pysyzygos gui-observation`, port 8088), which opens the report of
+the matching favorite (IOTA-ES report form) with every field marked by its origin. Usually the
+videos are analysed on the computer that runs PySyzygos, and then nothing needs setting: at
+every start the observation GUI writes a connection file (`~/.config/pysyzygos/observation_api.json`
+on Linux, `~/Library/Application Support/PySyzygos/` on macOS, `%APPDATA%\PySyzygos\` on
+Windows) with its address, key and inbox folder. When the GUI is not running, the file is copied
+into its inbox (listed at its next start). Without a connection file the job line says so. For a
+PySyzygos on another computer, `[pysyzygos_observations] url` / `token` override the file (not
+reached: queued in `~/.cache/pystarlight/outbox`, sent with the next one); `auto_send = true`
+hands over after every Run. The server's answer appears in the job line.
 
 **Trying other choices:** after a run the result plot stays linked to the viewer. Changing a
 role (`t` `r` `c` `k`) or a curve colour (`Y` `G` `W` `R`) over an aperture redraws it at once,
