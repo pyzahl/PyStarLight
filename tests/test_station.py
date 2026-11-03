@@ -305,7 +305,7 @@ COMPLETE = {k: v for k, v in OBSERVER.items()}
 def test_required_station_fields():
     assert station_header.missing(COMPLETE) == []
     miss = station_header.missing({**COMPLETE, "station": " ", "aperture_cm": 0.0, "mount": ""})
-    assert miss == ["Station", "Aperture (cm)", "Mount"]
+    assert miss == ["Station", "Aperture (mm)", "Mount"]
     assert station_header.missing({**COMPLETE, "latitude": 0, "longitude": 0}) == []        # GPS
     assert station_header.missing({**COMPLETE, "latitude": 0, "longitude": 0}, need_site=True) == \
         ["site (no GPS: fallback latitude / longitude)"]
@@ -313,7 +313,7 @@ def test_required_station_fields():
     eff = station_header.effective({**COMPLETE, "name": ""}, args_observer="CLI")
     assert eff["name"] == "CLI" and station_header.missing(eff) == []
     assert station_header.summary(COMPLETE) == \
-        "Test Station (TS) - A. Observer - C-14 EHD - 35.6 cm / 62.2 cm"
+        "Test Station (TS) - A. Observer - C-14 EHD - 356 mm / 622 mm"
 
 
 def test_update_section_keeps_comments_and_other_tables(tmp_path):
@@ -350,6 +350,8 @@ def test_station_dialog(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dlg = gui.StationDialog(None, {**COMPLETE, "mount": "", "observing_method": "a"}, "/x/pystarlight.toml")
     assert "Mount" in dlg.missing_label.text()
+    assert dlg.widgets["aperture_cm"][0].value() == 356.0                     # shown in mm
+    assert not dlg.widgets["telescope_type"][0].isEditable()
     dlg.widgets["mount"][0].setText("GM2000")
     v = dlg.values()
     assert dlg.missing_label.text() == "complete" and v["mount"] == "GM2000"
@@ -452,3 +454,25 @@ def test_nmea_keeps_the_last_fix():
     gps._on_nmea("GPRMC,043601.00,V,,,,,,,031126,,,N".split(","))          # fix lost
     gps._on_nmea("GPGGA,043601.00,,,,,0,00,,,M,,M,,".split(","))
     assert gps.last_fix is f                                               # kept
+
+
+def test_implausible_station_values():
+    pi = {**COMPLETE, "telescope": "ZWO APO107", "telescope_type": "RefractorAM5",
+          "aperture_cm": 107.0, "focal_length_cm": 759.0}                     # as the Pi recorded them
+    assert station_header.implausible(pi) == [
+        "aperture 1070 mm?", 'telescope type "RefractorAM5" (one of Refractor, Newtonian, SCT, '
+        'Dobsonian, Binoculars, Other, None, Electronic)']
+    assert "aperture 1070 mm?" in station_header.missing(pi)                   # blocks recording
+    good = {**pi, "telescope_type": "Refractor", "aperture_cm": 10.7, "focal_length_cm": 37.5}
+    assert station_header.implausible(good) == [] and station_header.missing(good) == []
+    assert station_header.implausible({**good, "focal_length_cm": 600.0}) == ["focal ratio f/56.1?"]
+    assert station_header.optics_line(good, 2.4) == \
+        '107 mm, effective 375 mm, f/3.5, 1.32"/px (2.4 um pixels)'
+
+
+def test_recorded_implausible_values_are_flagged_in_the_station_block():
+    md = {"TELESCOPE": "ZWO APO107", "TELESCOPE-TYPE": "Refractor", "APERTURE-CM": 107.0,
+          "FOCAL-LENGTH-CM": 759.0, "OBSERVER": "X"}
+    st = station_of(md, "RAVF")
+    assert st["equipment"]["aperture_cm"] == 107.0 and st["warnings"] == ["aperture 1070 mm?"]
+    assert "warnings" not in station_of(ADV_META, "ADV")

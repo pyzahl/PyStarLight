@@ -27,7 +27,7 @@ from __future__ import annotations
 import math
 import os
 
-from .capture.station_header import check
+from .capture.station_header import check, implausible
 
 FORMATS = {'.ravf': 'RAVF', '.adv': 'ADV', '.aav': 'AAV', '.ser': 'SER', '.avi': 'AVI', '.mov': 'MOV',
            '.mp4': 'MP4'}
@@ -145,6 +145,9 @@ def station_of(metadata: dict, fmt: str = '') -> dict:
         if x:
             eq[key] = x
     out['equipment'] = eq
+    warn = implausible(eq)
+    if warn:                            # e.g. mm typed into a cm field: as recorded, but flagged
+        out['warnings'] = warn
 
     timing: dict = {}
     src, raw = _time_source(m)

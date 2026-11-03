@@ -224,13 +224,13 @@ def missing(observer, need_site=False):
 
 
 def summary(observer):
-    """One line for the GUI: 'Station - Observer - telescope 10.7 cm / 34.3 cm'."""
+    """One line for the GUI: 'Station - Observer - telescope - 107 mm / 343 mm'."""
     o = observer or {}
     parts = [str(o.get("station") or "").strip(), str(o.get("name") or "").strip(),
              str(o.get("telescope") or "").strip()]
     try:
         if float(o.get("aperture_cm") or 0) and float(o.get("focal_length_cm") or 0):
-            parts.append(f'{float(o["aperture_cm"]):g} cm / {float(o["focal_length_cm"]):g} cm')
+            parts.append(f'{float(o["aperture_cm"]) * 10:g} mm / {float(o["focal_length_cm"]) * 10:g} mm')
     except (TypeError, ValueError):
         pass
     return " - ".join(p for p in parts if p)
