@@ -8,7 +8,7 @@ them into
 
     {"format", "recorder", "site": {lat, lon, alt_m, alt_ref, geoid_separation_m, datum, source,
      gps_fix, satellites, hdop, position_utc}, "station", "observers": [...],
-     "equipment": {telescope, telescope_type, aperture_cm, focal_length_cm, focal_reducer, mount,
+     "equipment": {telescope, telescope_type, aperture_mm, focal_length_mm, focal_reducer, mount,
      camera, serial, sensor, method}, "timing": {source, source_text, exposure_s, accuracy_s,
      camera_delay_s, delay_applied, trigger_delay_s, trigger_delay_applied}}
 
@@ -140,8 +140,10 @@ def station_of(metadata: dict, fmt: str = '') -> dict:
         t = _first(m, *names)
         if t:
             eq[key] = t
-    for key, name in (('aperture_cm', 'APERTURE-CM'), ('focal_length_cm', 'FOCAL-LENGTH-CM')):
-        x = _num(m.get(name))
+    for key, name in (('aperture_mm', 'APERTURE'), ('focal_length_mm', 'FOCAL-LENGTH')):
+        x = _num(m.get(name + '-MM'))
+        if not x and _num(m.get(name + '-CM')):          # recordings of earlier versions: cm
+            x = round(_num(m.get(name + '-CM')) * 10, 3)
         if x:
             eq[key] = x
     out['equipment'] = eq

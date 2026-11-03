@@ -18,7 +18,7 @@ W, H = 16, 12
 
 OBSERVER = {"name": "A. Observer", "email": "a@example.org", "observer2": "B. Second",
             "more_observers": "C. Third, D. Fourth", "station": "Test Station (TS)", "telescope": "C-14 EHD",
-            "telescope_type": "SCT", "aperture_cm": 35.6, "focal_length_cm": 62.2, "focal_reducer": "0.4x",
+            "telescope_type": "SCT", "aperture_mm": 356.0, "focal_length_mm": 622.0, "focal_reducer": "0.4x",
             "mount": "GM2000", "observing_method": "a", "camera_delay_s": 0.0, "camera_delay_applied": False,
             "latitude": 46.5, "longitude": 9.5, "altitude": 900.0}
 
@@ -68,7 +68,7 @@ def test_station_meta_from_config():
     m = station_header.station_meta(OBSERVER)
     assert m["observer"] == "A. Observer" and m["observer2"] == "B. Second"
     assert m["observers_more"] == "C. Third, D. Fourth" and m["station"] == "Test Station (TS)"
-    assert m["aperture_cm"] == 35.6 and m["focal_length_cm"] == 62.2 and m["focal_reducer"] == "0.4x"
+    assert m["aperture_mm"] == 356.0 and m["focal_length_mm"] == 622.0 and m["focal_reducer"] == "0.4x"
     assert "camera_delay_s" not in m and "camera_delay_applied" not in m      # 0: not known
     assert "email" not in m
     m = station_header.station_meta({**OBSERVER, "camera_delay_s": 0.012, "camera_delay_applied": True})
@@ -112,7 +112,7 @@ def test_ravf_station_entries_and_text_copies(tmp_path):
     write(ravf_writer.RavfWriter, path, header())
     md = movie.open_movie(path).metadata
     assert md["STATION"] == "Test Station (TS)" and md["OBSERVER-2"] == "B. Second"
-    assert md["TELESCOPE-TYPE"] == "SCT" and md["APERTURE-CM"] == 35.6 and md["FOCAL-REDUCER"] == "0.4x"
+    assert md["TELESCOPE-TYPE"] == "SCT" and md["APERTURE-MM"] == 356.0 and md["FOCAL-REDUCER"] == "0.4x"
     assert md["LATITUDE-TEXT"] == "46.9924869" and md["ALTITUDE-TEXT"] == "972.8"
     assert abs(md["LATITUDE"] - 46.9924869) < 1e-5                       # float32
     assert md["SITE-SOURCE"] == "GPS" and md["GPS-FIX"] == "3D" and md["GPS-SATELLITES"] == 11
@@ -159,7 +159,7 @@ def test_station_of_ravf_metadata(tmp_path):
     assert st["observers"] == ["A. Observer", "B. Second", "C. Third", "D. Fourth"]
     eq = st["equipment"]
     assert eq["camera"] == "MV-MIPI-IMX178M" and eq["telescope_type"] == "SCT" and eq["mount"] == "GM2000"
-    assert eq["aperture_cm"] == 35.6 and eq["method"] == "a"
+    assert eq["aperture_mm"] == 356.0 and eq["method"] == "a"
     tm = st["timing"]
     assert tm["source"] == "GPS" and tm["exposure_s"] == 0.075 and tm["accuracy_s"] == 1e-4
     assert tm["trigger_delay_s"] == 25e-6 and tm["trigger_delay_applied"] is True
@@ -304,7 +304,7 @@ COMPLETE = {k: v for k, v in OBSERVER.items()}
 
 def test_required_station_fields():
     assert station_header.missing(COMPLETE) == []
-    miss = station_header.missing({**COMPLETE, "station": " ", "aperture_cm": 0.0, "mount": ""})
+    miss = station_header.missing({**COMPLETE, "station": " ", "aperture_mm": 0.0, "mount": ""})
     assert miss == ["Station", "Aperture (mm)", "Mount"]
     assert station_header.missing({**COMPLETE, "latitude": 0, "longitude": 0}) == []        # GPS
     assert station_header.missing({**COMPLETE, "latitude": 0, "longitude": 0}, need_site=True) == \
@@ -350,12 +350,12 @@ def test_station_dialog(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dlg = gui.StationDialog(None, {**COMPLETE, "mount": "", "observing_method": "a"}, "/x/pystarlight.toml")
     assert "Mount" in dlg.missing_label.text()
-    assert dlg.widgets["aperture_cm"][0].value() == 356.0                     # shown in mm
+    assert dlg.widgets["aperture_mm"][0].value() == 356.0
     assert not dlg.widgets["telescope_type"][0].isEditable()
     dlg.widgets["mount"][0].setText("GM2000")
     v = dlg.values()
     assert dlg.missing_label.text() == "complete" and v["mount"] == "GM2000"
-    assert v["observing_method"] == "a" and v["telescope_type"] == "SCT" and v["aperture_cm"] == 35.6
+    assert v["observing_method"] == "a" and v["telescope_type"] == "SCT" and v["aperture_mm"] == 356.0
     assert v["camera_delay_applied"] is False and abs(v["latitude"] - 46.5) < 1e-9
     assert app is not None
 
@@ -388,7 +388,7 @@ def test_station_data_survive_the_transfer_unchanged(tmp_path, fmt):
     assert st["integrity"] == "ok" and md["STATION-DIGEST"].startswith("sha256:")
     assert st["station"] == "Test Station (TS)"
     assert st["observers"] == ["A. Observer", "B. Second", "C. Third", "D. Fourth"]
-    assert st["equipment"]["telescope"] == "C-14 EHD" and st["equipment"]["focal_length_cm"] == 62.2
+    assert st["equipment"]["telescope"] == "C-14 EHD" and st["equipment"]["focal_length_mm"] == 622.0
     assert st["equipment"]["telescope_type"] == "SCT" and st["equipment"]["mount"] == "GM2000"
     assert st["site"]["lat"] == 46.9924869 and st["site"]["source"] == "GPS"
     assert st["timing"]["source"] == "GPS" and st["timing"]["accuracy_s"] == 1e-4
@@ -403,7 +403,7 @@ def test_station_data_survive_the_transfer_unchanged(tmp_path, fmt):
     else:
         shutil.copy(lab / path.name, bad / path.name)
         side = json.loads((lab / "rec.ser.meta.json").read_text())
-        side["APERTURE-CM"] = 36.0
+        side["APERTURE-MM"] = 360.0
         (bad / "rec.ser.meta.json").write_text(json.dumps(side))
     st = station_of(movie.open_movie(bad / path.name).metadata, fmt.upper())
     assert st["integrity"] == "changed"
@@ -458,14 +458,14 @@ def test_nmea_keeps_the_last_fix():
 
 def test_implausible_station_values():
     pi = {**COMPLETE, "telescope": "ZWO APO107", "telescope_type": "RefractorAM5",
-          "aperture_cm": 107.0, "focal_length_cm": 759.0}                     # as the Pi recorded them
+          "aperture_mm": 1070.0, "focal_length_mm": 7590.0}                   # as the Pi recorded them
     assert station_header.implausible(pi) == [
         "aperture 1070 mm?", 'telescope type "RefractorAM5" (one of Refractor, Newtonian, SCT, '
         'Dobsonian, Binoculars, Other, None, Electronic)']
     assert "aperture 1070 mm?" in station_header.missing(pi)                   # blocks recording
-    good = {**pi, "telescope_type": "Refractor", "aperture_cm": 10.7, "focal_length_cm": 37.5}
+    good = {**pi, "telescope_type": "Refractor", "aperture_mm": 107.0, "focal_length_mm": 375.0}
     assert station_header.implausible(good) == [] and station_header.missing(good) == []
-    assert station_header.implausible({**good, "focal_length_cm": 600.0}) == ["focal ratio f/56.1?"]
+    assert station_header.implausible({**good, "focal_length_mm": 6000.0}) == ["focal ratio f/56.1?"]
     assert station_header.optics_line(good, 2.4) == \
         '107 mm, effective 375 mm, f/3.5, 1.32"/px (2.4 um pixels)'
 
@@ -474,5 +474,31 @@ def test_recorded_implausible_values_are_flagged_in_the_station_block():
     md = {"TELESCOPE": "ZWO APO107", "TELESCOPE-TYPE": "Refractor", "APERTURE-CM": 107.0,
           "FOCAL-LENGTH-CM": 759.0, "OBSERVER": "X"}
     st = station_of(md, "RAVF")
-    assert st["equipment"]["aperture_cm"] == 107.0 and st["warnings"] == ["aperture 1070 mm?"]
+    assert st["equipment"]["aperture_mm"] == 1070.0 and st["warnings"] == ["aperture 1070 mm?"]    # cm x 10
     assert "warnings" not in station_of(ADV_META, "ADV")
+
+
+def test_optics_in_mm_and_the_cm_keys_of_earlier_versions():
+    old = {**COMPLETE, "aperture_cm": 10.7, "focal_length_cm": 34.3}
+    del old["aperture_mm"], old["focal_length_mm"]
+    m = station_header.migrate(old)
+    assert m["aperture_mm"] == 107.0 and m["focal_length_mm"] == 343.0 and "aperture_cm" not in m
+    # template defaults (mm = 0) merged over an old file: the cm values win
+    assert station_header.migrate({"aperture_mm": 0.0, "aperture_cm": 10.7})["aperture_mm"] == 107.0
+    meta = station_header.station_meta(old)
+    assert meta["aperture_mm"] == 107.0 and "aperture_cm" not in meta
+    assert station_header.missing(old) == [] and station_header.summary(old).endswith("107 mm / 343 mm")
+    st = station_of({"APERTURE-MM": 107.0, "FOCAL-LENGTH-MM": 343.0}, "RAVF")
+    assert st["equipment"] == {"aperture_mm": 107.0, "focal_length_mm": 343.0}
+
+
+def test_update_section_drops_renamed_keys(tmp_path):
+    tomllib = pytest.importorskip("tomllib")
+    from pystarlight.capture import localconfig
+    p = tmp_path / "c.toml"
+    p.write_text('[observer]\nname = "A"\naperture_cm = 10.7\n'
+                 'focal_length_cm = 34.3   # note\n\n[x]\ny = 1\n')
+    localconfig.update_section("observer", {"aperture_mm": 107.0, "focal_length_mm": 343.0}, str(p),
+                               drop=["aperture_cm", "focal_length_cm"])
+    d = tomllib.loads(p.read_text())
+    assert d == {"observer": {"name": "A", "aperture_mm": 107.0, "focal_length_mm": 343.0}, "x": {"y": 1}}

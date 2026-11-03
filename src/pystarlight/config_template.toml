@@ -17,7 +17,7 @@ default_site = ""          # site id; $PYSYZYGOS_SITE also works (as in PySyzygo
 # sidecar .ser.meta.json), and the viewer passes them on in <movie>.event.json
 # (recording.station) for the occultation report (PySyzygos' observation GUI). The camera
 # edits them in its "Station & equipment" dialog and records only when the required ones
-# (name, station, telescope, telescope_type, aperture_cm, focal_length_cm, mount,
+# (name, station, telescope, telescope_type, aperture_mm, focal_length_mm, mount,
 # observing_method; without GPS also latitude / longitude) are set. --observer / --telescope
 # on its command line override name and telescope.
 name = ""                  # observer 1 (responsible for this station)
@@ -27,8 +27,8 @@ more_observers = ""
 station = ""               # station name, e.g. "Sternwarte Seewis Dorf (SWD)"
 telescope = ""             # description, e.g. "C-14 EHD"
 telescope_type = ""        # IOTA-ES form: Refractor, Newtonian, SCT, Dobsonian, Binoculars, Other, None, Electronic
-aperture_cm = 0.0
-focal_length_cm = 0.0      # EFFECTIVE focal length, with the reducer / Barlow
+aperture_mm = 0.0          # mm (earlier versions: aperture_cm, read and converted)
+focal_length_mm = 0.0      # EFFECTIVE focal length in mm, with the reducer / Barlow (e.g. 750 x 0.5 = 375)
 focal_reducer = ""         # e.g. "0.4x" ("" = none)
 mount = ""
 camera = ""

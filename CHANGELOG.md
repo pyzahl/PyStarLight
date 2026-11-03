@@ -20,8 +20,8 @@ uses [Semantic Versioning](https://semver.org/).
   clock), marked as such in the header; the true time from an embedded VTI time code or GPS
   LED flashes in the image.
 - Station data for the occultation report (PySyzygos `docs/observation_interface.md`): config
-  `[observer]` gains observer2, more_observers, station, telescope_type, aperture_cm,
-  focal_length_cm, focal_reducer, mount, observing_method, camera_delay_s(+_applied); the
+  `[observer]` gains observer2, more_observers, station, telescope_type, aperture_mm,
+  focal_length_mm, focal_reducer, mount, observing_method, camera_delay_s(+_applied); the
   capture writes them into every recording (`capture/station_header.py`), with the GPS site only
   with a fix (text copies at 7 decimals, altitude MSL + geoid separation from GGA field 11, fix,
   satellites, HDOP, fix time; else the config's site marked `SITE-SOURCE = "config"`, or none).
@@ -130,6 +130,10 @@ uses [Semantic Versioning](https://semver.org/).
   aperture on the displayed frame, without moving apertures; shown in the zoom views and status.
 
 ### Changed
+- Station optics in millimetres end to end: config `aperture_mm` / `focal_length_mm`, header
+  `APERTURE-MM` / `FOCAL-LENGTH-MM`, event.json `equipment.aperture_mm` / `focal_length_mm`
+  (the cm keys and entries of earlier versions are read and converted x 10). Plausibility
+  check (aperture 10 mm .. 1 m, focal length 50 mm .. 20 m, f/1 .. f/40) before recording.
 - Camera: the Observer / Telescope fields in the Recording panel are replaced by a **Station &
   equipment** dialog (one button) for all `[observer]` keys, saved into the private config
   (`localconfig.update_section`: only those lines change). Recording or arming needs the

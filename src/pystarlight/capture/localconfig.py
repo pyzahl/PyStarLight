@@ -80,11 +80,11 @@ def _comment(line):
     return "" if j < 0 else "   " + tail[j:].rstrip("\n")
 
 
-def update_section(name, values, path=None):
+def update_section(name, values, path=None, drop=()):
     """Set keys of the [name] table in the config file (path, else the one in use, else a new
     user config file, mode 600): existing lines are replaced in place (their comments kept),
-    new keys are added at the end of the table. The result is checked to parse before it
-    replaces the file. Returns the path written."""
+    new keys are added at the end of the table, keys in drop are removed (renamed ones). The
+    result is checked to parse before it replaces the file. Returns the path written."""
     import tomllib
     path = path or config_path() or user_config_path()
     try:
@@ -100,11 +100,17 @@ def update_section(name, values, path=None):
         head = len(lines) - 1
     end = next((i for i in range(head + 1, len(lines)) if lines[i].lstrip().startswith("[")), len(lines))
     todo = dict(values)
+    gone = []
     for i in range(head + 1, end):
         m = re.match(r"\s*([A-Za-z0-9_-]+)\s*=", lines[i])
         if m and m.group(1) in todo:
             key = m.group(1)
             lines[i] = f"{key} = {toml_value(todo.pop(key))}" + _comment(lines[i])
+        elif m and m.group(1) in drop:
+            gone.append(i)
+    for i in reversed(gone):
+        del lines[i]
+        end -= 1
     at = end
     while at > head + 1 and (not lines[at - 1].strip() or lines[at - 1].lstrip().startswith("#")):
         at -= 1                             # before the blank lines (and the next table's comments)

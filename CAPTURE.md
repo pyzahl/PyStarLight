@@ -472,7 +472,7 @@ isn't needed on the Pi).
   (rolling-shutter line time), `ROI-X`/`ROI-Y`, `TRIGGER`, `TRIGGER-DELAY-NS` (already in the
   time stamps: a GPS-triggered frame is stamped at pulse + delay).
 - Station and site (see [Station data in the recording](#station-data-in-the-recording)):
-  `OBSERVER-2`, `OBSERVERS-MORE`, `STATION`, `TELESCOPE-TYPE`, `APERTURE-CM`, `FOCAL-LENGTH-CM`,
+  `OBSERVER-2`, `OBSERVERS-MORE`, `STATION`, `TELESCOPE-TYPE`, `APERTURE-MM`, `FOCAL-LENGTH-MM`,
   `FOCAL-REDUCER`, `MOUNT`, `OBSERVING-METHOD`, `CAMERA-DELAY-S` / `CAMERA-DELAY-APPLIED`,
   `SITE-SOURCE`, `LATITUDE-TEXT` / `LONGITUDE-TEXT` / `ALTITUDE-TEXT`, `ALTITUDE-REF`,
   `GEOID-SEPARATION-M`, `DATUM`, `GPS-FIX`, `GPS-SATELLITES`, `GPS-HDOP`, `GPS-POSITION-UTC`.
@@ -492,7 +492,10 @@ it starts, so that it reaches the occultation report unchanged (PySyzygos'
 
 - **Station and equipment** come from `[observer]` in the private config: `name`, `observer2`,
   `more_observers`, `station`, `telescope`, `telescope_type` (the IOTA-ES form's Refractor,
-  Newtonian, SCT, ...), `aperture_cm`, `focal_length_cm` (effective, with reducer / Barlow),
+  Newtonian, SCT, ...), `aperture_mm`, `focal_length_mm` (effective, with reducer / Barlow;
+  millimetres everywhere: config, header, event.json; the `aperture_cm` / `focal_length_cm`
+  of earlier versions and `APERTURE-CM` / `FOCAL-LENGTH-CM` of older recordings are read and
+  converted, and the dialog's Save replaces the old keys),
   `focal_reducer`, `mount`, `observing_method` (form code, `a` = video), `camera_delay_s` with
   `camera_delay_applied`. Empty or 0 values are left out. `--observer` / `--telescope` on the
   command line override name and telescope.

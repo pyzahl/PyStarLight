@@ -17,8 +17,8 @@ STATION_KEYS = (
     ("more_observers", "observers_more", str),
     ("station", "station", str),
     ("telescope_type", "telescope_type", str),
-    ("aperture_cm", "aperture_cm", float),
-    ("focal_length_cm", "focal_length_cm", float),
+    ("aperture_mm", "aperture_mm", float),
+    ("focal_length_mm", "focal_length_mm", float),
     ("focal_reducer", "focal_reducer", str),
     ("mount", "mount", str),
     ("observing_method", "observing_method", str),
@@ -27,10 +27,27 @@ STATION_KEYS = (
 )
 
 
+LEGACY_CM = (("aperture_mm", "aperture_cm"), ("focal_length_mm", "focal_length_cm"))
+
+
+def migrate(observer):
+    """[observer] with the optics in mm: aperture_mm / focal_length_mm, from the cm keys of
+    earlier versions (x 10) where the mm ones are missing or 0; the cm keys dropped."""
+    out = dict(observer or {})
+    for mm, cm in LEGACY_CM:
+        old = out.pop(cm, None)
+        try:
+            if not float(out.get(mm) or 0) and old:
+                out[mm] = round(float(old) * 10, 3)
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
 def station_meta(observer):
     """Recorder metadata from the config's [observer] table; observer and telescope too (the
     command line and the GUI override those). Empty / zero values are left out."""
-    observer = observer or {}
+    observer = migrate(observer)
     out = {}
     if observer.get("name"):
         out["observer"] = str(observer["name"])
@@ -125,10 +142,9 @@ FIELDS = (
     ("station", "Station", str, True, (), 'station name, e.g. "Sternwarte Seewis Dorf (SWD)"'),
     ("telescope", "Telescope", str, True, (), 'description, e.g. "C-14 EHD" or "APO107"'),
     ("telescope_type", "Telescope type", str, True, TELESCOPE_TYPES, "as in the IOTA-ES report form"),
-    ("aperture_cm", "Aperture (mm)", float, True, (), "entered in mm, stored in cm (the report form's unit)"),
-    ("focal_length_cm", "Focal length (mm, effective)", float, True, (),
-     "EFFECTIVE focal length, with the reducer / Barlow (e.g. 750 mm x 0.5 = 375 mm); "
-     "entered in mm, stored in cm"),
+    ("aperture_mm", "Aperture (mm)", float, True, (), ""),
+    ("focal_length_mm", "Focal length (mm, effective)", float, True, (),
+     "EFFECTIVE focal length, with the reducer / Barlow (e.g. 750 mm x 0.5 = 375 mm)"),
     ("focal_reducer", "Focal reducer / Barlow", str, False, (), 'e.g. "0.5x"; empty = none'),
     ("mount", "Mount", str, True, (), ""),
     ("camera", "Camera (notes)", str, False, (), "the recording names the camera model itself"),
@@ -154,23 +170,26 @@ def effective(observer, args_observer="", args_telescope=""):
     return out
 
 
-MM_FIELDS = ("aperture_cm", "focal_length_cm")    # the dialog shows these in mm
+def optics_mm(observer):
+    """(aperture, effective focal length) in mm, 0 where unknown (earlier cm keys converted)."""
+    o = migrate(observer)
+    try:
+        return float(o.get("aperture_mm") or 0), float(o.get("focal_length_mm") or 0)
+    except (TypeError, ValueError):
+        return 0.0, 0.0
 
 
 def implausible(observer):
-    """Values that cannot be right (mm typed where cm are stored, a native focal length...):
-    aperture 1 cm .. 1 m, focal length 5 cm .. 20 m, focal ratio f/1 .. f/40, telescope type
+    """Values that cannot be right (cm typed where mm are asked, a native focal length...):
+    aperture 10 mm .. 1 m, focal length 50 mm .. 20 m, focal ratio f/1 .. f/40, telescope type
     one of TELESCOPE_TYPES."""
     o = observer or {}
     out = []
-    try:
-        d, f = float(o.get("aperture_cm") or 0), float(o.get("focal_length_cm") or 0)
-    except (TypeError, ValueError):
-        return ["aperture / focal length are not numbers"]
-    if d and not 1 <= d <= 100:
-        out.append(f"aperture {d * 10:g} mm?")
-    if f and not 5 <= f <= 2000:
-        out.append(f"focal length {f * 10:g} mm?")
+    d, f = optics_mm(o)
+    if d and not 10 <= d <= 1000:
+        out.append(f"aperture {d:g} mm?")
+    if f and not 50 <= f <= 20000:
+        out.append(f"focal length {f:g} mm?")
     if d and f and not 1 <= f / d <= 40:
         out.append(f"focal ratio f/{f / d:.1f}?")
     t = str(o.get("telescope_type") or "").strip()
@@ -181,11 +200,7 @@ def implausible(observer):
 
 def optics_line(observer, pixel_um=None):
     """'107 mm, effective 375 mm f/3.5, 1.32"/px (2.4 um pixels)' (what the values imply)."""
-    o = observer or {}
-    try:
-        d, f = float(o.get("aperture_cm") or 0) * 10, float(o.get("focal_length_cm") or 0) * 10
-    except (TypeError, ValueError):
-        return ""
+    d, f = optics_mm(observer)
     parts = [f"{d:g} mm" if d else "", f"effective {f:g} mm" if f else ""]
     if d and f:
         parts.append(f"f/{f / d:.1f}")
@@ -198,7 +213,7 @@ def missing(observer, need_site=False):
     """Labels of the required station fields that are empty (or 0), and values that cannot be
     right (implausible); need_site: no GPS receiver, so the fallback latitude / longitude are
     required too."""
-    observer = observer or {}
+    observer = migrate(observer)
     out = []
     for key, label, kind, required, *_ in FIELDS:
         if not required:
@@ -228,11 +243,9 @@ def summary(observer):
     o = observer or {}
     parts = [str(o.get("station") or "").strip(), str(o.get("name") or "").strip(),
              str(o.get("telescope") or "").strip()]
-    try:
-        if float(o.get("aperture_cm") or 0) and float(o.get("focal_length_cm") or 0):
-            parts.append(f'{float(o["aperture_cm"]) * 10:g} mm / {float(o["focal_length_cm"]) * 10:g} mm')
-    except (TypeError, ValueError):
-        pass
+    d, f = optics_mm(o)
+    if d and f:
+        parts.append(f"{d:g} mm / {f:g} mm")
     return " - ".join(p for p in parts if p)
 
 
@@ -241,8 +254,8 @@ def summary(observer):
 # an editor or another program rewriting the header or the SER sidecar, on the way from the
 # camera to the report. The RAVF header / SER sidecar carry it as STATION-DIGEST.
 DIGEST_KEYS = (
-    "OBSERVER", "OBSERVER-2", "OBSERVERS-MORE", "STATION", "TELESCOPE", "TELESCOPE-TYPE", "APERTURE-CM",
-    "FOCAL-LENGTH-CM", "FOCAL-REDUCER", "MOUNT", "OBSERVING-METHOD", "CAMERA-DELAY-S", "CAMERA-DELAY-APPLIED",
+    "OBSERVER", "OBSERVER-2", "OBSERVERS-MORE", "STATION", "TELESCOPE", "TELESCOPE-TYPE", "APERTURE-MM",
+    "FOCAL-LENGTH-MM", "FOCAL-REDUCER", "MOUNT", "OBSERVING-METHOD", "CAMERA-DELAY-S", "CAMERA-DELAY-APPLIED",
     "SITE-SOURCE", "LATITUDE-TEXT", "LONGITUDE-TEXT", "ALTITUDE-TEXT", "ALTITUDE-REF", "GEOID-SEPARATION-M",
     "DATUM", "GPS-FIX", "GPS-SATELLITES", "GPS-HDOP", "GPS-POSITION-UTC", "GPS-FIX-AGE-S",
     "INSTRUMENT", "INSTRUMENT-VENDOR", "INSTRUMENT-SERIAL", "INSTRUMENT-SENSOR", "INSTRUMENT-SHUTTER",

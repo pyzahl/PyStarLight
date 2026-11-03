@@ -482,12 +482,12 @@ class StationDialog(QtWidgets.QDialog):
             elif kind is float:
                 w = QtWidgets.QDoubleSpinBox(decimals=7 if key in ("latitude", "longitude") else 3,
                                              minimum=-1e6, maximum=1e6)
-                if key in station_header.MM_FIELDS or key == "altitude":
+                if key.endswith("_mm") or key == "altitude":
                     w.setDecimals(1)
-                if key in station_header.MM_FIELDS:
+                if key.endswith("_mm"):
                     w.setSuffix(" mm")
                 try:
-                    w.setValue(float(v or 0) * (10 if key in station_header.MM_FIELDS else 1))
+                    w.setValue(float(v or 0))
                 except (TypeError, ValueError):
                     w.setValue(0)
             elif choices:
@@ -533,7 +533,7 @@ class StationDialog(QtWidgets.QDialog):
             if kind is bool:
                 out[key] = w.isChecked()
             elif kind is float:
-                out[key] = float(w.value()) / (10 if key in station_header.MM_FIELDS else 1)
+                out[key] = float(w.value())
             elif isinstance(w, QtWidgets.QComboBox):
                 t = w.currentText().strip()
                 out[key] = t.split(" ")[0] if key == "observing_method" else t
@@ -1384,7 +1384,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def edit_station(self, why=""):
         """The station dialog; Save writes [observer] into the config. True when saved."""
-        observer = dict(localconfig.section("observer"))
+        observer = station_header.migrate(localconfig.section("observer"))   # cm keys of earlier versions
         for key, old in (("name", "observer"), ("telescope", "telescope")):   # typed in earlier versions
             if not observer.get(key):
                 observer[key] = self.settings.value(old, "", type=str)
@@ -1394,7 +1394,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if not (dlg.exec() if hasattr(dlg, "exec") else dlg.exec_()):
             return False
         try:
-            localconfig.update_section("observer", dlg.values(), path)
+            localconfig.update_section("observer", dlg.values(), path,
+                                       drop=[cm for _, cm in station_header.LEGACY_CM])
         except Exception as e:                  # e.g. not writable
             QtWidgets.QMessageBox.warning(self, "Station & equipment", f"could not save {path}: {e}")
             return False
