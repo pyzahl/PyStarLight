@@ -3,9 +3,10 @@
 NEW CODE. The curve is fitted in flux (linear, so an occulted star at zero flux or below is no
 problem) with a piecewise-constant model:
 
-1. change points by circular binary segmentation: the split, or the box (a short event inside
-   a segment), that lowers the sum of squares most, kept while that drop exceeds `penalty` *
-   ln(n) per change point in units of the noise variance (BIC-like);
+1. change points by circular binary segmentation (Olshen et al. 2004, Biostatistics 5, 557):
+   the split, or the box (a short event inside a segment), that lowers the sum of squares
+   most, kept while that drop exceeds `penalty` * ln(n) per change point in units of the noise
+   variance (BIC-like);
 2. backward elimination: drop a change point again when the two levels it separates are not
    significantly different any more (after the other splits);
 3. each transition time to a fraction of a frame: the row the step falls in is a mix of both

@@ -54,6 +54,7 @@ the file or are read from a VTI overlay. MIT licence.
   - [Locate the target](#locate-the-target)
 - [Package layout](#package-layout)
 - [Things to know](#things-to-know)
+- [References](#references)
 - [Licence](#licence)
 
 ## Install
@@ -220,7 +221,7 @@ RA/Dec too.
 
 **Gaia astrometry check** (with the local catalogue): along with the identification the frame
 shown (`i` repeats it on the current frame; the plate solution is moved by the measured drift) is
-reduced against Gaia DR3 in the manner of PRAIA (Assafin et al.): the measured stars are
+reduced against Gaia DR3 in the manner of PRAIA ([Assafin et al. 2011](#references)): the measured stars are
 paired with Gaia (proper motions to the observation date), a tangent-plane polynomial (4
 constants up to 3rd order, as the star count allows) relates them, and outliers are dropped one by
 one. All matched stars and the apertures are then **measured** (circle of 2 x the median FWHM,
@@ -355,7 +356,7 @@ without a value (NaN) are left out.
 
 1. **Noise.** sigma is the point-to-point noise: the robust (MAD) rms of the frame-to-frame
    differences divided by sqrt 2. Steps barely change it.
-2. **Change points.** These are found by binary segmentation, made circular. For each segment
+2. **Change points.** These are found by circular binary segmentation ([Olshen et al. 2004](#references)). For each segment
    the fit tries the best single split, and also the best "box" (a short dip inside the
    segment, which no single split finds, e.g. a 0.4 s event in a long recording). A split
    is kept while it lowers the sum of squares by more than `penalty` · ln(n) in units of
@@ -556,6 +557,62 @@ x, y = wcs.target_pixel(wcs.load_wcs(fits_path), '18h12m01s +22d07m00s')
   files as possible (and excluded from linting) so upstream fixes are easy to carry over.
 - The RAVF reader is tested on real ASTRID recordings, the ADV reader on a real DVTI+CAM
   recording. ADV needs the `adv` extra; `Adv2` 1.2.0 is patched at run time for numpy 2.
+
+## References
+
+Methods and software this project builds on or follows. Please cite the original work when
+you publish results obtained with PyStarLight.
+
+**Occultation analysis**
+
+- Anderson, B., *PyMovie* (light curves from occultation videos; most of PyStarLight's
+  processing is derived from version 4.2.8) and *PyOTE* (occultation timing),
+  https://github.com/bob-anderson-ok/pymovie, https://github.com/bob-anderson-ok/py-ote.
+- IOTA-ES asteroidal occultation report form 2.03 (the layout PySyzygos fills from
+  `event.json`), https://www.iota-es.de.
+
+**Astrometry and plate solving**
+
+- Lang, D., Hogg, D. W., Mierle, K., Blanton, M., Roweis, S. 2010, *Astrometry.net: Blind
+  astrometric calibration of arbitrary astronomical images*, AJ 139, 1782,
+  doi:10.1088/0004-6256/139/5/1782 (online at nova.astrometry.net, offline with `solve-field`).
+- Skrutskie, M. F., et al. 2006, *The Two Micron All Sky Survey (2MASS)*, AJ 131, 1163
+  (the 4200-series astrometry.net index files).
+- Assafin, M., Vieira Martins, R., Camargo, J. I. B., Andrei, A. H., Da Silva Neto, D. N.,
+  Braga-Ribas, F. 2011, *PRAIA - Platform for Reduction of Astronomical Images Automatically*,
+  in Gaia follow-up network for the solar system objects, Gaia-FUN-SSO workshop proceedings,
+  eds. P. Tanga & W. Thuillot, IMCCE, p. 85 (the Gaia reduction of `wcs.reduce`: polynomial
+  plate model, one-by-one O-C rejection).
+
+**Catalogues**
+
+- Gaia Collaboration, Prusti, T., et al. 2016, *The Gaia mission*, A&A 595, A1,
+  doi:10.1051/0004-6361/201629272.
+- Gaia Collaboration, Vallenari, A., et al. 2023, *Gaia Data Release 3: Summary of the
+  content and survey properties*, A&A 674, A1, doi:10.1051/0004-6361/202243940.
+- Zacharias, N., et al. 2013, *The Fourth US Naval Observatory CCD Astrograph Catalog
+  (UCAC4)*, AJ 145, 44, doi:10.1088/0004-6256/145/2/44.
+- Høg, E., et al. 2000, *The Tycho-2 catalogue of the 2.5 million brightest stars*, A&A 355,
+  L27.
+- Wenger, M., et al. 2000, *The SIMBAD astronomical database*, A&AS 143, 9,
+  doi:10.1051/aas:2000332.
+
+**Photometry and timing**
+
+- Naylor, T. 1998, *An optimal extraction algorithm for imaging photometry*, MNRAS 296, 339,
+  doi:10.1046/j.1365-8711.1998.01314.x (the **Optimal** photometry option).
+- Olshen, A. B., Venkatraman, E. S., Lucito, R., Wigler, M. 2004, *Circular binary
+  segmentation for the analysis of array-based DNA copy number data*, Biostatistics 5, 557,
+  doi:10.1093/biostatistics/kxh008 (the change-point search of the step fit, `steps`).
+
+**Software**
+
+- Astropy Collaboration, Price-Whelan, A. M., et al. 2022, *The Astropy Project*, ApJ 935,
+  167, doi:10.3847/1538-4357/ac7c74 (WCS, coordinates, FITS).
+- Ginsburg, A., Sipőcz, B. M., et al. 2019, *astroquery*, AJ 157, 98,
+  doi:10.3847/1538-3881/aafc33 (SIMBAD and VO look-ups).
+- PySyzygos (occultation predictions, favorites, the local Gaia DR3 extract, the observation
+  report), https://github.com/pyzahl/PySyzygos.
 
 ## Licence
 
