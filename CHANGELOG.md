@@ -130,6 +130,16 @@ uses [Semantic Versioning](https://semver.org/).
   aperture on the displayed frame, without moving apertures; shown in the zoom views and status.
 
 ### Changed
+- The recording's own optics give the plate-scale hint (`solve.recorded_scale`: effective focal
+  length and the sensor's pixel pitch); `[fallback_equipment]` (new) only for videos without
+  them, with a WARNING. `[sites.<id>]` tables are gone (PySyzygos' `sites.py` stays, for the
+  station dialog's first-time defaults); "recorded elsewhere" and the stack's alt/az use the
+  `[observer]` fallback position. The live
+  solve's hint defaults to the station's focal length. `recording.station.warnings` lists the
+  essentials a recording lacks (observer, telescope, aperture, focal length, position, time
+  source), shown by the viewer after every Run.
+- Station dialog: the first time (no station data in `[observer]`), its empty fields are filled
+  from the PySyzygos default site; `[observer]` alone is used for recordings.
 - Station optics in millimetres end to end: config `aperture_mm` / `focal_length_mm`, header
   `APERTURE-MM` / `FOCAL-LENGTH-MM`, event.json `equipment.aperture_mm` / `focal_length_mm`
   (the cm keys and entries of earlier versions are read and converted x 10). Plausibility

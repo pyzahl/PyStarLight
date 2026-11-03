@@ -104,8 +104,9 @@ def test_pysyzygos_sites(tmp_path, monkeypatch):
         c.write_text(f'{key} = "{f}"\n[sites.home]\nsensor_mm = [5.02, 3.75]\n')
         monkeypatch.setenv('PYSTARLIGHT_CONFIG', str(c))
         s = config.site(config.load())
-        assert s['id'] == 'home' and s['lat'] == 1.0 and s['sensor_mm'] == [5.02, 3.75]
-    c.write_text('[sites.home]\nlat = 1.0\nlon = 2.0\n[sites.away]\nlat = 3.0\nlon = 4.0\n')
+        assert s['id'] == 'home' and s['lat'] == 1.0 and s['sensor_mm'] == (5.6, 3.2)   # [sites.*]: ignored
+    f.write_text("sites = {'home': {'lat': 1.0, 'lon': 2.0}, 'away': {'lat': 3.0, 'lon': 4.0}}\n")
+    c.write_text(f'pysyzygos_sites = "{f}"\n')
     for env in ('PYSYZYGOS_SITE', 'PYOCCULT_SITE'):
         monkeypatch.setenv(env, 'away')
         assert config.site(config.load())['id'] == 'away'
@@ -136,11 +137,12 @@ def test_movie_hints_from_adv_metadata():
     assert h['center'] == pytest.approx((99.356175, 38.736677))
     assert h['other_site']                                      # someone else's optics: no scale hint
     assert not movie_hints({'LATITUDE': '40.96', 'LONGITUDE': '-72.93'}, home)['other_site']
-    assert movie_hints({}, home) == {'center': None, 'other_site': False}
+    assert movie_hints({}, home) == {'center': None, 'other_site': False, 'scale': None}
 
 
-@pytest.mark.parametrize('opts, scale', [({}, 'site'), ({'scale_arcsec': 1.19}, 1.19),
-                                         ({'scale_hint': False}, None)])
+@pytest.mark.parametrize('opts, scale', [({}, None), ({'scale_arcsec': 1.19}, 1.19),
+                                         ({'scale_hint': False}, None), ({'_fallback': True}, 'fallback'),
+                                         ({'_fallback': True, '_away': True}, None)])
 def test_solve_movie_hint_options(tmp_path, monkeypatch, opts, scale):
     import sys
 
@@ -157,12 +159,18 @@ def test_solve_movie_hint_options(tmp_path, monkeypatch, opts, scale):
         raise RuntimeError('stop here')
     monkeypatch.setattr(solve, 'solve_astrometry_net', fake)
     cfg = load()
+    opts = dict(opts)
+    fallback, away = opts.pop('_fallback', False), opts.pop('_away', False)
     cfg['astrometry'].update(opts)
-    cfg['sites'] = {'here': {'lat': 40.0, 'lon': -73.0, 'focal_mm': 343.0, 'sensor_mm': [5.02, 3.75]}}
-    cfg['default_site'] = 'here'
+    if fallback:                    # a video without its optics: [fallback_equipment]
+        cfg['fallback_equipment'] = {'focal_length_mm': 360.0, 'pixel_um': 3.45, 'binning': 1}
+    cfg['observer'].update(latitude=40.0, longitude=-73.0)          # the station's position
+    if away:                        # recorded elsewhere: someone else's optics, no hint
+        monkeypatch.setattr(solve, 'movie_hints', lambda m, home: {'center': None, 'other_site': True,
+                                                                   'scale': None})
     with pytest.raises(RuntimeError, match='stop here'):
         solve.solve_movie(str(p), cfg, log=lambda m: None)
-    expect = solve.plate_scale(343.0, 5.02, 320) if scale == 'site' else scale
+    expect = 206.265 * 3.45 / 360.0 if scale == 'fallback' else scale
     assert sent['scale_arcsec'] == (pytest.approx(expect) if expect else None)
 
 

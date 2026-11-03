@@ -502,22 +502,31 @@ class ReviewWindow(QtWidgets.QMainWindow):
         return 16
 
     def preset_optics(self):
-        """Focal length and pixel size: command line, else the camera model in the file, else
-        the config's default site (focal_mm, sensor_mm / width)."""
+        """Focal length and pixel size: command line, else the recording's own (effective focal
+        length, the sensor of its camera model), else the config's [fallback_equipment] (a video
+        without its optics; the status line warns)."""
         meta = getattr(self.mv, "metadata", {}) or {}
+        upper = {str(k).upper(): v for k, v in meta.items()}
         pix = self.pixel_arg or pixel_um(" ".join(str(meta.get(k, "")) for k in
                                                   ("INSTRUMENT", "INSTRUMENT-SENSOR", "Instrument")))
         focal = self.focal_arg
-        try:
-            from ..config import load, site
-            st = site(load()) or {}
-        except Exception:
-            st = {}
-        if not focal and st.get("focal_mm"):
-            focal = float(st["focal_mm"])
-        if not pix and st.get("sensor_mm"):
-            h, w = self.mv.shape
-            pix = float(st["sensor_mm"][0]) * 1000.0 / w * int(st.get("binning", 1))
+        for key, scale in (("FOCAL-LENGTH-MM", 1), ("FOCAL-LENGTH-CM", 10)):
+            try:
+                focal = focal or float(upper.get(key) or 0) * scale
+            except (TypeError, ValueError):
+                pass
+        if not focal or not pix:
+            try:
+                from ..config import load
+                fe = load().get("fallback_equipment") or {}
+            except Exception:
+                fe = {}
+            if not focal and float(fe.get("focal_length_mm") or 0):
+                focal = float(fe["focal_length_mm"])
+                print("WARNING: the recording carries no focal length: [fallback_equipment]'s")
+            if not pix and float(fe.get("pixel_um") or 0):
+                pix = float(fe["pixel_um"]) * int(fe.get("binning") or 1)
+                print("WARNING: the recording's sensor is not known: [fallback_equipment]'s pixel size")
         self.focal_spin.setValue(focal or 0.0)
         self.pixel_spin.setValue(pix or 0.0)
         self.show_scale()

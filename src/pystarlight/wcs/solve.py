@@ -400,17 +400,63 @@ def stamp_rows(image: np.ndarray, edge_fraction: float = 0.15, min_fraction: flo
             n - int(bot.min()) + 1 if bot.size else 0)
 
 
+def recorded_pixel_um(metadata: dict) -> Optional[float]:
+    """Pixel pitch (um) of the recording's sensor, from its name (capture.cameras.PIXEL_UM)."""
+    from ..capture.cameras import pixel_um
+    m = {str(k).upper(): v for k, v in (metadata or {}).items()}
+    return next((pixel_um(str(m[k])) for k in ('INSTRUMENT-SENSOR', 'INSTRUMENT', 'CAMERA-SENSOR-INFO')
+                 if m.get(k) and pixel_um(str(m[k]))), None)
+
+
+def fallback_scale(metadata: dict, equipment: Optional[dict]) -> Optional[tuple[float, str]]:
+    """(arcsec per pixel, how) from the config's [fallback_equipment] (focal_length_mm, pixel_um,
+    binning) for a recording that does not carry its optics; the pixel pitch from the
+    recording's sensor name where the table leaves it at 0. None when it is not set."""
+    e = equipment or {}
+    try:
+        f, um = float(e.get('focal_length_mm') or 0), float(e.get('pixel_um') or 0)
+        binning = int(e.get('binning') or 1)
+    except (TypeError, ValueError):
+        return None
+    um = um or recorded_pixel_um(metadata) or 0
+    if not f or not um:
+        return None
+    return 206.265 * um * binning / f, f'{f:g} mm, {um:g} um pixels' + (f' x{binning}' if binning > 1 else '')
+
+
+def recorded_scale(metadata: dict) -> Optional[tuple[float, str]]:
+    """(arcsec per pixel, how) from the recording's own optics: its effective focal length
+    (FOCAL-LENGTH-MM, or FOCAL-LENGTH-CM of earlier captures) and the pixel pitch of its sensor
+    (INSTRUMENT-SENSOR / INSTRUMENT / CAMERA-SENSOR-INFO, capture.cameras.PIXEL_UM), times the
+    binning. None when it does not carry them."""
+    m = {str(k).upper(): v for k, v in (metadata or {}).items()}
+
+    def num(k):
+        try:
+            x = float(m[k])
+        except (KeyError, TypeError, ValueError):
+            return None
+        return x if math.isfinite(x) and x > 0 else None
+    f = num('FOCAL-LENGTH-MM') or ((num('FOCAL-LENGTH-CM') or 0) * 10) or None
+    um = recorded_pixel_um(m)
+    if not f or not um:
+        return None
+    binning = int(num('IMAGE-BINNING-X') or num('BINNING-X') or 1)
+    return 206.265 * um * binning / f, f'{f:g} mm, {um:g} um pixels' + (f' x{binning}' if binning > 1 else '')
+
+
 def movie_hints(metadata: dict, site: Optional[dict] = None, max_km: float = 20.0) -> dict:
     """Solve hints from a recording's own metadata (ADV: RA in hours, DEC, LATITUDE,
     LONGITUDE). 'center': (ra_deg, dec_deg) if given; 'other_site': True when the recording
-    was made more than max_km from `site` (its optics, hence its plate scale, do not apply)."""
+    was made more than max_km from `site` (its optics, hence its plate scale, do not apply);
+    'scale': (arcsec per pixel, how) from the recording's own optics (recorded_scale) or None."""
     def num(k):
         try:
             x = float(metadata[k])
         except (KeyError, TypeError, ValueError):
             return None
         return x if math.isfinite(x) else None          # NaN: PyStarLight capture without a GPS fix
-    out = {'center': None, 'other_site': False}
+    out = {'center': None, 'other_site': False, 'scale': recorded_scale(metadata)}
     ra, dec = num('RA'), num('DEC')
     if ra is not None and dec is not None and -90 <= dec <= 90 and (ra, dec) != (0, 0):
         out['center'] = (ra * 15.0 if 0 <= ra < 24 else ra, dec)
@@ -434,13 +480,15 @@ def solve_movie(movie_path: str, cfg: Optional[dict] = None, site_name: Optional
     """Plate-solve a recording once and cache the solution as <movie>.wcs.fit.
 
     Uses a median stack of [astrometry] stack_frames frames. Hints: the plate scale from
-    [astrometry] scale_arcsec, else from the site (focal_mm, sensor_mm, binning) unless the
-    recording was made elsewhere; none with scale_hint = false. The recording's RA/Dec as the
+    [astrometry] scale_arcsec, else from the recording's own optics (effective focal length and
+    sensor, recorded_scale), else, with a WARNING, from [fallback_equipment] (fallback_scale)
+    unless the recording was made more than 20 km from the station ([observer] latitude /
+    longitude: someone else's optics); none with scale_hint = false. site_name: unused (kept
+    for callers). The recording's RA/Dec as the
     field centre unless center_hint = false. Returns (astropy WCS, Orientation)."""
     from pathlib import Path
 
     from ..config import load
-    from ..config import site as get_site
     from ..movie import open_movie
 
     cfg = cfg or load()
@@ -460,8 +508,10 @@ def solve_movie(movie_path: str, cfg: Optional[dict] = None, site_name: Optional
         log(f'timestamp rows blanked: top {top}, bottom {bottom}')
         img = prepare_for_astrometry(img, top, bottom)
     scale = None
-    st = get_site(cfg, site_name)
-    hints = movie_hints(meta, st)
+    obs = cfg.get('observer') or {}
+    home = ({'lat': obs['latitude'], 'lon': obs['longitude']}
+            if obs.get('latitude') or obs.get('longitude') else None)
+    hints = movie_hints(meta, home)
     center = hints['center'] if acfg.get('center_hint', True) else None
     if center:
         log('field centre from the recording: RA {:.3f}, Dec {:.3f} deg'.format(*center))
@@ -470,11 +520,19 @@ def solve_movie(movie_path: str, cfg: Optional[dict] = None, site_name: Optional
     elif float(acfg.get('scale_arcsec') or 0) > 0:
         scale = float(acfg['scale_arcsec'])
         log(f'plate scale from the config: {scale:.2f}"/px')
+    elif hints['scale']:
+        scale, how = hints['scale']
+        log(f'plate scale from the recording ({how}): {scale:.2f}"/px')
     elif hints['other_site']:
-        log(f"recorded elsewhere than site {st['id']}: no plate-scale hint")
-    elif st and st.get('focal_mm') and st.get('sensor_mm'):
-        scale = plate_scale(st['focal_mm'], st['sensor_mm'][0], shape[1], int(st.get('binning', 1)))
-        log(f"site {st['id']}: expected plate scale {scale:.2f}\"/px")
+        log("WARNING: the recording carries no focal length / sensor and was made more than 20 km "
+            "from the station (someone else's optics): no plate-scale hint")
+    elif fallback_scale(meta, cfg.get('fallback_equipment')):
+        scale, how = fallback_scale(meta, cfg.get('fallback_equipment'))
+        log(f'WARNING: the recording carries no focal length / sensor: plate scale {scale:.2f}"/px '
+            f'from [fallback_equipment] ({how})')
+    else:
+        log("WARNING: the recording carries no focal length / sensor and [fallback_equipment] is "
+            "not set: no plate-scale hint (blind solve)")
     path, job = solve_astrometry_net(img, workdir=str(dest.parent / '.wcs-work'), frame_num=start, log=log,
                                      cancel=cancel, scale_arcsec=scale, center=center,
                                      scale_err_pct=float(acfg['scale_err_pct']), dest=str(dest),

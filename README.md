@@ -101,10 +101,14 @@ Apple Silicon Macs: the `Adv2` wheel (ADV/AAV reader) ships an Intel-only native
 it once with `sh scripts/build_advcore.sh` (needs git and the Xcode command line tools); re-run
 after Adv2 is reinstalled.
 
-Edit the config: your name, email, your nova.astrometry.net API key, and your observing
-site(s). Sites use the same keys as PySyzygos (formerly PyOccult): point `pysyzygos_sites` at your PySyzygos
-`sites.py` (read as data, never executed) and/or add `[sites.<id>]` tables with `focal_mm`
-and `sensor_mm`, from which the expected plate scale is computed. The file is only readable
+Edit the config: your name, email and your nova.astrometry.net API key. Station and
+equipment (`[observer]`) are best set in the camera's **Station & equipment** dialog; every
+recording then carries them, including the effective focal length that gives the plate-scale
+hint. For videos that do not carry their optics (other programs' ADV / AVI, a SER without its
+sidecar, older recordings) set `[fallback_equipment]` (focal length, pixel size): used with a
+warning each time. `pysyzygos_sites` points at PySyzygos' `sites.py` (read as data, never
+executed): the station dialog's first-time defaults and the folder of the local Gaia
+catalogue. The file is only readable
 by you and is never part of the repository. `pystarlight-config show` prints it with secrets
 masked; `pystarlight-config sites` lists the sites; `pystarlight-config path` shows which file
 is used (lookup: `$PYSTARLIGHT_CONFIG`, `./pystarlight.toml`, the project root's

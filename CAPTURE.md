@@ -229,7 +229,7 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
 
 - Result in the panel (and `<stack>.solve.json`, `<stack>.wcs.fit` next to the FITS): RA/Dec of
   the field centre, field size, plate scale, north direction, mirroring, altitude/azimuth of the
-  centre (needs a GPS fix or a default site in the config), and the brightest stars with RA/Dec
+  centre (needs a GPS fix, else the station's fallback position, with a warning), and the brightest stars with RA/Dec
   and names (astrometry.net annotations, then SIMBAD), circled on the stack.
 - **Focal length** (`--focal-mm`) gives the plate-scale hint with the sensor's pixel size (IMX178:
   2.4 µm, `--pixel-um` otherwise): 24 mm -> 20.6"/px, a 17.6° x 11.8° field. 0 = blind solve.
@@ -391,8 +391,8 @@ Python it uses the repo's `.venv`). Reads RAVF, SER, ADV/AAV, AVI and FITS folde
 - **Stack & plate solve** of a frame range (`[` / `]` set from / to at the current frame, `s`
   starts): `LiveStacker` (aligned on the stars) -> `<movie>_f<a>-<b>_..._stack<n>.fits` next to
   the movie -> `solve_fits` (local solver or nova) -> centre, field, alt/az, named stars circled on
-  the stack. Focal length and pixel size come from `--focal-mm` / `--pixel-um`, the camera model
-  in the file, or the config's default site. **Save as the movie's plate solution** writes
+  the stack. Focal length and pixel size come from `--focal-mm` / `--pixel-um`, the recording's
+  own (effective focal length, its camera's sensor), or `[fallback_equipment]` (with a warning). **Save as the movie's plate solution** writes
   `<movie>.wcs.fit`, `.wcs.json` (stack_start = the range start) and `.stars.json` as
   pystarlight-view caches them, so the viewer uses that solution.
 - Keys: Space play/pause, Left/Right, PgUp/PgDn (10), Home/End, `n`/`b`, `[`/`]`, `a` auto levels, `d/D` gamma, `s`, `c` or
@@ -499,6 +499,17 @@ it starts, so that it reaches the occultation report unchanged (PySyzygos'
   `focal_reducer`, `mount`, `observing_method` (form code, `a` = video), `camera_delay_s` with
   `camera_delay_applied`. Empty or 0 values are left out. `--observer` / `--telescope` on the
   command line override name and telescope.
+- **`[observer]` is the only source** for what a recording says about the station. From then
+  on the recording itself carries it: the viewer's plate-scale hint comes from its effective
+  focal length and sensor (the live solve's from the station's focal length unless
+  `--focal-mm`). `[fallback_equipment]` (focal length, pixel size) is only for odd or
+  incomplete recordings (no optics in the file), with a WARNING each time, and not for one made
+  more than 20 km from the station (someone else's optics); `event.json` lists what a recording lacks
+  in `recording.station.warnings` ("no focal length in the recording", ...), and the viewer
+  shows them after every Run.
+  Only the first time, when `[observer]` holds no station data yet, the dialog fills its empty
+  fields from the PySyzygos default site (name -> station, lat / lon / ele -> fallback site,
+  aperture_cm -> mm, focal_mm, camera) and says so; Save makes them `[observer]`'s own.
 - **Edited in the GUI:** the button **Station & equipment …** in the Recording panel opens a
   dialog with all these fields (and the fallback site); **Save** writes them into `[observer]`
   of the private config file in use (only those lines change; comments, other tables and keys

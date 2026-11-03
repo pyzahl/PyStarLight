@@ -110,17 +110,16 @@ def read_pysyzygos_sites(path: str) -> tuple[dict, Optional[str]]:
 
 
 def sites(cfg: dict) -> tuple[dict, Optional[str]]:
-    """All sites: those from the PySyzygos sites.py (if configured), overridden by [sites.*] tables.
-    Returns (sites, default site id). Site keys follow PySyzygos: lat, lon, ele (m), name,
-    aperture_cm, focal_mm, sensor_mm (width, height); PyStarLight adds binning, camera."""
+    """The sites of PySyzygos' sites.py (pysyzygos_sites), read as data. Returns (sites, default
+    site id). Keys as PySyzygos: lat, lon, ele (m), name, aperture_cm, focal_mm. Used only for
+    the station dialog's first-time defaults: recordings carry their own station data
+    ([observer]), videos without optics use [fallback_equipment]."""
     out, default = {}, None
     # pyoccult_sites: the key's name before PyOccult became PySyzygos (older config files)
     py = resolve_path(cfg, cfg.get('pysyzygos_sites') or cfg.get('pyoccult_sites') or '')
     if py is not None and py.is_file():
         out, default = read_pysyzygos_sites(str(py))
         out = {k: dict(v) for k, v in out.items()}
-    for k, v in cfg.get('sites', {}).items():
-        out[k] = {**out.get(k, {}), **v}
     default = cfg.get('default_site') or default
     return out, default
 
@@ -169,7 +168,7 @@ def main(argv=None):
     i.add_argument('--force', action='store_true', help='replace an existing file')
     sub.add_parser('path', help='show which config file is in use')
     sub.add_parser('show', help='print settings (secrets masked)')
-    sub.add_parser('sites', help='list observing sites (incl. PySyzygos sites.py)')
+    sub.add_parser('sites', help="list PySyzygos' observing sites (sites.py)")
     a = ap.parse_args(argv)
     if a.cmd == 'init':
         path = a.path
@@ -185,7 +184,7 @@ def main(argv=None):
         for k, v in all_sites.items():
             mark = '*' if k == default else ' '
             print(f"{mark} {k:30s} lat {v.get('lat', 0):9.5f} lon {v.get('lon', 0):10.5f} "
-                  f"focal {v.get('focal_mm', '?')} mm  sensor {v.get('sensor_mm', '?')} mm")
+                  f"{v.get('name', '')}")
     else:
         pprint.pprint(masked(load()), sort_dicts=False)
 

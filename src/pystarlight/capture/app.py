@@ -128,7 +128,8 @@ parser.add_argument("--stack-frames", type=int, default=16,
                     help="frames per live stack (default 16; GUI 'Stack & plate solve', key s)")
 parser.add_argument("--focal-mm", type=float, default=0.0,
                     help="focal length of the lens / telescope in mm, for the plate-scale hint "
-                         "of the solve (default 0: blind solve)")
+                         "of the live solve (default: the station's effective focal length, "
+                         "[observer] focal_length_mm; none there: blind solve)")
 parser.add_argument("--pixel-um", type=float, default=None,
                     help="pixel pitch in um (default: from the sensor, e.g. IMX178 2.4)")
 parser.add_argument("--observer", default="", help="observer name for the file header")
@@ -284,7 +285,9 @@ def main(argv=None):
         s.grabber.frame_info = frame_info
 
         s.pixel_um = args.pixel_um or pixel_um(camera.get_model_name())
-        s.focal_mm = args.focal_mm              # the GUI changes it
+        # the plate-scale hint of the live solve: --focal-mm, else the station's effective focal
+        # length ([observer], as every recording says); the GUI changes it
+        s.focal_mm = args.focal_mm or station_header.optics_mm(localconfig.section("observer"))[1]
 
         def stack_info():
             """FITS header values for a new stack (taken when it starts)."""

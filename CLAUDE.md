@@ -40,7 +40,7 @@ PyOTE source: `../py-ote`. PySyzygos (formerly PyOccult; sites, local Gaia extra
 | `export.py` | PyMovie-layout CSV for PyOTE (`write_pymovie_csv`, `sky_lines`) |
 | `timestamps/` | `ocr.py` (PyMovie's VTI OCR, verbatim), `vti.py` (`VtiReader`), `timing.py` (checks, new) |
 | `wcs/` | `solve.py` (astrometry.net, orientation, plate scale, `solve_movie`, `field_stars`), `identify.py` (brightest stars, SIMBAD, `identify_positions`), `localcat.py` (PySyzygos' Gaia DR3, numpy only), `reduce.py` (PRAIA-style Gaia reduction: polynomial up to 3rd order, one-by-one O-C rejection, aperture offsets from their Gaia star, magnitudes on the G scale → `<movie>.astrometry.json`; run by the viewer with the identification on the frame shown), `catnames.py` (UCAC4 / TYC / Gaia DR3 names and target look-up, local catalogue or VO at GAVO/ESA; camera markers), `manual.py` (two-star, verbatim), `astrometry_client.py` (verbatim-ish) |
-| `config.py` + `config_template.toml` | private config, PySyzygos-compatible sites (`pystarlight-config`) |
+| `config.py` + `config_template.toml` | private config (`[observer]` station, `[fallback_equipment]`), PySyzygos `sites.py` read for first-time defaults (`pystarlight-config`) |
 | `station.py` | `station_of(metadata, fmt)`: RAVF / ADV / SER station data (site + source, observers, equipment, timing) in one layout → `event.json` `recording.station` (PySyzygos `docs/observation_interface.md`) |
 | `report_push.py` | hand `event.json` to PySyzygos' observation GUI: address + key from the connection file it writes (`~/.config/pysyzygos/observation_api.json`, `connection()`), config `[pysyzygos_observations]` url/token only for another computer; not running: copy into its inbox; stdlib; viewer key `e` / Send |
 | `plot.py` | publication figures (`style`, `summary`, panels) |
@@ -112,7 +112,9 @@ GUI tests run headless (Agg): Agg timers never fire, so tests call `poll()`/`_po
 ## Owner's setup
 
 ASTRID camera (IMX296, 1456×1088, 16-bit RAVF, GPS timestamps via OTEStamper), typical 4–10 fps;
-APO107 with ×0.5 reducer (measured ≈ 343 mm, 2.07″/px). Site `home` from PySyzygos' `sites.py`,
-corrected in the private config (`aperture_cm` 10.7, `sensor_mm` 5.02 × 3.75).
+APO107 with ×0.5 reducer (measured ≈ 343 mm, 2.07″/px). Station data in the private config's
+`[observer]` (mm: `aperture_mm` 107, `focal_length_mm` 343); old ASTRID recordings carry no
+optics and use `[fallback_equipment]` (343 mm, 3.45 µm). PySyzygos site `Home-Deck` (`default_site`);
+the `[sites.<id>]` tables are gone.
 Test recording `None_20261011_042339_1` (near Deneb): target TYC 3574-1718-1, refs HD 197161,
 BD+44 3540, BD+44 3545.

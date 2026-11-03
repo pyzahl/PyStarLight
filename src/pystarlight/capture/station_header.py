@@ -304,3 +304,31 @@ def protect(path):
         os.chmod(path, os.stat(path).st_mode & ~0o222)
     except OSError:
         pass
+
+
+# ---- the first time: defaults from the PySyzygos site ----
+STATION_DATA = ("station", "telescope", "aperture_mm", "focal_length_mm", "latitude", "longitude")
+
+
+def unconfigured(observer):
+    """No station data configured yet ([observer] has none of STATION_DATA)."""
+    o = migrate(observer)
+    return not any(str(o.get(k) or "").strip() not in ("", "0", "0.0") for k in STATION_DATA)
+
+
+def site_defaults(site):
+    """[observer] values from a PySyzygos site (sites.py / [sites.<id>]: name, lat, lon, ele,
+    aperture_cm, focal_mm, camera), for the station dialog the first time only."""
+    s = site or {}
+    out = {}
+    for key, src, scale in (("station", "name", None), ("latitude", "lat", 1), ("longitude", "lon", 1),
+                            ("altitude", "ele", 1), ("aperture_mm", "aperture_cm", 10),
+                            ("focal_length_mm", "focal_mm", 1), ("camera", "camera", None)):
+        v = s.get(src)
+        if v in (None, ""):
+            continue
+        try:
+            out[key] = str(v) if scale is None else round(float(v) * scale, 7)
+        except (TypeError, ValueError):
+            continue
+    return out

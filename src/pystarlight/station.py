@@ -147,9 +147,6 @@ def station_of(metadata: dict, fmt: str = '') -> dict:
         if x:
             eq[key] = x
     out['equipment'] = eq
-    warn = implausible(eq)
-    if warn:                            # e.g. mm typed into a cm field: as recorded, but flagged
-        out['warnings'] = warn
 
     timing: dict = {}
     src, raw = _time_source(m)
@@ -182,4 +179,15 @@ def station_of(metadata: dict, fmt: str = '') -> dict:
         # PyStarLight's capture stamps a GPS-triggered frame at pulse + trigger delay
         timing['trigger_delay_applied'] = 'trigger pulse' in raw
     out['timing'] = timing
+    warn = implausible(eq)
+    # essentials a report needs; missing in an odd or incomplete recording (another program's,
+    # an older capture, a SER without its sidecar): PySyzygos / the report must fill them in
+    for what, ok in (('observer', out['observers']), ('telescope', eq.get('telescope')),
+                     ('aperture', eq.get('aperture_mm')), ('focal length', eq.get('focal_length_mm')),
+                     ('position', site.get('source') not in ('none', None)),
+                     ('time source', timing.get('source'))):
+        if not ok:
+            warn.append(f'no {what} in the recording')
+    if warn:                            # e.g. mm typed into a cm field: as recorded, but flagged
+        out['warnings'] = warn
     return out

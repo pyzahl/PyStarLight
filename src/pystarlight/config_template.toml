@@ -7,10 +7,11 @@
 # Lookup order: $PYSTARLIGHT_CONFIG, ./pystarlight.toml (project-local, git-ignored),
 # ~/.config/pystarlight/config.toml. Anything left out falls back to this template.
 
-# Observing sites, same keys as PySyzygos' sites.py. Either point to that file, or add
-# [sites.<id>] tables below (they override/extend the PySyzygos ones).
+# PySyzygos' sites.py (read as data): only the station dialog's first-time defaults, and its
+# folder is where the local Gaia catalogue is found. Recordings carry their own station data
+# ([observer] below); videos without their optics use [fallback_equipment].
 pysyzygos_sites = ""       # e.g. "~/SVN/PySyzygos/sites.py"
-default_site = ""          # site id; $PYSYZYGOS_SITE also works (as in PySyzygos)
+default_site = ""          # its site id; $PYSYZYGOS_SITE also works (as in PySyzygos)
 
 [observer]
 # Station and equipment: the capture writes them into every recording (RAVF header, SER
@@ -19,7 +20,8 @@ default_site = ""          # site id; $PYSYZYGOS_SITE also works (as in PySyzygo
 # edits them in its "Station & equipment" dialog and records only when the required ones
 # (name, station, telescope, telescope_type, aperture_mm, focal_length_mm, mount,
 # observing_method; without GPS also latitude / longitude) are set. --observer / --telescope
-# on its command line override name and telescope.
+# on its command line override name and telescope. Only the first time (nothing set here yet)
+# the dialog suggests values from the PySyzygos default site below; after Save, this table alone.
 name = ""                  # observer 1 (responsible for this station)
 email = ""
 observer2 = ""             # further operators of this station
@@ -41,6 +43,15 @@ latitude = 0.0
 longitude = 0.0
 altitude = 0.0
 
+[fallback_equipment]
+# FALLBACK EQUIPMENT for videos that do not carry their optics: ADV / AVI / SER from other
+# programs, a SER whose .ser.meta.json was left behind, recordings of older captures. Only for
+# the viewer's plate-scale hint, with a WARNING each time it is used. PyStarLight's own
+# recordings carry the station's effective focal length and sensor ([observer]) and never use it.
+focal_length_mm = 0.0      # EFFECTIVE focal length (with reducer / Barlow); 0 = not set
+pixel_um = 0.0             # sensor pixel pitch; 0 = from the recording's sensor name, if known
+binning = 1
+
 [astrometry]
 # Personal API key from https://nova.astrometry.net (My Profile). Keep it private.
 api_key = ""
@@ -58,18 +69,6 @@ scale_hint = true          # send a plate-scale hint (site optics, or scale_arcs
 scale_arcsec = 0.0         # override the plate scale, arcsec/px (0 = from the site's optics)
 center_hint = true         # send the recording's own RA/Dec (ADV metadata) as the field centre
 public = false             # let astrometry.net show the image publicly
-
-# Example site table (PySyzygos layout + optional binning/camera):
-# [sites.home]
-# name = "Home"
-# lat = 40.95497
-# lon = -72.92809
-# ele = 61.0
-# aperture_cm = 10.7
-# focal_mm = 360.0
-# sensor_mm = [5.02, 3.75]   # width, height of the active area used
-# binning = 1
-# camera = "ASTRID IMX296"
 
 [paths]
 # Where recordings live; the viewer starts here.

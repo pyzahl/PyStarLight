@@ -474,8 +474,9 @@ def test_recorded_implausible_values_are_flagged_in_the_station_block():
     md = {"TELESCOPE": "ZWO APO107", "TELESCOPE-TYPE": "Refractor", "APERTURE-CM": 107.0,
           "FOCAL-LENGTH-CM": 759.0, "OBSERVER": "X"}
     st = station_of(md, "RAVF")
-    assert st["equipment"]["aperture_mm"] == 1070.0 and st["warnings"] == ["aperture 1070 mm?"]    # cm x 10
-    assert "warnings" not in station_of(ADV_META, "ADV")
+    assert st["equipment"]["aperture_mm"] == 1070.0 and st["warnings"][0] == "aperture 1070 mm?"   # cm x 10
+    assert station_of(ADV_META, "ADV")["warnings"] == [                 # DVTI: no optics in the file
+        "no aperture in the recording", "no focal length in the recording", "no time source in the recording"]
 
 
 def test_optics_in_mm_and_the_cm_keys_of_earlier_versions():
@@ -502,3 +503,46 @@ def test_update_section_drops_renamed_keys(tmp_path):
                                drop=["aperture_cm", "focal_length_cm"])
     d = tomllib.loads(p.read_text())
     assert d == {"observer": {"name": "A", "aperture_mm": 107.0, "focal_length_mm": 343.0}, "x": {"y": 1}}
+
+
+def test_site_defaults_only_the_first_time():
+    site = {"id": "home", "name": "Home", "lat": 40.95497, "lon": -72.92809, "ele": 61.0,
+            "aperture_cm": 10.7, "focal_mm": 360.0, "sensor_mm": [5.02, 3.75], "camera": "ASTRID"}
+    assert station_header.site_defaults(site) == {
+        "station": "Home", "latitude": 40.95497, "longitude": -72.92809, "altitude": 61.0,
+        "aperture_mm": 107.0, "focal_length_mm": 360.0, "camera": "ASTRID"}
+    assert station_header.unconfigured({"name": "A", "email": "a@b", "observing_method": "a",
+                                        "aperture_mm": 0.0, "latitude": 0.0})
+    assert not station_header.unconfigured(COMPLETE)
+    assert not station_header.unconfigured({"aperture_cm": 10.7})          # an earlier version's key
+
+
+def test_plate_scale_from_the_recording_first():
+    from pystarlight.wcs.solve import movie_hints, recorded_scale
+    md = {"INSTRUMENT": "MV-MIPI-IMX178M", "INSTRUMENT-SENSOR": "IMX178M", "FOCAL-LENGTH-MM": 375.0}
+    scale, how = recorded_scale(md)
+    assert abs(scale - 206.265 * 2.4 / 375) < 1e-9 and how == "375 mm, 2.4 um pixels"
+    assert abs(recorded_scale({**md, "IMAGE-BINNING-X": 2})[0] - 2 * scale) < 1e-9
+    assert abs(recorded_scale({"INSTRUMENT": "MV-MIPI-IMX178M", "FOCAL-LENGTH-CM": 37.5})[0] - scale) < 1e-9
+    assert recorded_scale({"INSTRUMENT": "DVTI+CAM"}) is None                   # no focal length
+    assert recorded_scale({"FOCAL-LENGTH-MM": 375.0, "INSTRUMENT": "unknown cam"}) is None
+    assert movie_hints(md)["scale"][0] == scale and movie_hints({})["scale"] is None
+
+
+def test_incomplete_recording_warns():
+    st = station_of({"Observer": "", "FileID": "LUCAM-RECORDER"}, "SER")      # a SER without sidecar
+    assert st["warnings"] == ["no observer in the recording", "no telescope in the recording",
+                              "no aperture in the recording", "no focal length in the recording",
+                              "no position in the recording", "no time source in the recording"]
+
+
+def test_fallback_equipment_for_recordings_without_optics():
+    from pystarlight.wcs.solve import fallback_scale
+    fe = {"focal_length_mm": 343.0, "pixel_um": 3.45, "binning": 1}
+    scale, how = fallback_scale({}, fe)
+    assert abs(scale - 206.265 * 3.45 / 343) < 1e-9 and how == "343 mm, 3.45 um pixels"
+    # pixel pitch 0: from the recording's sensor name
+    assert abs(fallback_scale({"INSTRUMENT": "MV-MIPI-IMX178M"}, {**fe, "pixel_um": 0})[0]
+               - 206.265 * 2.4 / 343) < 1e-9
+    assert fallback_scale({}, {"focal_length_mm": 0.0, "pixel_um": 3.45}) is None     # not set
+    assert fallback_scale({}, None) is None

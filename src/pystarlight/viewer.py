@@ -1809,6 +1809,10 @@ class Viewer:
         station = station_of(meta, movie_format(self.path))
         if station['integrity'] == 'changed':
             print(f'{self.path.name}: station data changed after recording (STATION-DIGEST differs)')
+        if station.get('warnings'):         # an odd / incomplete recording: say it every time
+            msg = f"WARNING {self.path.name}: " + '; '.join(station['warnings'])
+            print(msg)
+            self.say_job(msg + ' (see event.json recording.station.warnings)')
         report = st.event_report(fit, date, m0, self._mag_band)
         tm = station['timing']
         base = {'time_base_accuracy_s': tm.get('accuracy_s'), 'time_source': tm.get('source', ''),

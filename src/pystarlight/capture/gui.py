@@ -457,6 +457,16 @@ class LevelsBox(QtWidgets.QGroupBox):
         return np.round(255.0 * np.clip(x, 0.0, 1.0) ** (1.0 / self.gamma)).astype(np.uint8)
 
 
+def default_site():
+    """The PySyzygos default site (pystarlight.config.site), {} when there is none or the package
+    cannot be imported (the Pi's system Python without its needs)."""
+    try:
+        from pystarlight.config import load, site
+        return site(load()) or {}
+    except Exception:
+        return {}
+
+
 class StationDialog(QtWidgets.QDialog):
     """Station and equipment ([observer] of the private config): what every recording's header
     says about where, with what and by whom (station_header.FIELDS). Saved into the config file;
@@ -1385,6 +1395,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def edit_station(self, why=""):
         """The station dialog; Save writes [observer] into the config. True when saved."""
         observer = station_header.migrate(localconfig.section("observer"))   # cm keys of earlier versions
+        if station_header.unconfigured(observer):   # the first time: the PySyzygos site as defaults
+            site = default_site()
+            filled = {k: v for k, v in station_header.site_defaults(site).items() if not observer.get(k)}
+            if filled:
+                observer.update(filled)
+                why = (why + "\n" if why else "") + (
+                    f"First time: filled from the PySyzygos site '{site.get('id')}' "
+                    f"({', '.join(station_header.LABELS[k] for k in filled)}): check, then Save.")
         for key, old in (("name", "observer"), ("telescope", "telescope")):   # typed in earlier versions
             if not observer.get(key):
                 observer[key] = self.settings.value(old, "", type=str)

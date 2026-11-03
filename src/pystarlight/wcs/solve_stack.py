@@ -38,9 +38,9 @@ def _site(header, site=None):
     if header.get('SITELAT') is not None and header.get('SITELONG') is not None:
         return {'lat': float(header['SITELAT']), 'lon': float(header['SITELONG']),
                 'ele': float(header.get('SITEELEV') or 0.0), 'source': 'GPS'}
-    if site and site.get('lat') is not None:
-        return {'lat': float(site['lat']), 'lon': float(site['lon']),
-                'ele': float(site.get('ele') or 0.0), 'source': f"site {site.get('id', '')}"}
+    if site and (site.get('latitude') or site.get('longitude')):         # [observer]
+        return {'lat': float(site['latitude']), 'lon': float(site['longitude']),
+                'ele': float(site.get('altitude') or 0.0), 'source': "the station's fallback position"}
     return None
 
 
@@ -92,7 +92,6 @@ def solve_stack(image: np.ndarray, header: dict, n_stars: int = 5, workdir: str 
     center: (ra, dec) deg where the field is expected (e.g. the last solution, the target),
     searched within radius_deg; if the solve fails there it is tried once more without it."""
     from ..config import load
-    from ..config import site as get_site
     cfg = load()
     img = np.array(image, dtype=np.float32)
     if not np.isfinite(img).all():
@@ -128,7 +127,9 @@ def solve_stack(image: np.ndarray, header: dict, n_stars: int = 5, workdir: str 
            'scale_arcsec': o.scale_arcsec, 'north_deg': o.north_deg, 'mirrored': o.mirrored,
            'field_deg': [fw, fh], 'time': header.get('DATE-OBS'), 'altaz': None, 'site': None}
     log(f'centre RA {ra_s}  Dec {dec_s}, field {fw:.2f} x {fh:.2f} deg')
-    st = _site(header, get_site(cfg))
+    st = _site(header, cfg.get('observer'))
+    if st and st['source'] != 'GPS':
+        log(f"WARNING: the stack carries no GPS position: alt/az for {st['source']} (fallback)")
     if st and out['time']:
         try:
             alt, az = alt_az(o.center_ra, o.center_dec, out['time'], st)
