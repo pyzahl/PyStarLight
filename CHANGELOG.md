@@ -7,6 +7,11 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Player: the target's light curve, the step-fit levels and D / R from the analysis
+  (`<movie>.pystarlight.csv`, `.event.json`) as a second track below the frame timing (relative
+  to its median, scaled on the target alone), and an open crosshair on the target on every
+  frame (its tracked centre and catalogue name; **Target** box to hide it); the
+  timing track's labels read max / min / typical step, and it has a tooltip.
 - Saturated stars (`saturation`): an aperture over a saturated star is labelled SAT on the frame
   and warned about when placed; after Run, references and check stars saturated in more than
   1 % of the frames are left out of normalisation, magnitude zero point and histograms (not

@@ -441,3 +441,48 @@ def test_player_asks_for_a_file(tmp_path, monkeypatch):
     assert win.open_dialog() is False and win.path == str(path)       # Cancel: as it was
     win.close()
     assert app is not None
+
+
+def test_player_shows_the_analysis_light_curve(tmp_path):
+    import json
+
+    from pystarlight.capture.player import load_analysis
+    rec = tmp_path / "m.ravf"
+    assert load_analysis(rec) is None                                   # not analysed yet
+    n = 100
+    target = np.where((np.arange(n) >= 40) & (np.arange(n) < 60), 50.0, 1000.0)
+    lines = ["# roles: target=target, ref1=reference, check1=check",
+             "FrameNum,date,timeInfo,signal-target,signal-ref1,signal-check1"]
+    lines += [f"{i},2026-11-02,[01:00:00],{target[i]},2000,1500" for i in range(n)]
+    (tmp_path / "m.pystarlight.csv").write_text("\n".join(lines) + "\n")
+    times = 1793581200.0 + 0.1 * np.arange(n)                           # 2026-11-02T01:00:00Z, 10 fps
+    c = load_analysis(rec, times)
+    assert c["what"] == "target target / 1 reference" and c["marks"] == [] and len(c["frames"]) == n
+    assert abs(c["flux"][10] - 1.0) < 1e-9 and abs(c["flux"][50] - 0.05) < 1e-9   # / its median 0.5
+    (tmp_path / "m.event.json").write_text(json.dumps({
+        "target": {"aperture": "target"}, "references": [{"aperture": "ref1"}],
+        "photometry": {"normalize_window": 11},
+        "step_fit": {"levels": [{"start_utc": "2026-11-02T01:00:00.0Z", "end_utc": "2026-11-02T01:00:04.0Z",
+                                 "flux": 0.5}],
+                     "transitions": [{"kind": "D", "utc": "2026-11-02T01:00:04.0000Z"},
+                                     {"kind": "R", "utc": "2026-11-02T01:00:06.0000Z"}]}}))
+    c = load_analysis(rec, times)
+    assert [(round(i, 3), k) for i, k, _ in c["marks"]] == [(40.0, "D"), (60.0, "R")]
+    assert c["levels"] == [(0.0, 40.0, pytest.approx(1.0))] and c["marks"][0][2] == "01:00:04.000"
+
+
+def test_player_target_position_from_the_analysis(tmp_path):
+    import json
+
+    from pystarlight.capture.player import load_analysis
+    rec = tmp_path / "m.ser"
+    lines = ["# roles: ap1=target, ref1=reference",
+             "FrameNum,date,timeInfo,signal-ap1,xc-ap1,yc-ap1,signal-ref1"]
+    lines += [f"{i},,,{1000},{100 + 0.5 * i},{50.25},2000" for i in range(5, 15)]   # frames 5..14
+    (tmp_path / "m.pystarlight.csv").write_text("\n".join(lines) + "\n")
+    c = load_analysis(rec)
+    assert c["label"] == "target ap1" and c["xy"][0][0] == 102.5 and c["xy"][1][3] == 50.25
+    assert list(c["frames"][:2]) == [5.0, 6.0]
+    (tmp_path / "m.event.json").write_text(json.dumps({"target": {"aperture": "ap1",
+                                                                  "name": "UCAC4 544-008819"}}))
+    assert load_analysis(rec)["label"] == "UCAC4 544-008819"

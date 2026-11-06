@@ -129,12 +129,93 @@ def utc_text(t):
     return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
 
 
+def load_analysis(path, times=None):
+    """The target's light curve from an analysis next to the recording (pystarlight analyze):
+    <movie>.pystarlight.csv (every aperture's signal by frame) and, if there, <movie>.event.json
+    (target, the references it used, normalise window, step-fit levels and D/R times). The flux
+    is the target / the smoothed reference ensemble, as the analysis' step fit has it. times:
+    the frames' UTC (s), to place the levels and D/R. None when there is no analysis."""
+    import csv
+    p = Path(path)
+    stem = p.with_name(p.stem)
+    table = Path(f"{stem}.pystarlight.csv")
+    if not table.is_file():
+        return None
+    try:
+        with open(table) as f:
+            lines = f.read().splitlines()
+        roles = {}
+        for ln in lines:
+            if ln.startswith("# roles:"):
+                roles = dict(kv.strip().split("=", 1) for kv in ln[len("# roles:"):].split(",") if "=" in kv)
+        rows = list(csv.DictReader(ln for ln in lines if not ln.startswith("#")))
+        ev = {}
+        evp = Path(f"{stem}.event.json")
+        if evp.is_file():
+            with open(evp) as f:
+                ev = json.load(f)
+        target = ((ev.get("target") or {}).get("aperture")
+                  or next((n for n, r in roles.items() if r == "target"), None))
+        refs = ([r["aperture"] for r in ev.get("references") or [] if r.get("aperture")]
+                or [n for n, r in roles.items() if r == "reference"])
+        window = int((ev.get("photometry") or {}).get("normalize_window") or 31)
+        if not target or not rows or f"signal-{target}" not in rows[0]:
+            return None
+        frames = np.array([float(r["FrameNum"]) for r in rows])
+        xy = None                                   # the target's tracked centre per frame
+        if f"xc-{target}" in rows[0] and f"yc-{target}" in rows[0]:
+            xy = (np.array([float(r[f"xc-{target}"]) for r in rows]),
+                  np.array([float(r[f"yc-{target}"]) for r in rows]))
+        sig = {n: np.array([float(r[f"signal-{n}"]) for r in rows]) for n in [target, *refs]
+               if f"signal-{n}" in rows[0]}
+        refs = [r for r in refs if r in sig]
+        if refs:
+            from ..normalize import ensemble
+            ens, _, _ = ensemble(sig, refs, None, window=window)
+            flux = sig[target] / ens
+            what = f"target {target} / {len(refs)} reference{'s' if len(refs) > 1 else ''}"
+        else:
+            flux = sig[target] / np.nanmedian(sig[target])
+            what = f"target {target} (no references: / its median)"
+    except (OSError, ValueError, KeyError) as e:
+        print(f"analysis not shown: {e}")
+        return None
+
+    def at(utc):                                    # UTC text -> fractional frame index
+        if times is None or not len(times) or not utc:
+            return None
+        try:
+            t = datetime.fromisoformat(str(utc).rstrip("Z")).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            return None
+        ok = np.isfinite(times)
+        return float(np.interp(t, times[ok], np.flatnonzero(ok))) if ok.sum() > 1 else None
+    # shown relative to the median (the unocculted star ~ 1): the analysis' flux is target /
+    # the summed reference ensemble, often far from 1 (a target fainter than its references)
+    ok = np.isfinite(flux)
+    scale = float(np.median(flux[ok])) if ok.any() else 1.0
+    scale = scale if scale > 0 else 1.0
+    flux = flux / scale
+    fit = ev.get("step_fit") or {}
+    levels = [(at(lv.get("start_utc")), at(lv.get("end_utc")),
+               lv["flux"] / scale if lv.get("flux") is not None else None)
+              for lv in fit.get("levels") or []]
+    marks = [(at(tr.get("utc")), tr.get("kind", ""), str(tr.get("utc") or "")[11:23])
+             for tr in fit.get("transitions") or []]
+    name = str((ev.get("target") or {}).get("name") or "")
+    return {"frames": frames, "flux": flux, "what": what, "target": f"target {target}", "source": table.name,
+            "xy": xy, "label": name or f"target {target}",
+            "levels": [lv for lv in levels if None not in lv[:2] and lv[2] is not None],
+            "marks": [m for m in marks if m[0] is not None]}
+
+
 # ---------------------------------------------------------------------------
 # Step plot
 # ---------------------------------------------------------------------------
 class StepPlot(QtWidgets.QWidget):
     """Time step to the previous frame (ms) over the whole file; the current frame is a
-    vertical line, problem frames are red ticks. Click / drag jumps there."""
+    vertical line, problem frames are red ticks. Click / drag jumps there. With an analysis
+    (set_curve) a second track below: the target's light curve, its step-fit levels and D/R."""
 
     clicked = Signal(int)
 
@@ -146,6 +227,19 @@ class StepPlot(QtWidgets.QWidget):
         self.flags = []
         self.current = 0
         self.step = None
+        self.curve = None           # load_analysis(): the target's light curve
+        self.setToolTip(
+            "Frame timing: the time step from each frame to the next one before it, in ms, over "
+            "the whole file (light blue; each pixel column spans its frames' smallest to largest "
+            "step). Dashed: the typical step. Red ticks: dropped / duplicated / irregular frames. "
+            "Yellow: the frame shown. Click or drag to jump.\n"
+            "Below, if the recording was analysed: the target's flux (target / reference "
+            "ensemble), the step fit's levels (green) and D / R times (magenta).")
+
+    def set_curve(self, curve):
+        self.curve = curve
+        self.setMinimumHeight(180 if curve else 90)
+        self.update()
 
     def set_data(self, times, flags, step_s):
         self.dt = np.concatenate([[np.nan], np.diff(times) * 1000.0]) if len(times) else None
@@ -170,7 +264,8 @@ class StepPlot(QtWidgets.QWidget):
                        else "no time stamps")
             p.end()
             return
-        n, w, h = len(dt), self.width(), self.height()
+        n, w, H = len(dt), self.width(), self.height()
+        h = int(H * 0.45) if self.curve else H          # the timing track; the light curve below
         ok = dt[np.isfinite(dt)]
         lo, hi = np.percentile(ok, (0.5, 99.5)) if len(ok) > 10 else (ok.min(), ok.max())
         if self.step:
@@ -196,13 +291,61 @@ class StepPlot(QtWidgets.QWidget):
         for i in self.flags:
             x = self._x(i, n)
             p.drawLine(QtCore.QPointF(x, h - 10), QtCore.QPointF(x, h - 2))
+        p.setPen(QtCore.Qt.lightGray)
+        p.drawText(6, 12, f"frame step, max {hi:.1f} ms")
+        p.drawText(6, h - 14, f"min {lo:.1f} ms")
+        if self.step:
+            p.setPen(QtGui.QColor("#9e9e9e"))
+            p.drawText(QtCore.QRectF(0, y(self.step) - 13, w - 8, 12), QtCore.Qt.AlignRight,
+                       f"typical {self.step:.2f} ms")
+        if self.curve:
+            self._paint_curve(p, n, w, h, H)
         p.setPen(QtGui.QColor("#ffd600"))
         x = self._x(self.current, n)
-        p.drawLine(QtCore.QPointF(x, 0), QtCore.QPointF(x, h))
-        p.setPen(QtCore.Qt.lightGray)
-        p.drawText(6, 12, f"step {hi:.1f} ms")
-        p.drawText(6, h - 14, f"{lo:.1f} ms")
+        p.drawLine(QtCore.QPointF(x, 0), QtCore.QPointF(x, H))
         p.end()
+
+    def _paint_curve(self, p, n, w, top, H):
+        """The light-curve track (top .. H): flux per frame (min / max per pixel column), the
+        step fit's levels and D / R."""
+        c = self.curve
+        frames, flux = c["frames"], c["flux"]
+        p.setPen(QtGui.QPen(QtGui.QColor("#444444")))
+        p.drawLine(QtCore.QPointF(0, top), QtCore.QPointF(w, top))
+        ok = np.isfinite(flux)
+        if not ok.any():
+            return
+        lo, hi = np.percentile(flux[ok], (0.2, 99.8))           # the target's own range ...
+        for _, _, f in c["levels"]:                             # ... and its fitted levels
+            lo, hi = min(lo, f), max(hi, f)
+        pad = 0.06 * max(hi - lo, 1e-6)
+        lo, hi = lo - pad, hi + pad
+        span = max(hi - lo, 1e-9)
+        y0, y1 = top + 30, H - 6
+
+        def y(v):
+            return y1 - (y1 - y0) * (min(max(v, lo), hi) - lo) / span
+        cols = max(1, w - 8)
+        col = np.clip(((frames / max(1, n - 1)) * (cols - 1)).astype(int), 0, cols - 1)
+        p.setPen(QtGui.QColor("#ffb74d"))
+        for k in np.unique(col[ok]):
+            seg = flux[ok & (col == k)]
+            p.drawLine(QtCore.QPointF(4 + k, y(seg.min())), QtCore.QPointF(4 + k, y(seg.max())))
+        p.setPen(QtGui.QPen(QtGui.QColor("#66bb6a"), 2))
+        for i0, i1, f in c["levels"]:
+            p.drawLine(QtCore.QPointF(self._x(i0, n), y(f)), QtCore.QPointF(self._x(i1, n), y(f)))
+        p.setPen(QtGui.QPen(QtGui.QColor("#e040fb"), 1))
+        for k, (i, kind, txt) in enumerate(c["marks"]):
+            x = self._x(i, n)
+            p.drawLine(QtCore.QPointF(x, y0 - 12), QtCore.QPointF(x, y1))
+            # labels on two rows, so close D / R do not overlap
+            p.drawText(QtCore.QPointF(x + 3, top + (26 if k % 2 else 14)), f"{kind} {txt}")
+        p.setPen(QtCore.Qt.lightGray)
+        p.drawText(6, top + 14, f"{c['target']}: flux relative to its median  ({c['source']})")
+        p.setPen(QtGui.QColor("#9e9e9e"))
+        for v in (0.0, 1.0):                                    # only where they fall in its range
+            if lo <= v <= hi:
+                p.drawText(QtCore.QRectF(0, y(v) - 13, w - 8, 12), QtCore.Qt.AlignRight, f"{v:g}")
 
     def mousePressEvent(self, e):
         if self.dt is not None and len(self.dt):
@@ -272,8 +415,17 @@ class PlayerWindow(QtWidgets.QMainWindow):
         prev_b.clicked.connect(lambda: self.next_problem(-1))
         next_b = QtWidgets.QPushButton("problem (n) ▶")
         next_b.clicked.connect(lambda: self.next_problem(1))
+        # open crosshair on the target where the recording was analysed (pystarlight analyze)
+        self.target_check = QtWidgets.QCheckBox("Target")
+        self.target_check.setChecked(self.settings.value("target_marker", True, type=bool))
+        self.target_check.setToolTip("mark the analysis' target on each frame (its tracked "
+                                     "centre), open in the middle so the star stays visible")
+        self.target_check.setVisible(False)                 # until an analysis is found
+        self.target_check.toggled.connect(lambda on: (self.settings.setValue("target_marker", on),
+                                                      self.redraw()))
         bar = QtWidgets.QHBoxLayout()
-        for w in (self.play_button, self.fps_spin, self.slider, self.frame_spin, prev_b, next_b):
+        for w in (self.play_button, self.fps_spin, self.slider, self.frame_spin, prev_b, next_b,
+                  self.target_check):
             bar.addWidget(w)
         bar.setStretch(2, 1)
         left = QtWidgets.QWidget()
@@ -476,6 +628,11 @@ class PlayerWindow(QtWidgets.QMainWindow):
             self.plot.set_data(self.times, self.flags, step)
             if np.isfinite(step) and step > 0:
                 self.fps_spin.setValue(min(100.0, max(0.5, round(1 / step, 1))))
+        # an analysis of this recording (pystarlight analyze): its target light curve as a track,
+        # and the target's position for the crosshair
+        self.plot.set_curve(load_analysis(self.path, self.times if len(self.times) else None))
+        self.target_check.setVisible(bool(self.plot.curve and self.plot.curve.get("xy")))
+        self.redraw()
         self.fill_file_info()
         self.show_frame_info()
 
@@ -625,10 +782,28 @@ class PlayerWindow(QtWidgets.QMainWindow):
         return self.stack_view if self.show_check.isChecked() and self.stack_view is not None \
             else self.img
 
+    def target_marker(self):
+        """[(x, y, radius, label, colour)] of the analysis' target on the frame shown; [] when
+        there is none, it is switched off, or the stack is shown (its frames are aligned)."""
+        c = self.plot.curve
+        check = getattr(self, "target_check", None)          # not built yet: nothing to mark
+        if (not c or not c.get("xy") or check is None or not check.isChecked()
+                or self.shown_image() is not self.img):
+            return []
+        frames = c["frames"]
+        k = int(np.searchsorted(frames, self.index))
+        if k >= len(frames) or frames[k] != self.index:
+            return []                                   # a frame the analysis did not cover
+        x, y = c["xy"][0][k], c["xy"][1][k]
+        if not (np.isfinite(x) and np.isfinite(y)):
+            return []
+        return [(float(x), float(y), 6.0, c["label"], QtGui.QColor("#ff3d7f"))]
+
     def redraw(self, *_):
         img = self.shown_image()
         if img is None:
             return
+        self.view.markers = self.target_marker()
         lv = self.levels
         lo, hi = lv.lo, max(lv.hi, lv.lo + 1e-6)
         disp = np.clip((np.asarray(img, np.float32) - lo) * (DISPLAY_STEPS / (hi - lo)),

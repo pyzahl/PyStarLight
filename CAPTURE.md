@@ -388,8 +388,30 @@ Python it uses the repo's `.venv`). Reads RAVF, SER, ADV/AAV, AVI and FITS folde
   this frame, and for RAVF the frame header: sequence number, exposure, GPS satellites, fix,
   leap-second status. Other formats show their per-frame status (ADV) if any.
 - **File**: size, depth, frames, duration, typical step / fps, problem count, the whole header.
-- **Step plot** below the image: the step of every frame over the file (min/max per pixel
-  column), red ticks at problems, yellow line at the current frame; click or drag to jump.
+- **Timing track** below the time slider (light blue): for every frame, the time step from
+  the frame before it in ms, over the whole file from left to right (same span as the slider).
+  Where the file has more frames than the plot has pixels, each pixel column is a bar from its
+  frames' smallest to largest step, so a single odd frame still shows. The labels give the
+  scale (**max** at the top, **min** at the bottom); the grey dashed line is the **typical**
+  step (e.g. 66.67 ms at 15 fps), labelled on the right. Red ticks at the bottom: problem
+  frames; yellow line: the frame shown; click or drag to jump. How to read it: a flat line on
+  the dashed one = steady timing (GPS-triggered); a spike up to about twice the step = a
+  dropped frame; spikes towards 0 = bunched / duplicated stamps (MJPG from a USB grabber); a
+  fuzzy band = jittery stamps (Pi clock / NTP). The plot's tooltip says the same.
+- **Light-curve track** below it, when the recording has been analysed (`pystarlight analyze`
+  writes `<movie>.pystarlight.csv` and `<movie>.event.json` next to it): the target's flux
+  (orange: target / the smoothed reference ensemble, as the analysis' step fit has it,
+  with the references it used, so saturated ones are left out here too), the step fit's
+  levels (green) and the D / R times (magenta, labelled with their UTC). Shown relative to
+  its median (the unocculted target at 1; the analysis' own flux is target / the summed
+  references, often far from 1) and scaled on the target alone: its own range, widened only
+  to take in the fitted levels. So a timing problem can be seen next to the event: is a dropped
+  frame close to a D or R? Analyse again and reopen the file to see a new result.
+- **Target crosshair**: with an analysis, an open crosshair (four ticks, the star left free)
+  marks the target on every frame at its tracked centre, labelled with its catalogue name from
+  `event.json` (else the aperture's name); frames the analysis did not cover, and the stack,
+  get none. The **Target** box in the play bar (shown only when the analysis has positions)
+  switches it off and on; the choice is remembered.
 - **Problems**: `check_timing` on the time stamps (dropped, duplicated, backwards, irregular,
   missing) plus RAVF sequence gaps (dropped by the camera link or the recorder queue).
   `n` / `b` jump to the next / previous one.
