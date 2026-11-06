@@ -7,6 +7,19 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Saturated stars (`saturation`): an aperture over a saturated star is labelled SAT on the frame
+  and warned about when placed; after Run, references and check stars saturated in more than
+  1 % of the frames are left out of normalisation, magnitude zero point and histograms (not
+  repaired), a saturated target is flagged; notes in both CSVs and `event.json`
+  (`photometry.saturation`). The ADV reader exposes `max_pixel_value`.
+- One command, `pystarlight` (also `python -m pystarlight`): `analyze` (= `analyse`, `view`),
+  `player` (= `review`), `camera`, `config`; `pystarlight FILE` analyses, plain `pystarlight`
+  opens the file dialog. The hyphenated commands stay.
+- Viewer: a clear message at start when no window can open (Python without Tk: what to install
+  on Debian / Fedora / Arch / Homebrew, or uv's own Python; or no display), instead of
+  matplotlib's silent fallback.
+- README: install per OS (Linux with `python3-tk`, macOS, Windows), uv, a check step, the
+  extras explained; installs from GitHub (not on PyPI yet).
 - Station data kept as recorded: `STATION-DIGEST` (SHA-256 of the station, site, timing and
   camera entries) in the RAVF header / SER sidecar, finished recordings and sidecars made
   read-only, `recording.station.integrity` (`ok` / `changed` / `none`) in event.json.
@@ -130,6 +143,15 @@ uses [Semantic Versioning](https://semver.org/).
   aperture on the displayed frame, without moving apertures; shown in the zoom views and status.
 
 ### Changed
+- Optimal extraction is the viewer's default photometry (`[analysis] photometry = "optimal"`,
+  checkbox ticked); untick it for the circular aperture. `analyze_global()` keeps "aperture".
+- Analysis: a click makes the first aperture the target and every later one a reference
+  (`ref1`, `ref2`, ...; PyMovie colours red / yellow to match), instead of role-less red
+  apertures that all looked like targets. `t` on the target no longer renames it `target1`.
+- The review player is now the player: `pystarlight player` / `pystarlight-player`
+  (`capture/player.py`, `PlayerWindow`); the camera's button reads "Play last clip".
+  `pystarlight-review` still works. Without a file it opens a file dialog (the last folder used;
+  a FITS frame stands for its folder).
 - The recording's own optics give the plate-scale hint (`solve.recorded_scale`: effective focal
   length and the sensor's pixel pitch); `[fallback_equipment]` (new) only for videos without
   them, with a WARNING. `[sites.<id>]` tables are gone (PySyzygos' `sites.py` stays, for the

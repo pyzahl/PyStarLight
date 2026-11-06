@@ -371,11 +371,11 @@ def test_nav_timeutc():
 
 
 # ---------------------------------------------------------------------------
-# Review player: time stamps, problems (no GUI)
+# Player: time stamps, problems (no GUI)
 # ---------------------------------------------------------------------------
-def test_review_timing_and_problems(tmp_path):
+def test_player_timing_and_problems(tmp_path):
     pytest.importorskip("ravf")
-    from pystarlight.capture.review import load_timing, problems
+    from pystarlight.capture.player import load_timing, problems
     imgs = frames(8)
     path = tmp_path / "gaps.ravf"
     w = ravf_writer.RavfWriter(str(path), W, H, 12, {})
@@ -400,8 +400,8 @@ def test_review_timing_and_problems(tmp_path):
     assert flags[6] == "irregular step"
 
 
-def test_review_timing_ser(tmp_path):
-    from pystarlight.capture.review import load_timing, problems
+def test_player_timing_ser(tmp_path):
+    from pystarlight.capture.player import load_timing, problems
     path = tmp_path / "a.ser"
     record(ser_writer.SerWriter, path, frames(5))
     times, info = load_timing(str(path))
@@ -409,7 +409,35 @@ def test_review_timing_ser(tmp_path):
     assert problems(times, info)[0] == {}
 
 
-def test_review_command():
-    from pystarlight.capture.gui import review_command
-    cmd = review_command("/data/x.ravf")
-    assert cmd[1:] == ["-m", "pystarlight.capture.review", "/data/x.ravf"]
+def test_player_command():
+    from pystarlight.capture.gui import player_command
+    cmd = player_command("/data/x.ravf")
+    assert cmd[1:] == ["-m", "pystarlight.capture.player", "/data/x.ravf"]
+
+
+def test_player_asks_for_a_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    try:
+        from pystarlight.capture import player
+        from pystarlight.capture.qt import QtWidgets
+    except ImportError as e:
+        pytest.skip(f"no Qt: {e}")
+    from pystarlight.capture.qt import QtCore
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    for fmt in (QtCore.QSettings.NativeFormat, QtCore.QSettings.IniFormat):   # not the user's settings
+        QtCore.QSettings.setPath(fmt, QtCore.QSettings.UserScope, str(tmp_path / "settings"))
+    path = tmp_path / "a.ser"
+    record(ser_writer.SerWriter, path, frames(3))
+    win = player.PlayerWindow(None)
+    asked = []
+
+    def dialog(parent, title, start, filters):
+        asked.append(start)
+        return str(path), ""
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getOpenFileName", dialog)
+    assert win.open_dialog() and win.path == str(path) and len(win.mv) == 3
+    assert win.open_dialog() and asked[-1] == str(tmp_path)          # the next one starts there
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getOpenFileName", lambda *a: ("", ""))
+    assert win.open_dialog() is False and win.path == str(path)       # Cancel: as it was
+    win.close()
+    assert app is not None

@@ -44,10 +44,10 @@ STACK_FULL = 65535          # the shown stack: mean scaled to 0..this (keeps the
 SOLVE_RADIUS_DEG = 3.0      # plate solve: search this far around the expected position
 
 
-def review_command(path):
-    """Command line that opens `path` in the review player (pystarlight.capture.review): this
+def player_command(path):
+    """Command line that opens `path` in the player (pystarlight.capture.player): this
     interpreter when the full package is importable (uv run), else the repo's .venv."""
-    module = ["-m", "pystarlight.capture.review", str(path)]
+    module = ["-m", "pystarlight.capture.player", str(path)]
     if importlib.util.find_spec("pystarlight") is not None:
         return [sys.executable, *module]
     venv = Path(__file__).resolve().parents[3] / ".venv" / "bin" / "python"
@@ -1279,8 +1279,8 @@ class MainWindow(QtWidgets.QMainWindow):
         g.addWidget(self.frames_spin, 9, 2, 1, 2)
         g.addWidget(self.rec_button, 10, 0, 1, 4)
         g.addWidget(self.rec_info, 11, 0, 1, 4)
-        self.review_button = QtWidgets.QPushButton("Review last clip")
-        self.review_button.setToolTip("open the last recording in the review player (time "
+        self.review_button = QtWidgets.QPushButton("Play last clip")
+        self.review_button.setToolTip("open the last recording in the player (GPS / time "
                                       "stamps, frame status, stack & plate solve)")
         self.review_button.clicked.connect(self.review_last)
         self.review_button.setEnabled(False)
@@ -1363,12 +1363,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def review_last(self):
         path = self.c.recorder.last_path
-        cmd = review_command(path) if path else None
+        cmd = player_command(path) if path else None
         if cmd is None:
-            self.last_saved = ("the review player needs the full package: run "
-                               "'uv run pystarlight-review FILE'")
+            self.last_saved = ("the player needs the full package: run "
+                               "'uv run pystarlight player FILE'")
             return
-        print("Review: " + " ".join(cmd))
+        print("Player: " + " ".join(cmd))
         subprocess.Popen(cmd, start_new_session=True)       # own process: capture goes on
 
     def browse_dir(self):

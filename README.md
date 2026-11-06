@@ -4,9 +4,10 @@
 check it, measure the stars and time the event. The results open directly in
 [PyOTE](https://github.com/bob-anderson-ok/py-ote).
 
-PyStarLight is a Python library with three small programs on top of it:
+PyStarLight is a Python library with one command on top of it, `pystarlight`, and three
+programs behind it:
 
-- **`pystarlight-view`, the analysis viewer.** It opens a recording in any common format and
+- **`pystarlight analyze`, the analysis.** It opens a recording in any common format and
   plate-solves the field (online or offline). It finds the target by name (Gaia DR3, UCAC4,
   TYC, SIMBAD), even when the star is too faint to see. You mark target, reference and check
   stars and press Run. The tracking follows wind-shake, drift and field rotation, with the
@@ -17,11 +18,12 @@ PyStarLight is a Python library with three small programs on top of it:
     1 sigma error;
   - magnitude histograms;
   - an `event.json` with every detail of the event.
-- **`pystarlight-camera`, capture on a Raspberry Pi 5 (experimental).** It records frames GPS-triggered and
+- **`pystarlight camera`, capture on a Raspberry Pi 5 (experimental).** It records frames GPS-triggered and
   stamped in UTC (VEYE MIPI or Aravis cameras, u-blox GPS) to RAVF or SER, with a live stack and
   plate solve. Tonight's events can be loaded from a [PySyzygos](https://github.com/pyzahl/PySyzygos)
   favorites server: target star, asteroid and the recording window are filled in for you.
-- **`pystarlight-review`, a player for a recording.** It checks the time stamps (dropped and
+- **`pystarlight player`, a player that knows about time.** Unlike a normal video player it
+  shows each frame's UTC and GPS status, checks the time stamps (dropped, duplicated and
   irregular frames), and stacks and plate-solves a frame range.
 
 The processing is derived from [PyMovie](https://github.com/bob-anderson-ok/pymovie) 4.2.8 by
@@ -39,9 +41,14 @@ the file or are read from a VTI overlay. MIT licence.
 ## Contents
 
 - [Install](#install)
+  - [1. Prerequisites (once)](#1-prerequisites-once)
+  - [2. Install uv](#2-install-uv)
+  - [3. Get PyStarLight](#3-get-pystarlight)
+  - [4. Check it](#4-check-it)
+  - [Extras](#extras)
 - [The tools](#the-tools)
 - [Getting started](#getting-started)
-  - [1. Install and configure (once)](#1-install-and-configure-once)
+  - [1. Configure (once)](#1-configure-once)
   - [2. Mark the stars](#2-mark-the-stars)
   - [3. Run](#3-run)
   - [Event timing: the automatic step fit](#event-timing-the-automatic-step-fit)
@@ -59,48 +66,139 @@ the file or are read from a VTI overlay. MIT licence.
 
 ## Install
 
+PyStarLight runs on Linux, macOS and Windows with Python 3.10 or newer. The capture program
+(`pystarlight-camera`) is for a Raspberry Pi 5: see [CAPTURE.md](CAPTURE.md). The steps below
+install the analysis (`pystarlight analyze`) and the player (`pystarlight player`).
+
+**The one thing people miss: the viewer needs Tk** (Python's `tkinter`) for its window and file
+dialog. Most Linux distributions ship it as a separate package, so install it first (step 1).
+Without it the viewer stops at start and says what to install.
+
+### 1. Prerequisites (once)
+
+**Linux**
+
 ```bash
-pip install starlight-photometry            # import name: pystarlight
-pip install "starlight-photometry[all]"     # + ADV/AAV, RAVF readers, UCAC4 lookup
+sudo apt install git python3 python3-venv python3-tk      # Debian, Ubuntu, Raspberry Pi OS, Mint
+sudo dnf install git python3 python3-tkinter              # Fedora
+sudo pacman -S git python tk                              # Arch, Manjaro
 ```
 
-From a clone, for development:
+**macOS**
+
+- Python from [python.org](https://www.python.org/downloads/macos/) includes Tk; nothing else
+  is needed. With Homebrew's Python, add Tk: `brew install python-tk` (for the same version as
+  `python3 --version`, e.g. `brew install python-tk@3.12`).
+- git: `xcode-select --install` (the command line tools).
+- Apple Silicon (M1 and later): the ADV/AAV reader's wheel (`Adv2`) ships an Intel-only
+  library. Build it once after step 3 with `sh scripts/build_advcore.sh`, and again whenever
+  Adv2 is reinstalled.
+
+**Windows**
+
+- Python from [python.org](https://www.python.org/downloads/windows/): in the installer, keep
+  **"tcl/tk and IDLE"** ticked (it is by default) and tick **"Add python.exe to PATH"**.
+- git from [git-scm.com](https://git-scm.com/download/win).
+- The commands below run in PowerShell.
+
+**Or let uv bring its own Python**, on any of the three: uv's Python builds include Tk. Run
+`uv python install` once, then add `--python-preference only-managed` to `uv sync` in step 3.
+
+### 2. Install uv
+
+[uv](https://docs.astral.sh/uv/) sets up the environment and runs the programs.
 
 ```bash
-uv sync --group dev
-uv run pytest
+curl -LsSf https://astral.sh/uv/install.sh | sh            # Linux, macOS
 ```
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"   # Windows
+```
+
+Open a new terminal afterwards, so that `uv` is found.
+
+### 3. Get PyStarLight
+
+```bash
+git clone https://github.com/pyzahl/PyStarLight.git
+cd PyStarLight
+uv sync --extra all                     # viewer: plots, RAVF + ADV/AAV readers, SIMBAD look-ups
+uv run pystarlight                      # analyze: opens a file dialog, pick a recording
+```
+
+Later, to update: `git pull` and `uv sync --extra all` again, in the `PyStarLight` folder.
+
+Without uv, plain pip works in a virtual environment (Python 3.10+, with Tk as in step 1):
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate              # Windows: .venv\Scripts\activate
+pip install -e ".[all]"                                    # in the cloned folder
+pip install "starlight-photometry[all] @ git+https://github.com/pyzahl/PyStarLight"   # or without a clone
+pystarlight
+```
+
+(Not on PyPI yet; the distribution name will be `starlight-photometry`, import name `pystarlight`.)
+
+### 4. Check it
+
+```bash
+uv run python -c "import tkinter; print('Tk', tkinter.TkVersion)"    # the viewer's window
+uv run pystarlight-config path                                       # the config file in use
+```
+
+If the first line fails, go back to step 1 (Linux: `python3-tk`; macOS Homebrew: `python-tk`).
+
+### Extras
+
+| extra | adds | for |
+|---|---|---|
+| `all` | `plot`, `ravf`, `adv`, `catalog` | the viewer: use this |
+| `plot` | matplotlib | the viewer and the figures |
+| `ravf` | RAVF reader | ASTRID / PyStarLight capture recordings |
+| `adv` | Adv2 | ADV / AAV recordings (DVTI, OccuRec) |
+| `catalog` | astroquery | star names from SIMBAD and the VO (offline: PySyzygos' Gaia extract) |
+| `camera` | PySide6, pyserial | the player (`pystarlight player`, any OS) and the capture program |
+| `aravis` | PyGObject | GenICam (USB3 / GigE) cameras in the capture program: Linux / Pi only, see [CAPTURE.md](CAPTURE.md) |
+
+Optional, outside Python: **offline plate solving** with a local astrometry.net
+(Linux / macOS, [below](#optional-offline-plate-solving-local-astrometrynet)); on Windows the
+viewer uses nova.astrometry.net (needs a free API key).
+
+For development: `uv sync --group dev --extra all`, then `uv run pytest` and `uvx ruff check`.
 
 ## The tools
 
-Three programs, each started with `uv run` from the clone (after `uv sync` with the extras
-shown):
+One command, `pystarlight`, started with `uv run` from the clone (after `uv sync` with the
+extras shown); `pystarlight --help` lists the tools, `pystarlight <tool> --help` their options:
 
-| program | what | start |
+| command | what | install, start |
 |---|---|---|
-| `pystarlight-view` | matplotlib viewer: mark target / reference stars, plate-solve, run the photometry, export for PyOTE (see [Getting started](#getting-started)) | `uv sync --extra all`<br>`uv run pystarlight-view FILE` |
-| `pystarlight-camera` | capture on the Raspberry Pi 5: live view, GPS-timed RAVF / SER recording, live stack + plate solve | `uv sync --extra all --extra camera --extra aravis`<br>`uv run pystarlight-camera` |
-| `pystarlight-review` | Qt player for a recording: frames, time stamp check (dropped / irregular frames), stack & plate-solve a frame range | `uv sync --extra all --extra camera`<br>`uv run pystarlight-review FILE` |
+| `pystarlight analyze FILE` | the analysis: mark target / reference / check stars, plate-solve, photometry, event timing, `event.json`, export for PyOTE (see [Getting started](#getting-started)) | `uv sync --extra all`<br>`uv run pystarlight analyze FILE` |
+| `pystarlight player FILE` | play a recording with its time: UTC and GPS status per frame, dropped / irregular frames, stack & plate-solve a frame range | `uv sync --extra all --extra camera`<br>`uv run pystarlight player FILE` |
+| `pystarlight camera` | capture on the Raspberry Pi 5: live view, GPS-timed RAVF / SER recording, live stack + plate solve | `uv sync --extra all --extra camera --extra aravis`<br>`uv run pystarlight camera` |
+| `pystarlight config` | the private config: `init`, `path`, `show`, `sites` | `uv run pystarlight config path` |
 
 `FILE` is any supported recording (`.ravf .ser .adv .aav .avi .mov` or a FITS folder).
-The camera and the [review player](CAPTURE.md#review-player) are described in
+`pystarlight FILE` (a file instead of a tool) analyses it, plain `pystarlight` (and
+`pystarlight player` without a file) opens a file dialog; `analyse` works as well as `analyze`, and `python -m pystarlight` as well as
+`pystarlight` (Windows without the scripts folder on PATH). The earlier names stay as commands
+of their own: `pystarlight-view` (= analyze), `pystarlight-review` (= player),
+`pystarlight-player`, `pystarlight-camera`, `pystarlight-config`.
+The camera and the [player](CAPTURE.md#player) are described in
 [CAPTURE.md](CAPTURE.md), including
 [offline plate solving](CAPTURE.md#offline-plate-solving-local-astrometrynet) with a local
-astrometry.net. `uv run pystarlight-config` manages the private config (next section).
+astrometry.net. `uv run pystarlight config` manages the private config (next section).
 
 ## Getting started
 
-### 1. Install and configure (once)
+### 1. Configure (once)
+
+After the [installation](#install):
 
 ```bash
 cd PyStarLight
-uv sync --extra all                      # or: pip install -e ".[all]"  (plot, RAVF, ADV, SIMBAD)
 uv run pystarlight-config init --here    # private config: ./pystarlight.toml (git-ignored)
 ```
-
-Apple Silicon Macs: the `Adv2` wheel (ADV/AAV reader) ships an Intel-only native library. Build
-it once with `sh scripts/build_advcore.sh` (needs git and the Xcode command line tools); re-run
-after Adv2 is reinstalled.
 
 Edit the config: your name, email and your nova.astrometry.net API key. Station and
 equipment (`[observer]`) are best set in the camera's **Station & equipment** dialog; every
@@ -180,8 +278,8 @@ millisecond per star. Without it, names come from SIMBAD (online).
 ### 2. Mark the stars
 
 ```bash
-uv run pystarlight-view path/to/recording.ravf
-uv run pystarlight-view                      # no file: a file dialog
+uv run pystarlight analyze path/to/recording.ravf     # or just: uv run pystarlight FILE
+uv run pystarlight                                    # no file: a file dialog
 ```
 
 **Open** (or ctrl+o) loads another recording in a new window with the same settings; the
@@ -245,8 +343,9 @@ is saved as `<movie>.astrometry.json`; from the command line:
 residuals from 0.85" (astrometry.net's WCS) to 0.5" (a quarter pixel) and removed a 0.4" offset.
 
 Each frame's UTC timestamp is shown on top; a short key list is on the right. Left-click a star
-to add an aperture (it snaps onto the star), right-click removes one. With the mouse over an
-aperture, press a key to give it a role:
+to add an aperture (it snaps onto the star), right-click removes one. The **first** aperture
+(while there is no target) becomes the **target**, every later one a **reference** (`ref1`,
+`ref2`, ...). With the mouse over an aperture, press a key to change its role:
 
 | key | role | what it is for |
 |---|---|---|
@@ -259,7 +358,7 @@ All keys:
 
 | key / control | action |
 |---|---|
-| click / right-click | add (snaps onto the star) / remove aperture |
+| click / right-click | add (snaps onto the star; the first is the target, later ones references) / remove aperture |
 | `t` `r` `c` `k` | role of the aperture under the mouse (see above; changeable in the config) |
 | `1` / `2` | show the aperture under the mouse in zoom view 1 / 2 (right side, ~4-5×, own contrast). While analysing they update live (~2×/s) with the frame being processed; afterwards they follow the tracked position. Each shows the signal and, in global mode, the peak fit (FWHM, SNR, `+` = fitted centre, circle = photometry aperture) |
 | `n` | rename the aperture under the mouse: a text box at the top, **Enter** applies, **Esc** cancels |
@@ -292,15 +391,16 @@ checks) track together:
   other stars; clouds dim all stars and do not count), it is left out of the tracking. Its
   aperture keeps following the field, plus the target's own slow offset, **interpolated between
   the start and end of the event**. A known event can also be given: `event=(first, last)`;
-- photometry uses a circular aperture with exact sub-pixel weights (radius 1.5 × FWHM unless set).
-  The checkbox **Optimal** (or `[analysis] photometry = "optimal"`) switches to Naylor's optimal
-  extraction (1998, MNRAS 296, 339): each pixel weighted by a circular Gaussian of the frame's
+- photometry is Naylor's **optimal extraction** by default (checkbox **Optimal**, ticked;
+  `[analysis] photometry = "optimal"`; [Naylor 1998](#references)): each pixel weighted by a circular Gaussian of the frame's
   seeing (the reference stars' median FWHM) at the tracked position, the same profile for every
   star so that profile errors cancel in the ratio. Linear in the data, so event depths stay
   unbiased. It lowers the noise of faint stars whose noise is mostly sky noise and uncorrelated
   from pixel to pixel; it does nothing against scintillation, which dominates short exposures
-  with small telescopes. On the owner's recordings (ASTRID 0.17 s, analog-video ADV) the
-  1.5 × FWHM circle was better, so the circle stays the default: compare both on your data.
+  with small telescopes. Untick **Optimal** (or `photometry = "aperture"`) for a circular
+  aperture with exact sub-pixel weights (radius 1.5 × FWHM unless set): on short exposures
+  dominated by scintillation it can be as good or better (it was on ASTRID 0.17 s and
+  analog-video ADV recordings), so compare both on your data.
 
 Written next to the movie:
 
@@ -328,6 +428,27 @@ into its inbox (listed at its next start). Without a connection file the job lin
 PySyzygos on another computer, `[pysyzygos_observations] url` / `token` override the file (not
 reached: queued in `~/.cache/pystarlight/outbox`, sent with the next one); `auto_send = true`
 hands over after every Run. The server's answer appears in the job line.
+
+**Saturated stars are left out.** A star whose brightest pixel reaches the camera's full scale
+is clipped: its flux comes out too low, by an amount that follows the seeing, and optimal
+extraction loses even more than the circle (a star peaking at twice full scale: about -23 %
+with the circle, -33 % optimal). Such a star cannot normalise the target nor give a magnitude
+zero point, and it is not repaired. Instead:
+
+- on the frame, an aperture over a saturated star (brightest pixel >= 90 % of full scale) is
+  labelled **SAT**, and placing one or giving it a role says so in the status line;
+- after Run, a reference or check star saturated in more than 1 % of the frames is left out
+  of the normalisation, the magnitude zero point and the check-star histograms, with a
+  WARNING; a saturated target is flagged (its depth and magnitudes are not reliable, its
+  D/R times are); if every reference is saturated they are kept, with a warning to pick
+  fainter ones. Tracking still uses all stars (a clipped star is still symmetric);
+- both CSV files carry a `# saturation:` header line, and `event.json` a
+  `photometry.saturation` block (level and where it came from, the fraction of frames each
+  aperture is saturated in, the ones left out, the warnings).
+
+The full scale comes from the recording: `IMAGE-BIT-DEPTH` (RAVF), `PixelDepthPerPlane` (SER),
+the ADV reader's `MaxPixelValue`; else a ceiling the data keep hitting exactly; else the data
+type's (65535 for 16-bit data such as ASTRID's left-aligned 10 bit).
 
 **Trying other choices:** after a run the result plot stays linked to the viewer. Changing a
 role (`t` `r` `c` `k`) or a curve colour (`Y` `G` `W` `R`) over an aperture redraws it at once,
@@ -491,7 +612,7 @@ vti.save('occ-vti')                             # PyMovie-compatible profile fil
 from pystarlight import Calibration
 
 cal = Calibration.from_videos(dark='dark.ravf', flat='flat.ravf')   # either may be omitted
-cal.save('cal.npz')                                     # pystarlight-view --calibration cal.npz
+cal.save('cal.npz')                                     # pystarlight analyze --calibration cal.npz
 lc = analyze(mv, aps, calibration=cal)                  # applied to the aperture boxes only
 ```
 
@@ -538,7 +659,8 @@ x, y = wcs.target_pixel(wcs.load_wcs(fits_path), '18h12m01s +22d07m00s')
 | `calibrate` | master dark/flat, gain and defect maps, per-aperture correction |
 | `normalize` | reference-star normalisation, relative flux, Δmag, SNR |
 | `plot` | publication figures (matplotlib) |
-| `viewer` | `pystarlight-view`: step frames, timestamps, place apertures, run |
+| `viewer` | `pystarlight analyze`: step frames, timestamps, place apertures, run |
+| `cli` | the `pystarlight` command: analyze, player, camera, config |
 
 ## Things to know
 

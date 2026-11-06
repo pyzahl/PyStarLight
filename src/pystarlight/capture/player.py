@@ -1,9 +1,10 @@
-"""Review player: step through a recording (RAVF, SER, ADV/AAV, AVI, FITS folder), check its
+"""Player: step through a recording (RAVF, SER, ADV/AAV, AVI, FITS folder), check its
 time stamps and per-frame status, stack a frame range and plate-solve it.
 
-    uv run pystarlight-review FILE        (or: python -m pystarlight.capture.review FILE)
+    uv run pystarlight player FILE      (or: pystarlight-player FILE,
+                                         python -m pystarlight.capture.player FILE)
 
-The camera app's "Review last clip" button starts it on the file just recorded.
+The camera app's "Play last clip" button starts it on the file just recorded.
 
   - Image: the frame, levels auto (zscale, optionally per frame) or manual black / white
     point as in pystarlight-view, display gamma, zoom/pan as in the camera app.
@@ -228,12 +229,12 @@ def label_grid(grid, rows, start=0):
     return labels
 
 
-class ReviewWindow(QtWidgets.QMainWindow):
+class PlayerWindow(QtWidgets.QMainWindow):
     timing_ready = Signal()
 
     def __init__(self, path=None, focal_mm=None, pixel_um_=None):
         super().__init__()
-        self.settings = QtCore.QSettings("PyStarLight", "review")
+        self.settings = QtCore.QSettings("PyStarLight", "review")   # its name before: keeps the layout
         self.mv = None
         self.path = None
         self.index = 0
@@ -410,11 +411,18 @@ class ReviewWindow(QtWidgets.QMainWindow):
 
     # ---- opening ----
     def open_dialog(self):
+        """Pick a recording (a FITS frame stands for its folder); starts in the last folder used."""
+        start = (os.path.dirname(self.path) if self.path else
+                 self.settings.value("last_dir", "", type=str) or os.path.expanduser("~/data"))
         p, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Open recording", os.path.dirname(self.path or os.path.expanduser("~/data")),
-            "Recordings (*.ravf *.ser *.adv *.aav *.avi *.mov);;All files (*)")
-        if p:
-            self.open(p)
+            self, "Open recording", start,
+            "Recordings (*.ravf *.ser *.adv *.aav *.avi *.mov *.fits *.fit *.fts);;All files (*)")
+        if not p:
+            return False
+        if p.lower().endswith((".fits", ".fit", ".fts")):
+            p = os.path.dirname(p)              # a FITS folder: one frame per file
+        self.open(p)
+        return True
 
     def open(self, path):
         from ..movie import open_movie
@@ -423,8 +431,9 @@ class ReviewWindow(QtWidgets.QMainWindow):
             self.mv.close()
         self.path = str(path)
         self.mv = open_movie(self.path)
+        self.settings.setValue("last_dir", os.path.dirname(os.path.abspath(self.path)))   # the next dialog
         n = len(self.mv)
-        self.setWindowTitle(f"Review - {os.path.basename(self.path)}")
+        self.setWindowTitle(f"Player - {os.path.basename(self.path)}")
         self.times, self.info, self.flags, self.report = np.zeros(0), [], {}, None
         self.plot.dt = None
         self.plot.update()
@@ -804,16 +813,20 @@ class ReviewWindow(QtWidgets.QMainWindow):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="PyStarLight review player: frames, time stamps, "
+    ap = argparse.ArgumentParser(prog="pystarlight player",
+                                 description="PyStarLight player: frames, GPS / time stamps, "
                                              "stack & plate solve")
-    ap.add_argument("file", nargs="?", help="recording (.ravf .ser .adv .aav .avi) or FITS folder")
+    ap.add_argument("file", nargs="?", help="recording (.ravf .ser .adv .aav .avi) or FITS folder "
+                                         "(default: a file dialog)")
     ap.add_argument("--focal-mm", type=float, default=None, help="focal length for the scale hint")
     ap.add_argument("--pixel-um", type=float, default=None, help="pixel pitch for the scale hint")
     args = ap.parse_args(argv)
     fix_cv2_qt_env()
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv[:1])
-    win = ReviewWindow(args.file, args.focal_mm, args.pixel_um)
+    win = PlayerWindow(args.file, args.focal_mm, args.pixel_um)
     win.show()
+    if not args.file:                   # no file given: ask for one (Cancel leaves the window empty)
+        QtCore.QTimer.singleShot(0, win.open_dialog)
     return exec_app(app)
 
 

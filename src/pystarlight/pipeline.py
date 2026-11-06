@@ -61,9 +61,10 @@ class LightCurves:
         from .export import write_pymovie_csv
         write_pymovie_csv(self, path, **kw)
 
-    def to_csv(self, path: str, wcs=None, stars=None):
+    def to_csv(self, path: str, wcs=None, stars=None, notes=None):
         """All columns, PyStarLight's own layout (not for PyOTE: use to_pymovie_csv).
-        wcs, stars: add the plate solution and aperture RA/Dec as header comments."""
+        wcs, stars: add the plate solution and aperture RA/Dec as header comments; notes: more
+        header comment lines."""
         names = self.names
         cols = {n: [c for c in self.columns[n] if c != 'frame'] for n in names}
         extra = list(self.frame_info)
@@ -73,6 +74,8 @@ class LightCurves:
         with open(path, 'w') as f:
             if self.roles:
                 f.write('# roles: ' + ', '.join(f'{n}={r}' for n, r in self.roles.items()) + '\n')
+            for n in notes or []:
+                f.write(f'# {n}\n')
             if wcs is not None:
                 from .export import sky_lines
                 lines, where = sky_lines(self, wcs, stars)

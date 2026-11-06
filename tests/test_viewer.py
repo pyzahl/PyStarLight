@@ -286,11 +286,12 @@ def test_display_levels_and_gamma(movie):
 
 def test_optimal_checkbox_switches_photometry(movie):
     v = Viewer(str(movie))
-    assert v.cfg['analysis']['photometry'] == 'aperture'
+    assert v.cfg['analysis']['photometry'] == 'optimal'                  # the default: ticked
+    assert v._optimal_box.get_status() == [True]
     v._optimal_box.set_active(0)
-    assert v.cfg['analysis']['photometry'] == 'optimal' and 'optimal' in v.status.get_text()
+    assert v.cfg['analysis']['photometry'] == 'aperture' and 'circular aperture' in v.status.get_text()
     v._optimal_box.set_active(0)
-    assert v.cfg['analysis']['photometry'] == 'aperture'
+    assert v.cfg['analysis']['photometry'] == 'optimal'
 
 
 def test_aperture_size_controls_resize_boxes(movie):
@@ -565,7 +566,7 @@ def test_star_names_toggle(movie):
     assert any('TYC 1-2-1' in t for t in texts()) and any('UCAC4' in t for t in texts())
     assert v._names_button.label.get_text() == 'Names on'
     key(v, 'N')
-    assert texts() == ['ap1'] and v._names_button.label.get_text() == 'Names off'
+    assert texts() == ['target'] and v._names_button.label.get_text() == 'Names off'
     v.toggle_names()                                 # the button
     assert any('TYC 1-2-1' in t for t in texts())
 
@@ -604,19 +605,20 @@ def test_rename_in_a_text_box(movie):
     (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
     click(v, c0, r0)
     click(v, c1, r1)
+    assert [(a.name, a.role) for a in v.apertures] == [('target', 'target'), ('ref1', 'reference')]
     key(v, 'n', c0, r0)
-    assert v._rename_ax.get_visible() and v._rename_box.text == 'ap1'
-    key(v, 't', c0, r0)                                # typing: no role, no frame step
+    assert v._rename_ax.get_visible() and v._rename_box.text == 'target'
+    key(v, 'r', c0, r0)                                # typing: no role change, no frame step
     key(v, 'right')
-    assert v.apertures[0].role == '' and v.index == 0
-    v._rename_box.set_val('ap2')                       # taken
-    assert 'already' in v.status.get_text() and v.apertures[0].name == 'ap1'
+    assert v.apertures[0].role == 'target' and v.index == 0
+    v._rename_box.set_val('ref1')                      # taken
+    assert 'already' in v.status.get_text() and v.apertures[0].name == 'target'
     key(v, 'n', c0, r0)
     v._rename_box.set_val('star7')                     # as Enter does
     assert v.apertures[0].name == 'star7' and not v._rename_ax.get_visible()
     key(v, 'n', c1, r1)
     key(v, 'escape')                                   # cancelled
-    assert v.apertures[1].name == 'ap2' and not v._rename_ax.get_visible()
+    assert v.apertures[1].name == 'ref1' and not v._rename_ax.get_visible()
     key(v, 't', c1, r1)                                # keys work again
     assert v.apertures[1].role == 'target'
 
@@ -715,3 +717,34 @@ def test_star_field_marks_a_catalogue_star_and_sets_the_target(movie, monkeypatc
     assert v2.marker['name'] == 'TYC 3574-1718-1' and v2._star_box.text == 'tyc 3574 1718 1'
     v2._star_box.set_val('')
     assert v2.marker is None and not v2.marker_file.exists() and v2._marker_artists == []
+
+
+def test_missing_tk_is_explained(monkeypatch):
+    import sys
+
+    import matplotlib
+
+    from pystarlight import viewer
+    monkeypatch.setattr(matplotlib, 'get_backend', lambda: 'agg')     # matplotlib's silent fallback
+    monkeypatch.delenv('MPLBACKEND', raising=False)
+    monkeypatch.setitem(sys.modules, 'tkinter', None)                 # a Python without Tk
+    msg = viewer.gui_problem()
+    assert 'python3-tk' in msg and 'brew install python-tk' in msg and 'tcl/tk' in msg
+    monkeypatch.setattr(matplotlib, 'get_backend', lambda: 'tkagg')
+    assert viewer.gui_problem() is None
+    monkeypatch.setattr(matplotlib, 'get_backend', lambda: 'agg')
+    monkeypatch.setenv('MPLBACKEND', 'agg')
+    assert 'MPLBACKEND' in viewer.gui_problem()
+
+
+def test_first_click_is_the_target_later_clicks_references(movie):
+    v = Viewer(str(movie))
+    for r, c, _ in STARS[:3]:
+        click(v, c, r)
+    assert [(a.name, a.role, a.color) for a in v.apertures] == [
+        ('target', 'target', 'red'), ('ref1', 'reference', 'yellow'), ('ref2', 'reference', 'yellow')]
+    key(v, 't', *STARS[0][1::-1])                 # already the target: keeps its name
+    assert v.apertures[0].name == 'target'
+    click(v, *STARS[0][1::-1], button=3)          # the target removed: the next click is the target
+    click(v, *STARS[0][1::-1])
+    assert (v.apertures[-1].name, v.apertures[-1].role) == ('target', 'target')

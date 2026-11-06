@@ -95,14 +95,15 @@ def sky_lines(lc, wcs, stars=None, frame: float = 7.5) -> tuple[list[str], dict]
 
 def write_pymovie_csv(lc, path: str, apertures: Optional[list[str]] = None,
                       source: Optional[str] = None, at_frame: Optional[int] = None,
-                      wcs=None, stars=None):
+                      wcs=None, stars=None, notes=None):
     """Write `lc` (from analyze() or analyze_global()) as a PyMovie-style CSV.
 
     apertures: names to include, in column order. Default: target, references, checks, then
         the rest; sky apertures are left out (they have no signal).
     at_frame: frame for the aperture positions in the header (default: first row).
     wcs, stars: plate solution and identified bright stars (wcs.field_stars); adds the
-        pixel -> RA/Dec mapping and each aperture's RA/Dec (and name, if it is one of them)."""
+        pixel -> RA/Dec mapping and each aperture's RA/Dec (and name, if it is one of them).
+    notes: more header comment lines (e.g. saturated apertures); never one with FrameNum."""
     glob = lc.mode == 'global'
     roles = lc.roles
     names = apertures or sorted((n for n in lc.names if roles.get(n) != 'sky'),
@@ -133,6 +134,7 @@ def write_pymovie_csv(lc, path: str, apertures: Optional[list[str]] = None,
                   else '# circular apertures with sub-pixel weights.',
                   '# nmaskpx is the effective (fractional) pixel count of the circle.']
     lines += ['# lunar background: False', '# yellow mask = default: False']
+    lines += [f'# {n}' for n in (notes or []) if 'FrameNum' not in n]
     sky = {}
     if wcs is not None:
         extra, sky = sky_lines(lc, wcs, stars)

@@ -22,7 +22,7 @@ The code is the `src/pystarlight/capture/` package (`uv run pystarlight-camera`)
 | `recorder.py` | Recorder thread; `repair` of interrupted recordings |
 | `stacker.py` | live stacking aligned on the stars, FITS writer |
 | `qt.py` | Qt binding: PySide6 (venv) or PyQt5 (system Python) |
-| `review.py` | review player `pystarlight-review` (needs the full package) |
+| `player.py` | the player `pystarlight player` (GPS / time stamps, frame status, stack & solve; needs the full package) |
 | `ravf_writer.py` | RAVF writer (as ASTRID writes), frame scan, repair |
 | `ser_writer.py` | SER v3 writer, one UTC timestamp per frame, `.times` sidecar, repair |
 | `station_header.py` | station, equipment (config `[observer]`) and GPS site for each new recording's header |
@@ -98,7 +98,7 @@ uv run pystarlight-camera --repair ~/data/*.ravf                   # finish cras
 |---|---|
 | image | fit to the window; **mouse wheel** zooms around the cursor (up to 64×, pixels as blocks past 1:1), **left drag** pans, **double-click** fits again |
 | **Camera** | exposure (log slider + ms box), gain, resolution, peak value; measured frame number, rate, interval (mean ± jitter, min..max over ~200 frames), exposure read back from the camera and, in free run, its frame period; **Depth** 12 / 10 / 8 bit |
-| **Display** | as in the review player and `pystarlight-view`: **Black** / **White** point (slider + box, raw values), **Auto** (zscale of the shown image, key `a`), **Full** (0 to the largest raw value: the start setting, and after a depth change unless on Auto), **per frame** (auto levels recomputed on every frame), display **gamma** (keys `d/D`). Display only; the recording is untouched |
+| **Display** | as in the player and `pystarlight analyze`: **Black** / **White** point (slider + box, raw values), **Auto** (zscale of the shown image, key `a`), **Full** (0 to the largest raw value: the start setting, and after a depth change unless on Auto), **per frame** (auto levels recomputed on every frame), display **gamma** (keys `d/D`). Display only; the recording is untouched |
 | **Sensor region (ROI)** | x / y / w / h boxes, **Select** (then drag a rectangle on the image; shown in yellow until applied), **Apply**, **Full sensor**; current region |
 | **Trigger** | **GPS trigger** checkbox (off = free run, or the `--trigger hw/sw` mode), **GPS frame rate**: pick 30 / 20 / 15 / 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1.5 / 1 / 0.5 fps or type fps or a period (`250 ms`) and press Enter, **Trigger delay** (ms), **y-trigger row** (VEYE, GPS mode; see below), warnings (exposure longer than the pulse period, rate too high for the camera, pulses skipped because of the delay, no fix, anchoring to GPS UTC, frames or TIM-TP pulses off the grid), missed pulses |
 | **GPS** | UTC, fix, satellites (used / tracked / in view), DOP, position, altitude, timepulse rate, **time base** (GPS UTC since when, the Pi clock's rate error in ppm, the GPS message burst's lag after the second; or what anchoring waits for), exposure start of the newest frame (marked GPS UTC or Pi clock), its trigger pulse, pulse → frame delay, rolling-shutter line time, heading if a compass is found |
@@ -372,9 +372,14 @@ Messages under the button: `favorites: PySyzygos refused the token (401)` (wrong
 token: make a new one), `[Errno 111] Connection refused` / timeout (server not running, wrong
 host or port, or the Pi is not on that network), `no favorites in the time window`.
 
-## Review player
+## Player
 
-`uv run pystarlight-review FILE` (`capture/review.py`), or **Review last clip** in the camera
+A video player that knows about time: next to the frames it shows each frame's UTC, its GPS
+status and the step to the previous frame, and marks dropped, duplicated and irregular frames.
+
+`uv run pystarlight player FILE` (`capture/player.py`; also `pystarlight-player`, and
+`pystarlight-review` as before; without FILE it opens a file dialog in the last folder used, a
+FITS frame standing for its folder), or **Play last clip** in the camera
 app's Recording box (starts it as its own process, on the file just recorded; with the system
 Python it uses the repo's `.venv`). Reads RAVF, SER, ADV/AAV, AVI and FITS folders
 (`open_movie`, also unfinished recordings).
@@ -394,7 +399,7 @@ Python it uses the repo's `.venv`). Reads RAVF, SER, ADV/AAV, AVI and FITS folde
   the stack. Focal length and pixel size come from `--focal-mm` / `--pixel-um`, the recording's
   own (effective focal length, its camera's sensor), or `[fallback_equipment]` (with a warning). **Save as the movie's plate solution** writes
   `<movie>.wcs.fit`, `.wcs.json` (stack_start = the range start) and `.stars.json` as
-  pystarlight-view caches them, so the viewer uses that solution.
+  `pystarlight analyze` caches them, so the analysis uses that solution.
 - Keys: Space play/pause, Left/Right, PgUp/PgDn (10), Home/End, `n`/`b`, `[`/`]`, `a` auto levels, `d/D` gamma, `s`, `c` or
   `Esc` back to the frames, `q`.
 - Times are kept as float64 Unix seconds (0.24 µs resolution), enough for review; the files keep

@@ -54,10 +54,12 @@ camera = ["PySide6-Essentials>=6.5,<6.8.1; platform_machine == 'aarch64'",
 aravis = ["PyGObject>=3.42,<3.51"]
 
 [project.scripts]
-pystarlight-view = "pystarlight.viewer:main"
+pystarlight = "pystarlight.cli:main"                  # pystarlight analyze | player | camera | config
+pystarlight-view = "pystarlight.viewer:main"          # = pystarlight analyze
+pystarlight-player = "pystarlight.capture.player:main"
+pystarlight-review = "pystarlight.capture.player:main"  # its name before
 pystarlight-config = "pystarlight.config:main"
 pystarlight-camera = "pystarlight.capture.app:main"
-pystarlight-review = "pystarlight.capture.review:main"
 
 [dependency-groups]
 test = ["pytest>=8", "pytest-cov>=5", "matplotlib>=3.5"]

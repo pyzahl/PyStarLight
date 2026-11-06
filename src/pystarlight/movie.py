@@ -302,6 +302,8 @@ class AdvReader(MovieReader):
         with _ADV_LOCK:
             self._open()
             self.metadata = self._r.getAdvFileMetaData()
+            # full scale of the data (DVTI: 12 bit scaled to 16, 65535), for saturation
+            self.max_pixel_value = getattr(self._r.FileInfo, 'MaxPixelValue', None)
         self.is_aav = Path(self.path).suffix.lower() == '.aav'
         self.integrated_frames = None
         if self.is_aav:

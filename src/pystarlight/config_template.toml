@@ -140,9 +140,9 @@ min_snr = 5.0              # minimum peak SNR for a star to steer tracking
 dim_fraction = 0.4         # target left out of tracking when fading below this (relative to others)
 target_drift = true        # follow the target's own slow offset, interpolated across the event
 normalize_window = 31      # rows; smoothing of the reference sum
-photometry = "aperture"    # "aperture" (circle, radius above) or "optimal": Naylor's optimal extraction,
-                           # pixels weighted by a circular Gaussian of the frame's seeing at the tracked
-                           # position, the same profile for all stars (viewer checkbox "Optimal")
+photometry = "optimal"     # "optimal": Naylor's optimal extraction, pixels weighted by a circular
+                           # Gaussian of the frame's seeing at the tracked position, the same profile for
+                           # all stars (viewer checkbox "Optimal"); "aperture": the circle (radius above)
 optimal_radius_fwhm = 3.0  # optimal: weights out to this many FWHM
 seeing_frames = 5          # optimal: running median of the reference stars' FWHM over these frames
 

@@ -3,7 +3,8 @@
     pystarlight-view OTEVideo/run_1/run_1.ravf
     pystarlight-view                       (no movie: file dialog)
 
-Mouse   left click     add aperture (snaps to the star's brightest pixels)
+Mouse   left click     add aperture (snaps to the star's brightest pixels; the first is the
+                       target, later ones references)
         right click    remove the nearest aperture
     u              auto-center the nearest aperture on its fitted peak
 Keys    left / right   previous / next frame      page up / down  -/+ 25 frames
@@ -85,6 +86,41 @@ print(p or '')
 """
 
 
+TK_HINT = """\
+pystarlight-view needs Tk (Python's tkinter) for its window and file dialog, and this Python
+has none. Install it, then start again:
+  Debian / Ubuntu / Raspberry Pi OS:  sudo apt install python3-tk
+  Fedora:                             sudo dnf install python3-tkinter
+  Arch:                               sudo pacman -S tk
+  macOS, Homebrew Python:             brew install python-tk
+  or use uv's own Python, which includes Tk:
+    uv python install && uv sync --python-preference only-managed --extra all
+  (python.org installers for macOS and Windows include Tk; on Windows keep "tcl/tk and IDLE" ticked)"""
+
+
+def gui_problem() -> Optional[str]:
+    """Why no viewer window can open (None: one can): matplotlib fell back to a non-interactive
+    backend, because tkinter is missing (the usual case on Linux) or there is no display."""
+    import matplotlib
+    backend = matplotlib.get_backend().lower()
+    try:
+        from matplotlib.backends import BackendFilter, backend_registry
+        non_interactive = backend_registry.list_builtin(BackendFilter.NON_INTERACTIVE)
+    except ImportError:                     # matplotlib < 3.9
+        from matplotlib import rcsetup
+        non_interactive = [b.lower() for b in rcsetup.non_interactive_bk]
+    if backend not in non_interactive:
+        return None
+    if os.environ.get('MPLBACKEND', '').lower() == backend:
+        return f'MPLBACKEND={backend} is a non-interactive matplotlib backend: no window'
+    try:
+        import tkinter  # noqa: F401
+    except ImportError:
+        return TK_HINT
+    return ('no display to open a window on (DISPLAY / WAYLAND_DISPLAY not set: run it on the '
+            'desktop, or with ssh -X)')
+
+
 def ask_movie_path(initial_dir=None) -> Optional[str]:
     """File dialog for a movie; a FITS frame stands for its folder. None if cancelled.
 
@@ -106,7 +142,8 @@ def ask_movie_path(initial_dir=None) -> Optional[str]:
             r = subprocess.run([sys.executable, '-c', _TK_DIALOG, initial, MOVIE_PATTERNS],
                                capture_output=True, text=True, check=True)
         except (OSError, subprocess.CalledProcessError) as e:
-            print(f'no file dialog (needs tkinter): {getattr(e, "stderr", "") or e}', file=sys.stderr)
+            err = str(getattr(e, 'stderr', '') or e)
+            print(TK_HINT if 'tkinter' in err else f'no file dialog: {err}', file=sys.stderr)
             return None
         path = r.stdout.strip()
     if not path:
@@ -682,6 +719,7 @@ class Viewer:
             label = a.name + (f' [{a.color[0].upper()}]' if a.role and a.color in CURVE_COLORS else '')
             label += f'  {st.label()}' if self.show_names and st is not None and st.name else ''
             label += self.frame_mag_text(a.name, full=a.role == 'target')
+            label += '  SAT' if a.role != 'sky' and self.is_saturated(a) else ''
             self.patches.append(self.ax.text(a.x0 + a.size + 2, a.y0, label, color=col,
                                              fontsize=8, va='top'))
         self.fig.canvas.draw_idle()
@@ -1154,7 +1192,8 @@ class Viewer:
         return f'{base}{k}'
 
     def add(self, x, y):
-        """New aperture centred on the star's brightest pixels near the click."""
+        """New aperture centred on the star's brightest pixels near the click. The first one (no
+        target yet) is the target, every later one a reference (t r c k change it)."""
         c = self.size // 2
         h, w = self.image.shape
         x0 = int(np.clip(round(x) - c, 0, w - self.size))
@@ -1167,10 +1206,19 @@ class Viewer:
         except ValueError:
             pass
         pm = self.cfg['pymovie']
-        self.apertures.append(Aperture(self._free_name('ap'), x0, y0, self.size,
+        role = next((r for r in ('target', 'reference') if r in self.roles
+                     and not (r == 'target' and any(a.role == 'target' for a in self.apertures))), '')
+        if role:
+            r = self.roles[role]
+            name = self._free_name(r['name'], numbered=r['max'] != 1)
+        else:
+            name = self._free_name('ap')
+        self.apertures.append(Aperture(name, x0, y0, self.size, role=role,
+                                       color={'target': 'red', 'reference': 'yellow'}.get(role, 'red'),
                                        thresh=pm['threshold'], default_mask_radius=pm['default_mask_radius']))
         self.draw_apertures()
         self.update_zooms()
+        self.warn_if_saturated(self.apertures[-1])
 
     def place_sky(self, x, y):
         """Sky apertures go exactly where clicked (no snapping onto stars)."""
@@ -1185,6 +1233,8 @@ class Viewer:
         if a is None:
             return
         r = self.roles[role]
+        if a.role == role and role != 'sky':    # already that role: keep its name (no 'target1')
+            return
         holders = [b for b in self.apertures if b.role == role and b is not a]
         if r['max'] and len(holders) >= r['max']:
             if r['max'] == 1:                       # move the single role (e.g. target) here
@@ -1199,6 +1249,7 @@ class Viewer:
         if role == 'sky':
             a.x0, a.y0 = self.place_sky(x, y)
         self.draw_apertures()
+        self.warn_if_saturated(a)
         self.update_zooms()
         self.update_result()
 
@@ -1604,8 +1655,9 @@ class Viewer:
             return
         csv = self.path.with_suffix('.csv')
         stars = self.all_stars()
-        lc.to_pymovie_csv(str(csv), at_frame=self.index, wcs=self.wcs, stars=stars)  # for PyOTE
-        lc.to_csv(str(self.path.with_suffix('.pystarlight.csv')), wcs=self.wcs, stars=stars)
+        notes = self.measure_saturation(lc)
+        lc.to_pymovie_csv(str(csv), at_frame=self.index, wcs=self.wcs, stars=stars, notes=notes)  # PyOTE
+        lc.to_csv(str(self.path.with_suffix('.pystarlight.csv')), wcs=self.wcs, stars=stars, notes=notes)
         self._track = {n: (lc[n]['frame'], lc[n]['xc'], lc[n]['yc']) for n in lc.names
                        if 'xc' in lc[n]}
         self._lc = lc
@@ -1716,6 +1768,85 @@ class Viewer:
         self.say_job(self._send_msg)
         print(self._send_msg)
 
+    # ---------------------------------------------------------------- saturated stars
+
+    def saturation_level(self) -> tuple[Optional[float], str]:
+        """Full scale of the recording's pixels (saturation.full_scale), else the data type's."""
+        from . import saturation as sat
+        level, how = sat.full_scale(getattr(self.movie, 'metadata', {}),
+                                    getattr(self.movie, 'max_pixel_value', None))
+        if level is None and self.image is not None and self.image.dtype.kind == 'u':
+            level, how = float(np.iinfo(self.image.dtype).max), f'{self.image.dtype.itemsize * 8}-bit data'
+        return level, how
+
+    def is_saturated(self, a) -> bool:
+        """The star in aperture a is saturated on the frame shown (centre +- 6 px, >= 90 % of full
+        scale)."""
+        from . import saturation as sat
+        if self.image is None:
+            return False
+        level, _ = self.saturation_level()
+        if not level:
+            return False
+        cx, cy = a.center
+        x0, y0 = max(0, int(round(cx)) - 6), max(0, int(round(cy)) - 6)
+        cut = self.image[y0:int(round(cy)) + 7, x0:int(round(cx)) + 7]
+        return bool(cut.size) and float(cut.max()) >= sat.FRACTION * level
+
+    def warn_if_saturated(self, a):
+        if a.role in ('reference', 'check', 'target') and self.is_saturated(a):
+            self.say(f'{a.name}: SATURATED star (brightest pixel >= 90 % of full scale): '
+                     + ('its depth and magnitudes are not reliable' if a.role == 'target' else
+                        'it is left out of the evaluation; pick a fainter star'))
+
+    def measure_saturation(self, lc) -> list[str]:
+        """After a run: the fraction of frames each aperture is saturated in (self._saturation);
+        header lines for the CSV files."""
+        from . import saturation as sat
+        level, how = sat.level_of(lc, getattr(lc, 'metadata', None),
+                                  dtype=self.image.dtype if self.image is not None else None,
+                                  max_value=getattr(self.movie, 'max_pixel_value', None))
+        stars = [n for n in lc.names if lc.roles.get(n) != 'sky']
+        rep = sat.report(lc, level, stars)
+        self._saturation = {'level': level, 'level_from': how, 'fraction': sat.FRACTION,
+                            'max_fraction_of_frames': sat.MAX_FRACTION, 'frames_saturated': rep}
+        hit = sat.describe(rep)
+        if level is None:
+            return ['saturation: full scale not known, not checked']
+        return [f'saturation: >= {sat.FRACTION:.0%} of {level:g} ({how}); '
+                + (f'saturated frames: {hit}; references and check stars saturated in more than '
+                   f'{sat.MAX_FRACTION:.0%} of the frames are left out' if hit else 'no star saturated')]
+
+    def unsaturated(self, target, refs, checks):
+        """References and check stars without saturation (saturation.split); the ones left out
+        and a warning go to self._saturation and the job line."""
+        from . import saturation as sat
+        info = getattr(self, '_saturation', None)
+        rep = (info or {}).get('frames_saturated') or {}
+        good_refs, bad_refs = sat.split(refs, rep)
+        good_checks, bad_checks = sat.split(checks, rep)
+        warn = []
+        if bad_refs:
+            if good_refs:
+                warn.append(f'saturated references left out: {", ".join(bad_refs)}')
+            else:                               # nothing else to normalise with: keep, say so
+                good_refs = refs
+                warn.append('ALL references are saturated: normalisation and magnitudes are not '
+                            'reliable; pick fainter references')
+        if bad_checks:
+            warn.append(f'saturated check stars left out: {", ".join(bad_checks)}')
+        if rep.get(target, 0) > sat.MAX_FRACTION:
+            warn.append(f'the target {target} is saturated in {100 * rep[target]:.0f} % of the frames: '
+                        'event depth and magnitudes are not reliable (the timing is)')
+        if info is not None:
+            info.update(excluded_references=[r for r in bad_refs if r not in good_refs],
+                        excluded_checks=bad_checks, warnings=warn)
+        if warn:
+            msg = 'WARNING: ' + '; '.join(warn)
+            print(msg)
+            self.say_job(msg)
+        return good_refs, good_checks
+
     def show_result(self):
         """The summary figure of the last run (drawn again in its window if that is still open)
         and its saved files."""
@@ -1728,6 +1859,7 @@ class Viewer:
         colors = {a.name: plot.APERTURE_COLORS[a.color] for a in self.apertures if a.color in CURVE_COLORS}
         window = self.cfg['analysis']['normalize_window']
         checks = [a.name for a in self.apertures if a.role == 'check' and a.name in lc.columns]
+        refs, checks = self.unsaturated(target, refs, checks)
         mags, label, steps = self._magnitude_curves(lc, target, refs, window, checks)
         self.step_fit = steps[0]
         pc = self.cfg['plot']
@@ -1840,6 +1972,7 @@ class Viewer:
             'light_curve': {'pyote_csv': self.path.with_suffix('.csv').name,
                             'all_columns_csv': self.path.with_suffix('.pystarlight.csv').name},
             'photometry': {'normalize_window': self.cfg['analysis']['normalize_window'],
+                           'saturation': getattr(self, '_saturation', None),
                            'magnitudes': 'm = m0 - 2.5 log10(flux), flux = target signal / smoothed '
                                          'ensemble of the references',
                            'band': self._mag_band},
@@ -1906,13 +2039,17 @@ class Viewer:
 
 def main(argv=None):
     import argparse
-    p = argparse.ArgumentParser(prog='pystarlight-view', description=__doc__,
+    p = argparse.ArgumentParser(prog='pystarlight analyze', description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('movie', nargs='?', help='movie file or FITS folder (default: file dialog)')
     p.add_argument('--config', help='config file (default: see pystarlight-config path)')
     p.add_argument('--calibration', help='.npz from Calibration.save() (default: [calibration] in config)')
     a = p.parse_args(argv)
     cfg = config_mod.load(a.config)
+    problem = gui_problem()
+    if problem:                         # say it plainly instead of a silent fallback
+        print(problem, file=sys.stderr)
+        return 1
     # Qt backends on Wayland: silence a harmless focus warning (see capture/qt.py)
     os.environ['QT_LOGGING_RULES'] = ';'.join(
         r for r in (os.environ.get('QT_LOGGING_RULES'), 'qt.qpa.wayland.textinput=false') if r)
