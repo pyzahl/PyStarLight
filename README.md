@@ -72,7 +72,9 @@ install the analysis (`pystarlight analyze`) and the player (`pystarlight player
 
 **The one thing people miss: the viewer needs Tk** (Python's `tkinter`) for its window and file
 dialog. Most Linux distributions ship it as a separate package, so install it first (step 1).
-Without it the viewer stops at start and says what to install.
+Without it the viewer stops at start and says what to install. **The player needs Qt**
+(PySide6 or PyQt5), which the viewer does not: `--extra camera` in step 3 brings PySide6 on
+every system. Without Qt the player stops at start and says what to install.
 
 ### 1. Prerequisites (once)
 
@@ -84,6 +86,11 @@ sudo dnf install git python3 python3-tkinter              # Fedora
 sudo pacman -S git python tk                              # Arch, Manjaro
 ```
 
+Qt for the player comes from step 3 (`--extra camera`, PySide6 wheels). The distribution's
+PyQt5 (`sudo apt install python3-pyqt5`, `dnf install python3-qt5`, `pacman -S python-pyqt5`)
+serves only the system Python, not the uv / venv environment; it is what the Raspberry Pi's
+capture setup uses ([CAPTURE.md](CAPTURE.md)).
+
 **macOS**
 
 - Python from [python.org](https://www.python.org/downloads/macos/) includes Tk; nothing else
@@ -93,6 +100,8 @@ sudo pacman -S git python tk                              # Arch, Manjaro
 - Apple Silicon (M1 and later): the ADV/AAV reader's wheel (`Adv2`) ships an Intel-only
   library. Build it once after step 3 with `sh scripts/build_advcore.sh`, and again whenever
   Adv2 is reinstalled.
+- Qt for the player: nothing to do beforehand, `--extra camera` in step 3 installs PySide6
+  (Intel and Apple Silicon). Not Homebrew's `pyqt@5`: it belongs to Homebrew's Python only.
 
 **Windows**
 
@@ -100,6 +109,7 @@ sudo pacman -S git python tk                              # Arch, Manjaro
   **"tcl/tk and IDLE"** ticked (it is by default) and tick **"Add python.exe to PATH"**.
 - git from [git-scm.com](https://git-scm.com/download/win).
 - The commands below run in PowerShell.
+- Qt for the player: nothing to do beforehand, `--extra camera` in step 3 installs PySide6.
 
 **Or let uv bring its own Python**, on any of the three: uv's Python builds include Tk. Run
 `uv python install` once, then add `--python-preference only-managed` to `uv sync` in step 3.
@@ -122,18 +132,22 @@ Open a new terminal afterwards, so that `uv` is found.
 ```bash
 git clone https://github.com/pyzahl/PyStarLight.git
 cd PyStarLight
-uv sync --extra all                     # viewer: plots, RAVF + ADV/AAV readers, SIMBAD look-ups
+uv sync --extra all --extra camera      # viewer: plots, RAVF + ADV/AAV readers, SIMBAD; player: Qt
 uv run pystarlight                      # analyze: opens a file dialog, pick a recording
+uv run pystarlight player               # the player, also with a file dialog
 ```
 
-Later, to update: `git pull` and `uv sync --extra all` again, in the `PyStarLight` folder.
+Only the viewer wanted? `uv sync --extra all` is enough; the player then says what is missing.
+Note that each `uv sync` installs exactly the extras it names and removes the others, so keep
+`--extra camera` on later syncs. To update: `git pull` and the same `uv sync` again, in the
+`PyStarLight` folder.
 
 Without uv, plain pip works in a virtual environment (Python 3.10+, with Tk as in step 1):
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate              # Windows: .venv\Scripts\activate
-pip install -e ".[all]"                                    # in the cloned folder
-pip install "starlight-photometry[all] @ git+https://github.com/pyzahl/PyStarLight"   # or without a clone
+pip install -e ".[all,camera]"                             # in the cloned folder
+pip install "starlight-photometry[all,camera] @ git+https://github.com/pyzahl/PyStarLight"   # or without a clone
 pystarlight
 ```
 
@@ -143,10 +157,14 @@ pystarlight
 
 ```bash
 uv run python -c "import tkinter; print('Tk', tkinter.TkVersion)"    # the viewer's window
+uv run python -c "from pystarlight.capture import qt; print(qt.API)"  # the player's Qt
 uv run pystarlight-config path                                       # the config file in use
 ```
 
 If the first line fails, go back to step 1 (Linux: `python3-tk`; macOS Homebrew: `python-tk`).
+If the second says `No module named 'PyQt5'`, the environment has no Qt: run `uv sync --extra
+all --extra camera` (or, with pip in the venv, `pip install PySide6-Essentials` or
+`pip install PyQt5`). Either binding works; `PYSTARLIGHT_QT=pyqt5` picks PyQt5 when both are there.
 
 ### Extras
 

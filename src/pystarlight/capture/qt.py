@@ -23,8 +23,18 @@ if _want != "pyqt5":
         if _want == "pyside6":
             raise
         API = None
+QT_HINT = """\
+The player and the camera need Qt for Python (PySide6 or PyQt5), and this Python has neither.
+Install one, then start again:
+  in the PyStarLight folder (uv):     uv sync --extra all --extra camera      (PySide6)
+  pip, in the virtual environment:    pip install PySide6-Essentials          (or: pip install PyQt5)
+  the system Python (Debian / Ubuntu / Raspberry Pi OS):  sudo apt install python3-pyqt5"""
+
 if _want == "pyqt5" or API is None:
-    from PyQt5 import QtCore, QtGui, QtWidgets
+    try:
+        from PyQt5 import QtCore, QtGui, QtWidgets
+    except ImportError as e:
+        raise ImportError(f"{e}\n\n{QT_HINT}") from e
     Signal, Slot = QtCore.pyqtSignal, QtCore.pyqtSlot
     QShortcut = QtWidgets.QShortcut
     API = "PyQt5"

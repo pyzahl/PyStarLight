@@ -57,7 +57,13 @@ def main(argv=None) -> int:
             return 2
         name = "analyze"
     import importlib
-    module = importlib.import_module(TOOLS[name][1])
+    try:
+        module = importlib.import_module(TOOLS[name][1])
+    except ImportError as e:            # no Qt for the player / camera: say what to install
+        if "PySide6 or PyQt5" not in str(e):
+            raise
+        print(f"pystarlight {name}: {e}", file=sys.stderr)
+        return 1
     return module.main(argv) or 0
 
 

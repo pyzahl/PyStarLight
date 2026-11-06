@@ -7,6 +7,10 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Install notes: the player needs Qt (PySide6 or PyQt5). The install step is now
+  `uv sync --extra all --extra camera` (PySide6 wheels on Linux, macOS, Windows), with notes per
+  OS and a check line. Without Qt, `pystarlight player` / `camera` now say what to install
+  instead of stopping with `No module named 'PyQt5'`.
 - Player: the target's light curve, the step-fit levels and D / R from the analysis
   (`<movie>.pystarlight.csv`, `.event.json`) as a second track below the frame timing (relative
   to its median, scaled on the target alone), and an open crosshair on the target on every
