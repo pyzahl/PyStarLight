@@ -72,8 +72,8 @@ def test_recording_plan_and_description():
     p = fv.recording_plan(FAVS[0])
     assert p["asteroid"] == "158772 (2003 SB60)" and p["target"] == "UCAC4 521-006590"
     assert p["verify"] == "Gaia DR3 38249436846981120"
-    assert p["start"] == datetime(2026, 10, 17, 4, 35, 48, 345000, tzinfo=timezone.utc)
-    assert p["event"] - p["start"] == timedelta(seconds=40) and p["duration_s"] == 80
+    assert p["start"] == datetime(2026, 10, 17, 4, 35, 58, 345000, tzinfo=timezone.utc)   # event - 30 s
+    assert p["event"] - p["start"] == timedelta(seconds=30) and p["duration_s"] == 60   # default +-30 s
     d = fv.describe(FAVS[0])
     assert d.startswith("04:36:28 UTC  158772 (2003 SB60)  UCAC4 521-006590  G 9.3  drop 10.3")
     assert "alt 42" in d and d.endswith("Home")
@@ -109,3 +109,16 @@ def test_past_hours_widen_the_window_back(server, tmp_path, monkeypatch):
     assert fv.past_hours() == 4.0
     monkeypatch.setenv("PYSTARLIGHT_CONFIG", "none")
     assert fv.past_hours() == 0.0
+
+
+def test_recording_window_from_the_config(tmp_path, monkeypatch):
+    p = tmp_path / "c.toml"
+    p.write_text("[camera]\nrecord_before_s = 45\nrecord_after_s = 20\n")
+    monkeypatch.setenv("PYSTARLIGHT_CONFIG", str(p))
+    assert fv.window() == (45.0, 20.0)
+    plan = fv.recording_plan(FAVS[0])
+    assert plan["event"] - plan["start"] == timedelta(seconds=45) and plan["duration_s"] == 65
+    assert plan["trail_s"] == 20.0
+    assert fv.recording_plan(FAVS[0], lead_s=10, trail_s=10)["duration_s"] == 20     # explicit
+    p.write_text("[camera]\nrecord_before_s = -5\n")
+    assert fv.window() == (30.0, 30.0)                                              # nonsense: default

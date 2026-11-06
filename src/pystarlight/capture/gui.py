@@ -1210,7 +1210,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.fav_button.setToolTip("events of the next 12 h from the PySyzygos server "
                                    "([pysyzygos_server] in the config, or --pysyzygos URL): "
                                    "fills asteroid, target star and the recording window "
-                                   f"(event -{favorites.LEAD_S:.0f} s to +{favorites.TRAIL_S:.0f} s)")
+                                   "(event -{:.0f} s to +{:.0f} s; [camera] in the config)".format(
+                                       *favorites.window()))
         self.fav_button.clicked.connect(self.fetch_favorites)
         self.favorites_ready.connect(self.on_favorites)
         self.event_info = QtWidgets.QLabel(wordWrap=True)
@@ -1329,8 +1330,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.apply_favorite(fav)
 
     def apply_favorite(self, fav):
-        """Asteroid, target star (and its Gaia DR3 id to verify), start at the event - 40 s
-        and stop 40 s after it."""
+        """Asteroid, target star (and its Gaia DR3 id to verify), start before the event and stop
+        after it by the config's [camera] record_before_s / record_after_s (30 s each)."""
         plan = favorites.recording_plan(fav)
         self.asteroid_edit.setText(plan["asteroid"])
         self.settings.setValue("asteroid", plan["asteroid"])
@@ -1338,7 +1339,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.verify_edit.setText(plan["verify"])
         self.on_target()
         start = plan["start"].replace(microsecond=0)            # the start field has whole seconds
-        end = plan["event"] + timedelta(seconds=favorites.TRAIL_S)
+        end = plan["event"] + timedelta(seconds=plan["trail_s"])
         now = datetime.now(timezone.utc)
         if end <= now:                          # over (past_hours, tests): the same length, now
             end = now + timedelta(seconds=plan["duration_s"])
@@ -1355,7 +1356,7 @@ class MainWindow(QtWidgets.QMainWindow):
         alt = (f", star alt {star['alt']:.0f} az {star['az']:.0f}"
                if star.get("alt") is not None and star.get("az") is not None else "")
         past = " (over: test recording from now)" if plan["event"] + timedelta(
-            seconds=favorites.TRAIL_S) <= now else ""
+            seconds=plan["trail_s"]) <= now else ""
         self.event_info.setText(f"event {plan['event'].strftime('%H:%M:%S.%f')[:12]} UTC{past}: "
                                 f"{favorites.describe(fav)}{alt}")
         print(f"Favorite {fav.get('key')}: recording {self.start_time.time().toString('HH:mm:ss')}"

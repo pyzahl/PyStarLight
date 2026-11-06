@@ -148,6 +148,8 @@ uses [Semantic Versioning](https://semver.org/).
   aperture on the displayed frame, without moving apertures; shown in the zoom views and status.
 
 ### Changed
+- Camera, Favorites: the recording window is event -30 s to +30 s by default (was 40 s), set in
+  the new config section `[camera]` (`record_before_s`, `record_after_s`).
 - Optimal extraction is the viewer's default photometry (`[analysis] photometry = "optimal"`,
   checkbox ticked); untick it for the circular aperture. `analyze_global()` keeps "aperture".
 - Analysis: a click makes the first aperture the target and every later one a reference

@@ -164,6 +164,11 @@ star_names = true          # star names (catalogue identification) on the image;
 # SIMBAD (online) is asked only for stars the local catalogue does not have.
 gaia_dir = ""
 
+[camera]
+# The camera's Favorites button: the recording window around the predicted event time.
+record_before_s = 30.0     # start this long before the event ...
+record_after_s = 30.0      # ... and stop this long after it
+
 [pysyzygos_server]
 # The camera's Favorites button: tonight's events from a PySyzygos server (its SERVER_MODE.md,
 # favorites API). url e.g. "http://home:8080"; token from 'pysyzygos gui --new-token PyStarLight'

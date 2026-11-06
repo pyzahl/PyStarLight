@@ -25,8 +25,22 @@ from datetime import datetime, timedelta, timezone
 from .localconfig import read as _read_config  # noqa: F401  (tests)
 from .localconfig import section
 
-LEAD_S = 40.0           # recording starts this long before the event ...
-TRAIL_S = 40.0          # ... and ends this long after it
+LEAD_S = 30.0           # recording starts this long before the event ... (defaults: the
+TRAIL_S = 30.0          # ... and ends this long after it                config's [camera] wins)
+
+
+def window():
+    """(seconds before, seconds after) the event to record: the config's [camera]
+    record_before_s / record_after_s, else LEAD_S / TRAIL_S."""
+    cam = section("camera")
+    out = []
+    for key, default in (("record_before_s", LEAD_S), ("record_after_s", TRAIL_S)):
+        try:
+            v = float(cam.get(key, default))
+        except (TypeError, ValueError):
+            v = default
+        out.append(v if v >= 0 else default)
+    return tuple(out)
 
 
 def server_settings(url=None, token=None):
@@ -109,12 +123,18 @@ def describe(f):
     return "  ".join(p for p in parts if p)
 
 
-def recording_plan(f, lead_s=LEAD_S, trail_s=TRAIL_S):
+def recording_plan(f, lead_s=None, trail_s=None):
     """What to set for the event: {'target': star name, 'verify': its Gaia DR3 name,
-    'asteroid': the occulting body, 'start': UTC datetime, 'duration_s', 'event': UTC datetime}."""
+    'asteroid': the occulting body, 'start': UTC datetime, 'duration_s', 'event': UTC datetime,
+    'lead_s', 'trail_s'}. lead_s / trail_s: default window() (the config's [camera])."""
+    if lead_s is None or trail_s is None:
+        lead, trail = window()
+        lead_s = lead if lead_s is None else lead_s
+        trail_s = trail if trail_s is None else trail_s
     star, t = f.get("star") or {}, parse_utc(f["utc"])
     dr3 = star.get("gaia_dr3")
     return {"target": star.get("name") or (f"Gaia DR3 {dr3}" if dr3 else ""),
             "verify": f"Gaia DR3 {dr3}" if dr3 and star.get("name") != f"Gaia DR3 {dr3}" else "",
             "asteroid": (f.get("target") or {}).get("name") or "",
-            "start": t - timedelta(seconds=lead_s), "duration_s": lead_s + trail_s, "event": t}
+            "start": t - timedelta(seconds=lead_s), "duration_s": lead_s + trail_s, "event": t,
+            "lead_s": lead_s, "trail_s": trail_s}

@@ -291,7 +291,8 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
   `MV-MIPI-IMX178M_158772-2003-SB60_UCAC4-521-006590_20261017T043548Z.ravf`, and OBJNAME is the
   asteroid (the star is in the file name and the viewer's identification).
 - **Favorites** (Recording panel): tonight's events from a PySyzygos server fill **Asteroid**,
-  **Target**, **Verify** and the recording window (event - 40 s to event + 40 s). Setting up the
+  **Target**, **Verify** and the recording window (event - 30 s to event + 30 s by default,
+  `[camera] record_before_s` / `record_after_s` in the config). Setting up the
   link: [PySyzygos favorites server link](#pysyzygos-favorites-server-link) below.
 
 ## PySyzygos favorites server link
@@ -357,10 +358,11 @@ reads `pystarlight.toml` directly when the package's config module cannot be imp
 - one event is taken at once. With several, a list shows each one (time, asteroid, star, G,
   magnitude drop, duration, altitude, chance, site) to pick from;
 - the chosen event fills **Asteroid**, **Target** (the star's UCAC4 / TYC / DR3 name, looked up as
-  usual) and **Verify** (its Gaia DR3 id). It sets start **At UTC** = event - 40 s (whole
-  seconds) and **Stop after** 80 s, so the recording ends at event + 40 s;
-- already inside that window: the recording starts now and stops at event + 40 s. An event that
-  is over (only listed with `past_hours`) records 80 s from now, marked "(over: test recording
+  usual) and **Verify** (its Gaia DR3 id). It sets start **At UTC** = event - 30 s (whole
+  seconds) and **Stop after** 60 s, so the recording ends at event + 30 s. The window is the
+  config's `[camera] record_before_s` / `record_after_s` (30 s each by default);
+- already inside that window: the recording starts now and stops at event + 30 s. An event that
+  is over (only listed with `past_hours`) records the same length from now, marked "(over: test recording
   from now)";
 - the line below the button shows the event time and the star's altitude and azimuth, for
   pointing;
