@@ -1,8 +1,9 @@
 # PyStarLight <img src="src/pystarlight/pystarlight_logo.svg" alt="" width="96" align="right">
 
 **Occultation light curves from start to finish:** record GPS-timed video at the telescope,
-check it, measure the stars and time the event. The results open directly in
-[PyOTE](https://github.com/bob-anderson-ok/py-ote).
+check it, measure the stars and time the event. Only select target and reference stars, 
+then it runs a fully automated analysis. The results open directly in
+[PyOTE](https://github.com/bob-anderson-ok/py-ote) as well using the classic more manual inspections/analysis.
 
 PyStarLight is a Python library with one command on top of it, `pystarlight`, and three
 programs behind it:
