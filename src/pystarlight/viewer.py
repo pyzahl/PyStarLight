@@ -1,12 +1,11 @@
 """Minimal matplotlib viewer: step through a movie, see the timestamp, place apertures, run.
 
-    pystarlight-view OTEVideo/run_1/run_1.ravf
-    pystarlight-view                       (no movie: file dialog)
+    pystarlight analyze OTEVideo/run_1/run_1.ravf      (also: pystarlight-view)
+    pystarlight analyze                    (no movie: file dialog)
 
 Mouse   left click     add aperture (snaps to the star's brightest pixels; the first is the
                        target, later ones references)
         right click    remove the nearest aperture
-    u              auto-center the nearest aperture on its fitted peak
 Keys    left / right   previous / next frame      page up / down  -/+ 25 frames
         home / end     first / last frame
         t r c k        give the aperture under the mouse a role (defaults; set in the config):
@@ -14,21 +13,23 @@ Keys    left / right   previous / next frame      page up / down  -/+ 25 frames
         Y G W R        curve colour of the aperture in the result plot: yellow, green, grey; R =
                        automatic (red is the target's). Shift keys. After a run the result plot
                        follows role and colour keys live. analysis.mode = "pymovie": PyMovie's colours
+        u              auto-center the nearest aperture on its fitted peak
         n              rename nearest aperture (text box at the top: Enter applies, Esc cancels)
         1 / 2          show the aperture under the mouse in zoom view 1 / 2 (right side)
-        a              run the analysis from this frame to the end
+        a              run the analysis from this frame to the end (Optimal box: photometry)
+        e              send <movie>.event.json to PySyzygos' observation report (also Send)
         s / l          save / load apertures (<movie>.apertures.json)
         p              plate-solve again (cached as <movie>.wcs.fit; automatic on opening when cached
                        or solved offline with solve-field, uploads to nova.astrometry.net only on p)
-        i              identify the stars in the apertures (astrometry.net names, SIMBAD); also automatic
+        i              identify the stars in the apertures (local Gaia catalogue, SIMBAD); also automatic
         N              star names on the image on / off (also the Names button)
         Esc            stop plate solving / star identification (Run then skips the names)
         ctrl+o         open another movie (also the Open button; a FITS frame opens its folder)
 Toolbar zoom/pan works as usual.
 
 Results are written next to the movie: <movie>.csv (PyMovie layout, opens in PyOTE),
-<movie>.pystarlight.csv (all columns) and <movie>-summary.pdf/png.
-Settings come from the config file (pystarlight-config init / show).
+<movie>.pystarlight.csv (all columns), <movie>-summary(-mag).pdf/png, <movie>.event.json, ...
+Settings come from the config file (pystarlight config init / show).
 """
 
 from __future__ import annotations

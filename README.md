@@ -1,9 +1,10 @@
 # PyStarLight <img src="src/pystarlight/pystarlight_logo.svg" alt="" width="96" align="right">
 
 **Occultation light curves from start to finish:** record GPS-timed video at the telescope,
-check it, measure the stars and time the event. Only select target and reference stars, 
-then it runs a fully automated analysis. The results open directly in
-[PyOTE](https://github.com/bob-anderson-ok/py-ote) as well using the classic more manual inspections/analysis.
+check it, measure the stars and time the event. You pick the target and the reference stars;
+the rest of the analysis runs on its own, up to the disappearance and reappearance times. The
+light curve also opens directly in [PyOTE](https://github.com/bob-anderson-ok/py-ote), for the
+classic, more hands-on analysis.
 
 PyStarLight is a Python library with one command on top of it, `pystarlight`, and three
 programs behind it:
@@ -19,9 +20,11 @@ programs behind it:
     1 sigma error;
   - magnitude histograms;
   - an `event.json` with every detail of the event.
-- **`pystarlight camera`, capture on a Raspberry Pi 5 (experimental).** It records frames GPS-triggered and
-  stamped in UTC (VEYE MIPI or Aravis cameras, u-blox GPS) to RAVF or SER, with a live stack and
-  plate solve. Tonight's events can be loaded from a [PySyzygos](https://github.com/pyzahl/PySyzygos)
+- **`pystarlight camera`, capture on a Raspberry Pi 5 (experimental).** It records frames
+  GPS-triggered and stamped in UTC (VEYE MIPI and Aravis cameras, u-blox GPS; any `/dev/video`
+  device such as an analog grabber, with driver time stamps) to RAVF or SER, with a live stack
+  and plate solve. Every recording carries the station and equipment data and the GPS position.
+  Tonight's events can be loaded from a [PySyzygos](https://github.com/pyzahl/PySyzygos)
   favorites server: target star, asteroid and the recording window are filled in for you.
 - **`pystarlight player`, a player that knows about time.** Unlike a normal video player it
   shows each frame's UTC and GPS status, checks the time stamps (dropped, duplicated and
@@ -33,8 +36,10 @@ Bob Anderson. There are two analysis modes:
 - **PyMovie mode** (`analyze()`) reproduces PyMovie's numbers bit for bit, and the tests run
   PyMovie's own code to check this;
 - **global mode** (`analyze_global()`, the viewer's default) is new. It uses peak fits, one
-  weighted rigid transform for all stars, and sub-pixel apertures. On a faint star it gives
-  about a quarter of the normalised scatter.
+  weighted rigid transform for all stars, interpolates the target through the event, and
+  measures with Naylor's optimal extraction or sub-pixel circular apertures. On a faint star it
+  gives about a quarter of PyMovie's normalised scatter (23.5 % → 6.4 % on a 94 s ASTRID
+  recording).
 
 Supported recordings: RAVF (ASTRID), SER, ADV/AAV, AVI/MOV, FITS folders. Timestamps come from
 the file or are read from a VTI overlay. MIT licence.
@@ -68,7 +73,7 @@ the file or are read from a VTI overlay. MIT licence.
 ## Install
 
 PyStarLight runs on Linux, macOS and Windows with Python 3.10 or newer. The capture program
-(`pystarlight-camera`) is for a Raspberry Pi 5: see [CAPTURE.md](CAPTURE.md). The steps below
+(`pystarlight camera`) is for a Raspberry Pi 5: see [CAPTURE.md](CAPTURE.md). The steps below
 install the analysis (`pystarlight analyze`) and the player (`pystarlight player`).
 
 **The one thing people miss: the viewer needs Tk** (Python's `tkinter`) for its window and file
@@ -159,7 +164,7 @@ pystarlight
 ```bash
 uv run python -c "import tkinter; print('Tk', tkinter.TkVersion)"    # the viewer's window
 uv run python -c "from pystarlight.capture import qt; print(qt.API)"  # the player's Qt
-uv run pystarlight-config path                                       # the config file in use
+uv run pystarlight config path                                       # the config file in use
 ```
 
 If the first line fails, go back to step 1 (Linux: `python3-tk`; macOS Homebrew: `python-tk`).
@@ -176,7 +181,7 @@ all --extra camera` (or, with pip in the venv, `pip install PySide6-Essentials` 
 | `ravf` | RAVF reader | ASTRID / PyStarLight capture recordings |
 | `adv` | Adv2 | ADV / AAV recordings (DVTI, OccuRec) |
 | `catalog` | astroquery | star names from SIMBAD and the VO (offline: PySyzygos' Gaia extract) |
-| `camera` | PySide6, pyserial | the player (`pystarlight player`, any OS) and the capture program |
+| `camera` | PySide6, pyserial, astroquery | the player (`pystarlight player`, any OS) and the capture program |
 | `aravis` | PyGObject | GenICam (USB3 / GigE) cameras in the capture program: Linux / Pi only, see [CAPTURE.md](CAPTURE.md) |
 
 Optional, outside Python: **offline plate solving** with a local astrometry.net
@@ -198,15 +203,16 @@ extras shown); `pystarlight --help` lists the tools, `pystarlight <tool> --help`
 | `pystarlight config` | the private config: `init`, `path`, `show`, `sites` | `uv run pystarlight config path` |
 
 `FILE` is any supported recording (`.ravf .ser .adv .aav .avi .mov` or a FITS folder).
-`pystarlight FILE` (a file instead of a tool) analyses it, plain `pystarlight` (and
-`pystarlight player` without a file) opens a file dialog; `analyse` works as well as `analyze`, and `python -m pystarlight` as well as
-`pystarlight` (Windows without the scripts folder on PATH). The earlier names stay as commands
-of their own: `pystarlight-view` (= analyze), `pystarlight-review` (= player),
-`pystarlight-player`, `pystarlight-camera`, `pystarlight-config`.
-The camera and the [player](CAPTURE.md#player) are described in
-[CAPTURE.md](CAPTURE.md), including
-[offline plate solving](CAPTURE.md#offline-plate-solving-local-astrometrynet) with a local
-astrometry.net. `uv run pystarlight config` manages the private config (next section).
+
+- `pystarlight FILE` (a file instead of a tool) analyses it; plain `pystarlight`, and
+  `pystarlight player` without a file, open a file dialog.
+- `analyse` works as well as `analyze`; `python -m pystarlight` as well as `pystarlight`
+  (Windows without the scripts folder on PATH).
+- The earlier names stay as commands of their own: `pystarlight-view` (= analyze),
+  `pystarlight-player` (and `pystarlight-review`, its name before), `pystarlight-camera`,
+  `pystarlight-config`.
+
+The camera and the [player](CAPTURE.md#player) are described in [CAPTURE.md](CAPTURE.md).
 
 ## Getting started
 
@@ -216,22 +222,28 @@ After the [installation](#install):
 
 ```bash
 cd PyStarLight
-uv run pystarlight-config init --here    # private config: ./pystarlight.toml (git-ignored)
+uv run pystarlight config init --here    # private config: ./pystarlight.toml (git-ignored)
 ```
 
-Edit the config: your name, email and your nova.astrometry.net API key. Station and
-equipment (`[observer]`) are best set in the camera's **Station & equipment** dialog; every
-recording then carries them, including the effective focal length that gives the plate-scale
-hint. For videos that do not carry their optics (other programs' ADV / AVI, a SER without its
-sidecar, older recordings) set `[fallback_equipment]` (focal length, pixel size): used with a
-warning each time. `pysyzygos_sites` points at PySyzygos' `sites.py` (read as data, never
-executed): the station dialog's first-time defaults and the folder of the local Gaia
-catalogue. The file is only readable
-by you and is never part of the repository. `pystarlight-config show` prints it with secrets
-masked; `pystarlight-config sites` lists the sites; `pystarlight-config path` shows which file
-is used (lookup: `$PYSTARLIGHT_CONFIG`, `./pystarlight.toml`, the project root's
-`pystarlight.toml`, `~/.config/pystarlight/config.toml`). All analysis settings and the aperture
-types (names, colours, keys) live there too.
+Edit the config. The file is only readable by you and is never part of the repository.
+
+- **`[observer]`**: your name, email, station and equipment (aperture and focal length in mm).
+  On the Pi these are best set in the camera's **Station & equipment** dialog; every recording
+  then carries them, including the effective focal length that gives the plate-scale hint.
+- **`[fallback_equipment]`**: focal length and pixel size for videos that do not carry their
+  optics (other programs' ADV / AVI, a SER without its sidecar, older recordings). Used with a
+  warning each time.
+- **`[astrometry] api_key`**: your nova.astrometry.net API key, for online plate solving.
+- **`pysyzygos_sites`**: PySyzygos' `sites.py` (read as data, never executed). It gives the
+  station dialog's first-time defaults and the folder of the local Gaia catalogue.
+- `[pysyzygos_observations]` (PySyzygos on another computer, [below](#3-run)) and `[camera]`
+  (the Pi camera's recording window, [CAPTURE.md](CAPTURE.md)): only when needed.
+- All analysis settings and the aperture roles (names, colours, keys) live there too.
+
+`pystarlight config show` prints it with secrets masked, `pystarlight config sites` lists
+PySyzygos' sites, `pystarlight config path` shows which file is used (lookup:
+`$PYSTARLIGHT_CONFIG`, `./pystarlight.toml`, the project root's `pystarlight.toml`,
+`~/.config/pystarlight/config.toml`).
 
 **Dark / flat ("bright") clips**: set `[calibration] dark` and `flat` (and `flat_dark` if the
 flat's exposure differs) to clip files. Each clip is averaged into a master frame (mean, or
@@ -268,8 +280,10 @@ nova.astrometry.net on `p`. `[astrometry] solver = "auto"` (default) picks local
    <http://data.astrometry.net/4200/> into a folder and add `add_path /that/folder` to the
    `astrometry.cfg` next to `solve-field` (Homebrew: `$(brew --prefix)/etc/astrometry.cfg`).
    PyStarLight reads that file to see which index files exist.
-3. **Give the scale.** Set the site's `focal_mm` and `sensor_mm` (or `[astrometry]
-   scale_arcsec`): with the scale known a solve takes seconds, blind it can take minutes.
+3. **Give the scale.** It comes from the recording's own optics (focal length and sensor, as
+   PyStarLight's camera writes them), else from `[fallback_equipment]` with a warning, or set
+   `[astrometry] scale_arcsec`. With the scale known a solve takes seconds, blind it can take
+   minutes.
    Small fields show few stars: more stacked frames help (`[astrometry] stack_frames`, default
    16), and an ADV file's own RA/Dec is used as the field centre.
 4. **Check:** the viewer's key list says `p plate-solve (offline)` when the local solver is found.
@@ -304,31 +318,26 @@ uv run pystarlight                                    # no file: a file dialog
 **Open** (or ctrl+o) loads another recording in a new window with the same settings; the
 apertures of the current one are not saved on the way (`s` saves them).
 
-The field is **plate-solved** from a median stack of the first frames. With a local
-astrometry.net (below) this happens offline as soon as the movie opens; otherwise press `p` to
-upload it to nova.astrometry.net in the background (private upload; nothing is uploaded without
-`p`). The result is cached as `<movie>.wcs.fit` and loaded when the movie is opened again.
-**Esc** stops a running solve or star identification (e.g. without network); **Run** never waits
-for star names. Burnt-in timestamp rows are
-blanked first; an ADV file's own RA/Dec is used as the field-centre hint, and the site's
-plate-scale hint only for recordings made at the site.
-With a local astrometry.net (`sudo apt-get install astrometry.net` plus the
-`astrometry-data-2mass-*` index files matching your field, see
-[Offline plate solving](CAPTURE.md#offline-plate-solving-local-astrometrynet)) the solve runs
-offline instead (see [offline plate solving](#optional-offline-plate-solving-local-astrometrynet)).
-The cursor readout then shows RA/Dec, an N/E compass is drawn, and the line below the status
-gives the plate scale, the direction of north and whether the image is mirrored.
+The field is **plate-solved** from a median stack of the first frames. With a
+[local astrometry.net](#optional-offline-plate-solving-local-astrometrynet) this happens offline
+as soon as the movie opens; otherwise press `p` to upload it to nova.astrometry.net in the
+background (private upload; nothing is uploaded without `p`). The result is cached as
+`<movie>.wcs.fit` and loaded when the movie is opened again. Burnt-in timestamp rows are blanked
+first. Hints: the recording's own RA/Dec (ADV) as the field centre, and the plate scale from the
+recording's optics, else `[fallback_equipment]` (not for a recording made more than 20 km from
+your `[observer]` station: someone else's optics). **Esc** stops a running solve or star
+identification (e.g. without network); **Run** never waits for star names. Once solved, the
+cursor readout shows RA/Dec, an N/E compass is drawn, and the line below the status gives the
+plate scale, the direction of north and whether the image is mirrored.
 
 The **three brightest stars** are then found in the stack (outside a burnt-in timestamp) and
 named: a proper name from astrometry.net where it has one (Deneb, ...); otherwise, **offline**,
-from PySyzygos' local Gaia DR3 catalogue when it is on the machine: the **Tycho-2 or UCAC4 name**
-(as Occult and OWC show it), Gaia DR3 id and G magnitude, proper motion applied. The catalogue
-folder is found next to the `sites.py` that `pysyzygos_sites` points to (a format-2 catalogue,
-preferably with its `xref` part), or set `[catalog] gaia_dir`. Stars the local catalogue does not
-have (brighter than Gaia's limit, fainter than its G limit) are looked up in SIMBAD online (HD,
-HIP, TYC, Gaia DR3 IDs, V; needs the `catalog` extra; a lookup gives up after 20 s and SIMBAD is
-then skipped for 5 minutes). They are labelled on the image and cached as `<movie>.stars.json`. The stars in your **target,
-reference and check apertures** are identified the same way (automatically after the solve and
+from [PySyzygos' local Gaia DR3 catalogue](#optional-star-names-offline-pysyzygos-gaia-catalogue)
+when it is on the machine (Tycho-2 or UCAC4 name, Gaia DR3 id, G magnitude, proper motion
+applied). Stars it does not have are looked up in SIMBAD online (HD, HIP, TYC, Gaia DR3 IDs, V;
+needs the `catalog` extra; a lookup gives up after 20 s and SIMBAD is then skipped for 5
+minutes). They are labelled on the image and cached as `<movie>.stars.json`. The stars in your
+**target, reference and check apertures** are identified the same way (automatically after the solve and
 before each run, `i` to repeat): position refined by a peak fit on the solved frames (the field
 drift since then is measured and removed), then name, IDs and V. The results are saved in
 `apertures.json`, shown on the aperture labels and zoom views, and written to both CSVs. The zoom views show RA/Dec and,
@@ -378,6 +387,7 @@ All keys:
 | key / control | action |
 |---|---|
 | click / right-click | add (snaps onto the star; the first is the target, later ones references) / remove aperture |
+| `u` | centre the aperture under the mouse on its fitted peak |
 | `t` `r` `c` `k` | role of the aperture under the mouse (see above; changeable in the config) |
 | `1` / `2` | show the aperture under the mouse in zoom view 1 / 2 (right side, ~4-5×, own contrast). While analysing they update live (~2×/s) with the frame being processed; afterwards they follow the tracked position. Each shows the signal and, in global mode, the peak fit (FWHM, SNR, `+` = fitted centre, circle = photometry aperture) |
 | `n` | rename the aperture under the mouse: a text box at the top, **Enter** applies, **Esc** cancels |
@@ -387,6 +397,8 @@ All keys:
 | Home / End, buttons `\|<` `>\|` | first / last frame |
 | buttons `-10 s` / `+10 s` | jump 10 s (frame count from the timestamps) |
 | `a`, button **Run** | analyse from the current frame to the end |
+| checkbox **Optimal** | optimal extraction (ticked) or circular apertures, see [Run](#3-run) |
+| `e`, button **Send** | send `<movie>.event.json` to PySyzygos' observation report (see [Run](#3-run)) |
 | `s` / `l` | save / load apertures (`<movie>.apertures.json`) |
 | `p` | plate-solve again (offline with a local astrometry.net, else uploads to nova.astrometry.net) |
 | `i` | identify the stars in the apertures (local catalogue, else SIMBAD); stars without a name are tried again automatically |
@@ -565,10 +577,8 @@ Load `<movie>.csv` in PyOTE like any PyMovie file. The target is the first light
 default); references and checks follow. The header carries the source path, the recording date
 and, for RAVF/ADV, the camera metadata that PyOTE uses to fill its report form. In PyMovie mode
 the file matches what PyMovie itself writes (checked line by line on a real recording); in
-global mode `nmaskpx` is the effective, fractional pixel count of the circular aperture.
-
-On a 94 s ASTRID test recording this mode lowered the normalised scatter of a faint star from
-23.5 % (PyMovie-style apertures) to 6.4 %.
+global mode `nmaskpx` is the effective, fractional pixel count of the aperture. Notes such as
+the saturation check go into `#` header lines above the column header.
 
 ### Same thing from Python
 
@@ -581,15 +591,19 @@ aps = [Aperture.centered_at('target', 946, 701, role='target'),
        Aperture.centered_at('ref2', 749, 598, role='reference'),
        Aperture.centered_at('sky', 600, 850, role='sky')]
 with open_movie('recording.ravf') as mv:
-    lc = analyze_global(mv, aps)
+    lc = analyze_global(mv, aps, photometry='optimal')   # default: 'aperture'
 flux = lc.normalized()                   # target / smoothed sum of references, median 1
 lc.to_pymovie_csv('recording.csv')       # for PyOTE
 lc.to_csv('recording.pystarlight.csv')   # all columns
 ```
 
 `analyze()` (no roles, PyMovie colours) reproduces PyMovie 4.2.8 exactly; use it to compare.
+The step fit and the saturation check work on the result as in the viewer: `steps.fit_steps`
+(above) and `saturation.level_of` / `saturation.report`.
 
 ## Example
+
+PyMovie mode, the way PyMovie itself works (a yellow tracking star, the others follow it):
 
 ```python
 from pystarlight import open_movie, analyze, Aperture
@@ -670,16 +684,22 @@ x, y = wcs.target_pixel(wcs.load_wcs(fits_path), '18h12m01s +22d07m00s')
 | `photometry` | robust background, star mask, brightest-pixel centroid, default mask, TME, `measure_aperture()` |
 | `tracking` | `Aperture`, `Tracker` (0/1/2 yellow apertures, field rotation), `TrackPath` |
 | `pipeline` | `analyze()` (PyMovie-exact) → `LightCurves`, with progress/cancel hooks for a worker thread |
-| `globaltrack` | `analyze_global()`: roles, peak fits, global shift + rotation, sub-pixel apertures, occultation-aware target tracking |
+| `globaltrack` | `analyze_global()`: roles, peak fits, global shift + rotation, occultation-aware target tracking, optimal extraction or sub-pixel apertures |
+| `steps` | event timing: multi-step fit of the target's flux, D/R times with 1 sigma, `event_report` |
+| `saturation` | full scale of a recording, saturated frames per aperture, which stars to leave out |
+| `stacking` | registered field stack (FITS with the plate solution, annotated SVG/PNG/PDF) |
 | `export` | PyMovie-layout CSV for PyOTE |
-| `config` | private config from the template, PySyzygos-compatible sites (`pystarlight-config`) |
+| `station` | station data (site, observers, equipment, timing) of RAVF / ADV / SER recordings for `event.json` |
+| `report_push` | hands `event.json` to PySyzygos' observation report (server, inbox or queue) |
+| `config` | private config from the template, first-time defaults from PySyzygos' `sites.py` (`pystarlight config`) |
 | `timestamps` | `VtiReader` (IOTA 2/3, BoxSprite, Kiwi NTSC/PAL, GHS), `check_timing()`, midnight rollover |
-| `wcs` | astrometry.net client (online and local), two-star solution, WCS → pixel, star names (local Gaia DR3, SIMBAD), Gaia DR3 reduction (`wcs.reduce`) |
+| `wcs` | astrometry.net client (online and local), two-star solution, WCS → pixel, star names and target look-up (local Gaia DR3, SIMBAD, VO), Gaia DR3 reduction (`wcs.reduce`) |
 | `calibrate` | master dark/flat, gain and defect maps, per-aperture correction |
 | `normalize` | reference-star normalisation, relative flux, Δmag, SNR |
 | `plot` | publication figures (matplotlib) |
 | `viewer` | `pystarlight analyze`: step frames, timestamps, place apertures, run |
 | `cli` | the `pystarlight` command: analyze, player, camera, config |
+| `capture` | the camera program and the player (Qt), see [CAPTURE.md](CAPTURE.md) |
 
 ## Things to know
 
@@ -691,9 +711,14 @@ x, y = wcs.target_pixel(wcs.load_wcs(fits_path), '18h12m01s +22d07m00s')
 - **Mirrored images.** PyMovie's two-star solution assumes a non-mirrored image. For an image
   seen through an odd number of mirrors (e.g. a star diagonal) pass `mirrored=True`, or the
   target lands at its mirror position, typically tens of pixels away. Check with a third star.
-- **New code** (not in PyMovie): `normalize`, `steps` (event timing), `timestamps.timing`, `plot`, `viewer`, the `mirrored`
-  option, and per-aperture calibration.
-- **Not included:** NRE/Naylor extraction, GCE, finder/stacking, `.pymovie` record files.
+- **New code** (not in PyMovie): global mode (`globaltrack`, with its own optimal extraction
+  after Naylor 1998), `steps` (event timing), `saturation`, `stacking`, `normalize`,
+  `timestamps.timing`, `plot`, `viewer`, plate solving offline and the Gaia reduction
+  (`wcs.reduce`), local catalogue names, `station`, `report_push`, the `mirrored` option,
+  per-aperture calibration, and the capture program and player.
+- **Not taken from PyMovie:** its own NRE / Naylor extraction and GCE (global mode has its
+  optimal extraction instead), the finder (the stacked field takes its place), `.pymovie`
+  record files.
 - `ocr.py`, `wcs/manual.py` and `wcs/astrometry_client.py` are kept as close to PyMovie's
   files as possible (and excluded from linting) so upstream fixes are easy to carry over.
 - The RAVF reader is tested on real ASTRID recordings, the ADV reader on a real DVTI+CAM

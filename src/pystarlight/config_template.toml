@@ -64,9 +64,9 @@ timeout_s = 900
 auto_solve = true          # on open: load the cached solution (<movie>.wcs.fit), or solve offline
                            # (local solver); uploads to nova only with key p
 stack_frames = 16          # frames median-stacked for the solve (more stars, no cosmic rays)
-scale_err_pct = 20         # tolerance on the plate scale computed from the site's optics
-scale_hint = true          # send a plate-scale hint (site optics, or scale_arcsec); false = blind solve
-scale_arcsec = 0.0         # override the plate scale, arcsec/px (0 = from the site's optics)
+scale_err_pct = 20         # tolerance on the plate scale from the recording (or fallback) optics
+scale_hint = true          # send a plate-scale hint (recording or fallback optics, or scale_arcsec); false = blind
+scale_arcsec = 0.0         # override the plate scale, arcsec/px (0 = from the recording or fallback optics)
 center_hint = true         # send the recording's own RA/Dec (ADV metadata) as the field centre
 public = false             # let astrometry.net show the image publicly
 
