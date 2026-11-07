@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -277,12 +278,16 @@ def parse_radec(text: str) -> Optional[tuple[float, float]]:
 
 
 def find_star(text: str, wcs, shape: tuple, catalog=None, epoch: Optional[float] = None,
-              simbad: bool = True, log=print) -> Optional[dict]:
+              simbad: bool = True, log=print, times: Optional[tuple[float, float]] = None,
+              site: Optional[dict] = None) -> Optional[dict]:
     """A star given by name or position for marking it on the image: {'name', 'ids', 'gmag',
     'vmag', 'ra', 'dec', 'source'} or None.
     Gaia DR3 / UCAC4 / TYC / HIP names are looked for in the local catalogue in the solved field
     (offline, also stars too faint to show); RA/Dec text is named after the catalogue star within
-    5"; anything else (HD 197161, ...) is asked from SIMBAD (simbad=True)."""
+    5"; an asteroid ('(476) Hedwig', '2003 SB60') gives the star on its path during the recording
+    (times: first and last JD; site: {'lat', 'lon', 'alt_m'}; wcs.asteroid, JPL Horizons) with
+    'asteroid' set; anything else (HD 197161, ...) is asked from SIMBAD (simbad=True), and a name
+    SIMBAD does not know from Horizons as an asteroid name."""
     from .localcat import parse_star_id, star_entry
     h, w = shape[:2]
     ra0, dec0 = (float(v) for v in wcs.pixel_to_world_values((w - 1) / 2, (h - 1) / 2))
@@ -292,8 +297,9 @@ def find_star(text: str, wcs, shape: tuple, catalog=None, epoch: Optional[float]
     out = None
     if catalog is not None and parse_star_id(text) is not None:
         out = catalog.find(text, ra0, dec0, radius, epoch)
-        if out is None:
-            log(f'{text}: not in the local catalogue within {radius / 60:.0f}\' of the field centre')
+        if out is None:                     # the catalogue has the field: SIMBAD would not help
+            log(f'not in the local catalogue within {radius / 60:.0f}\' of the field centre')
+            return None
     pos = parse_radec(text) if out is None else None
     if pos is not None:
         hit = catalog.cone(*pos, 5.0, epoch) if catalog is not None else []
@@ -303,14 +309,20 @@ def find_star(text: str, wcs, shape: tuple, catalog=None, epoch: Optional[float]
         out.setdefault('vmag', None)
         out['source'] = 'Gaia DR3 (local)' if out.get('ids') else 'position'
         return out
+    from . import asteroid
+    body = asteroid.parse_asteroid(text) if pos is None and parse_star_id(text) is None else None
+    if body is not None:
+        return asteroid.target(body, catalog, epoch, times, site, log)
     if simbad:
         try:
             hit = simbad_object(text)
         except Exception as e:                  # no network, no astroquery, timeout
             log(f'SIMBAD: {e}')
-            return None
+            hit = None
         if hit is not None:
             return {**hit, 'gmag': None, 'source': 'SIMBAD'}
+        if times is not None and parse_star_id(text) is None and re.search(r'[A-Za-z]{3}', text):
+            return asteroid.target(asteroid.body_by_name(text), catalog, epoch, times, site, log)
     return None
 
 

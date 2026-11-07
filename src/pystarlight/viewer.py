@@ -19,8 +19,8 @@ Keys    left / right   previous / next frame      page up / down  -/+ 25 frames
         n              rename nearest aperture (text box at the top: Enter applies, Esc cancels)
         1 / 2          show the aperture under the mouse in zoom view 1 / 2 (right side)
         a              run the analysis from this frame to the end (Optimal box: photometry)
-        A              automatic apertures: the target from the star field (else the recording's
-                       TARGET-STAR), references picked over the field ([auto] in the config)
+        A, Auto        automatic apertures: the star typed in the star field as the target (else the
+                       recording's TARGET-STAR), references picked over the field ([auto] in the config)
         e              send <movie>.event.json to PySyzygos' observation report (also Send)
         s / l          save / load apertures (<movie>.apertures.json)
         p              plate-solve again (cached as <movie>.wcs.fit; automatic on opening when cached
@@ -45,6 +45,7 @@ import threading
 import time
 import warnings
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
 import matplotlib.pyplot as plt
@@ -69,6 +70,29 @@ MOVIE_PATTERNS = '*.ravf *.ser *.adv *.aav *.avi *.mov *.fit *.fits *.fts'
 FITS_SUFFIXES = ('.fit', '.fits', '.fts')
 NAV_KEYS = ('left', 'right', 'pageup', 'pagedown', 'home', 'end', 'n', 'N', 'a', 's', 'l', 'p', 'i', 'u',
             'e', '1', '2')
+
+
+class QuickTextBox(TextBox):
+    """matplotlib's TextBox, but redrawn when the GUI is idle instead of at every key: a full
+    redraw of a large frame takes ~0.2 s, so typing stalled."""
+
+    def _rendercursor(self):
+        fig = self.ax.figure
+        text = self.text_disp.get_text()
+        widthtext = text[:self.cursor_index]
+        bb_text = self.text_disp.get_window_extent(fig.canvas.get_renderer())
+        self.text_disp.set_text(widthtext or ',')
+        bb_widthtext = self.text_disp.get_window_extent(fig.canvas.get_renderer())
+        if bb_text.y0 == bb_text.y1:                # no text: the cursor gets its height
+            bb_text.y0 -= bb_widthtext.height / 2
+            bb_text.y1 += bb_widthtext.height / 2
+        elif not widthtext:
+            bb_text.x1 = bb_text.x0
+        else:
+            bb_text.x1 = bb_text.x0 + bb_widthtext.width
+        self.cursor.set(segments=[[(bb_text.x1, bb_text.y0), (bb_text.x1, bb_text.y1)]], visible=True)
+        self.text_disp.set_text(text)
+        fig.canvas.draw_idle()
 
 
 def free_matplotlib_keys(keys):
@@ -292,6 +316,7 @@ class Viewer:
         self.apertures: list[Aperture] = []
         self.index = 0
         self._job: Optional[threading.Thread] = None
+        self._jobs = {}               # _background: name -> job (star lookups, auto placement)
         self._progress = (0, 0)
         self._live = None             # (frame, {name: values}) latest result while analysing
         self._live_shown = 0.0
@@ -388,20 +413,24 @@ class Viewer:
         self.fig.add_artist(self.cheat_sheet())
         # rename (n): a text box at the top, shown while typing
         self._rename_ax = self.fig.add_axes([0.70, 0.951, 0.14, 0.032])
-        self._rename_box = TextBox(self._rename_ax, 'new name ')
+        self._rename_box = QuickTextBox(self._rename_ax, 'new name ')
         self._rename_box.on_submit(self._rename_submit)
         self._rename_ax.set_visible(False)
         self._rename_box.set_active(False)
         self._renaming = None         # the aperture being renamed
         # star field (top): Gaia DR3 / UCAC4 / TYC / HIP name or RA/Dec -> marker; Set target puts
         # the target aperture there
-        self._star_ax = self.fig.add_axes([0.47, 0.951, 0.15, 0.032])
-        self._star_box = TextBox(self._star_ax, 'star ')
+        self._star_ax = self.fig.add_axes([0.47, 0.951, 0.14, 0.032])
+        self._star_box = QuickTextBox(self._star_ax, 'star ')
         self._star_box.on_submit(self._star_submit)
         self._star_setting = False    # set_val submits too: not a lookup then
-        self._set_target_ax = self.fig.add_axes([0.625, 0.951, 0.065, 0.032])
+        self._set_target_ax = self.fig.add_axes([0.615, 0.951, 0.065, 0.032])
         self._set_target_button = Button(self._set_target_ax, 'Set target')
         self._set_target_button.on_clicked(lambda e: self.target_to_marker())
+        # Auto: the star typed there as the target (Enter not needed) and references picked (A)
+        self._auto_ap_ax = self.fig.add_axes([0.685, 0.951, 0.04, 0.032])
+        self._auto_ap_button = Button(self._auto_ap_ax, 'Auto')
+        self._auto_ap_button.on_clicked(lambda e: self.auto_from_field())
         self.marker = None            # the star entered: wcs.identify.find_star dict
         self._marker_artists = []
         self._solved_stack = None     # (wcs, median stack of the solved frames) for the drift
@@ -1277,6 +1306,34 @@ class Viewer:
         y0 = int(np.clip(round(y) - c, 0, h - self.size))
         return x0, y0
 
+    DOUBLE_PX = 4.0                   # two star apertures closer than this measure the same star
+
+    def drop_doubles(self) -> list[str]:
+        """Remove star apertures on the same star as another one (centres within DOUBLE_PX): the
+        target is kept before a reference, a reference before a check star, the older before the
+        newer. A reference on the target's star puts the target into its own normalisation and
+        hides the event. Returns the names removed (and says so)."""
+        rank = {'target': 0, 'reference': 1, 'check': 2}
+        stars = sorted((a for a in self.apertures if a.role in rank or (not a.role and a.color != 'white')),
+                       key=lambda a: rank.get(a.role, 3))
+        kept, gone = [], []
+        for a in stars:
+            cx, cy = self.centre_of(a)
+            twin = next((k for k in kept if np.hypot(cx - self.centre_of(k)[0], cy - self.centre_of(k)[1])
+                         < self.DOUBLE_PX), None)
+            if twin is None:
+                kept.append(a)
+            else:
+                gone.append((a, twin))
+        for a, _ in gone:
+            self.apertures.remove(a)
+            self.ap_stars.pop(a.name, None)
+            self.ap_checks.pop(a.name, None)
+        if gone:
+            self.draw_apertures()
+            self.say('removed ' + ', '.join(f'{a.name} (on the same star as {t.name})' for a, t in gone))
+        return [a.name for a, _ in gone]
+
     def set_role(self, x, y, role):
         a = self.nearest(x, y)
         if a is None:
@@ -1298,6 +1355,8 @@ class Viewer:
         if role == 'sky':
             a.x0, a.y0 = self.place_sky(x, y)
         self.draw_apertures()
+        if role == 'target' and self.drop_doubles():
+            return
         self.warn_if_saturated(a)
         self.update_zooms()
         self.update_result()
@@ -1336,9 +1395,8 @@ class Viewer:
             self._star_setting = False
 
     def _star_submit(self, text):
-        """Enter in the star field: look the star up (wcs.identify.find_star: local Gaia DR3 by
-        DR3 / UCAC4 / TYC / HIP name in the solved field, RA/Dec, else SIMBAD) and mark it.
-        An empty field removes the marker."""
+        """Enter in the star field (or leaving it): look the star up in the background
+        (lookup_star) and mark it. An empty field removes the marker."""
         if self._star_setting:
             return
         text = text.strip()
@@ -1351,30 +1409,137 @@ class Viewer:
         if self.wcs is None:
             self.say('the star marker needs the plate solution: press p first')
             return
+        if self.marker is not None and text == self.marker.get('query'):
+            return                                  # marked already (leaving the field submits)
+        self.say(f'looking up {text} ...')
+        ctx = self._lookup_context()
+        self._background('lookup', lambda: self.lookup_star(text, ctx),
+                         lambda st, err: self._lookup_done(text, st, err))
+
+    def _lookup_context(self) -> dict:
+        """What a star lookup needs, taken on the GUI thread (lookup_star runs in a worker)."""
+        from .wcs.reduce import decimal_year
+        date, tm = getattr(self, '_frame_date', (None, None))
+        return {'wcs': self.wcs, 'shape': self.image.shape, 'epoch': decimal_year(date, tm),
+                'simbad': not self._skip_ident, 'times': self.recording_jd(), 'site': self.recording_site()}
+
+    def lookup_star(self, text: str, ctx: dict) -> Optional[dict]:
+        """The star field's entry for `text` (wcs.identify.find_star: catalogue names in the local
+        Gaia DR3 of the solved field, RA/Dec, an asteroid's occulted star via JPL Horizons, else
+        SIMBAD), with 'query'; None if not found. Blocking (network): worker threads only."""
         from .wcs.identify import find_star
         from .wcs.localcat import local_catalog
-        from .wcs.reduce import decimal_year
         try:
             catalog = local_catalog(self.cfg)
         except Exception:
             catalog = None
-        date, tm = getattr(self, '_frame_date', (None, None))
-        self.say(f'looking up {text} ...')
-        st = find_star(text, self.wcs, self.image.shape, catalog, decimal_year(date, tm),
-                       simbad=not self._skip_ident, log=self.say_job)
-        if st is None:
-            self.say(f'{text}: not found (DR3, UCAC4, TYC, HIP name in the field, RA Dec, or a SIMBAD name)')
+        st = find_star(text, ctx['wcs'], ctx['shape'], catalog, ctx['epoch'], simbad=ctx['simbad'],
+                       log=lambda m: setattr(self, '_lookup_msg', m), times=ctx['times'], site=ctx['site'])
+        return None if st is None else {**st, 'query': text}
+
+    def _lookup_done(self, text, st, err):
+        if err is not None or st is None:
+            why = getattr(self, '_lookup_msg', '') or (f'{err!r}' if err is not None else '')
+            self._lookup_msg = ''
+            self.say(f'{text}: not found (DR3, UCAC4, TYC, HIP name in the field, RA Dec, an asteroid '
+                     f'such as (476) Hedwig, or a SIMBAD name)' + (f'; {why}' if why else ''))
             return
-        self.marker = {**st, 'query': text}
+        self.set_marker(st)
+        xy = self.marker_xy()
+        where = (f'at x={xy[0]:.1f} y={xy[1]:.1f}' if xy is not None and self._inside(*xy)
+                 else 'outside this frame')
+        self.say(f'marked {self.marker_label()} {where}{self._asteroid_note()}; '
+                 'Set target puts the target aperture there')
+
+    def set_marker(self, st: dict):
+        """The star field's marker (kept in <movie>.target.json), its text in the field."""
+        self.marker = st
         try:
             self.marker_file.write_text(json.dumps(self.marker, indent=1))
         except OSError:
             pass
+        self._star_setting = True
+        self._star_box.set_val(st.get('query') or st.get('name', ''))
+        self._star_setting = False
         self.draw_marker()
-        xy = self.marker_xy()
-        where = (f'at x={xy[0]:.1f} y={xy[1]:.1f}' if xy is not None and self._inside(*xy)
-                 else 'outside this frame')
-        self.say(f'marked {self.marker_label()} {where}; Set target puts the target aperture there')
+
+    def _asteroid_note(self) -> str:
+        m = self.marker or {}
+        if not m.get('asteroid'):
+            return ''
+        if m.get('path_offset_arcsec') is not None:
+            return f' ({m["path_offset_arcsec"]:.1f}" from the path of {m["asteroid"]})'
+        return ' (the asteroid itself: no catalogue star on its path)'
+
+    def recording_jd(self) -> Optional[tuple[float, float]]:
+        """(first, last) frame time of the recording as Julian days; None without time stamps."""
+        if not hasattr(self, '_recording_jd'):
+            from .wcs.asteroid import julian_day
+            try:
+                with open_movie(str(self.path)) as mv:
+                    a, b = mv.read(0), mv.read(self.n - 1)
+                    mv.close()
+                jds = (julian_day(a.date, a.time), julian_day(b.date, b.time))
+                self._recording_jd = jds if None not in jds else None
+            except Exception:
+                self._recording_jd = None
+        return self._recording_jd
+
+    def recording_site(self) -> Optional[dict]:
+        """{'lat', 'lon', 'alt_m'} of the recording (its LATITUDE / LONGITUDE / ALTITUDE), else the
+        config's [observer]; None if neither (geocentric asteroid positions then)."""
+        m = {str(k).upper(): v for k, v in (getattr(self.movie, 'metadata', {}) or {}).items()}
+        obs = self.cfg.get('observer') or {}
+        for lat, lon, alt in ((m.get('LATITUDE'), m.get('LONGITUDE'), m.get('ALTITUDE')),
+                              (obs.get('latitude'), obs.get('longitude'), obs.get('altitude'))):
+            try:
+                lat, lon = float(lat), float(lon)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(lat) and np.isfinite(lon) and (lat or lon):
+                try:
+                    alt = float(alt) if alt is not None and np.isfinite(float(alt)) else 0.0
+                except (TypeError, ValueError):
+                    alt = 0.0
+                return {'lat': lat, 'lon': lon, 'alt_m': alt}
+        return None
+
+    # ---------------------------------------------------------------- background jobs
+
+    def _background(self, name: str, work, done, interval: int = 200):
+        """work() in a thread, then done(result, error) on the GUI thread (a timer polls). A new
+        job of the same name supersedes the old one: its result is dropped."""
+        box = {}
+
+        def run():
+            try:
+                box['result'] = work()
+            except Exception as e:          # shown by done()
+                box['error'] = e
+        thread = threading.Thread(target=run, daemon=True)
+        timer = self.fig.canvas.new_timer(interval=interval)
+
+        def poll():
+            if thread.is_alive():
+                return
+            timer.stop()
+            if self._jobs.get(name) is job:
+                del self._jobs[name]
+                done(box.get('result'), box.get('error'))
+        job = SimpleNamespace(thread=thread, poll=poll)
+        self._jobs[name] = job
+        thread.start()
+        timer.add_callback(poll)
+        timer.start()
+        return job
+
+    def finish_jobs(self):
+        """Wait for the background lookups and placements and finish them (--batch, tests: the
+        Agg backend's timers never fire)."""
+        while self._jobs:
+            for job in list(self._jobs.values()):
+                job.thread.join()
+                job.poll()
 
     def marker_label(self) -> str:
         m = self.marker or {}
@@ -1470,13 +1635,21 @@ class Viewer:
         self.ap_checks.pop(t.name, None)            # the astrometric check was of the old place
         self.draw_apertures()
         self.update_zooms()
-        self.say(f'target aperture on {self.marker_label()}; u over it centres on the peak, s saves')
+        gone = self.drop_doubles()
+        self.say(f'target aperture on {self.marker_label()}'
+                 + (f' ({", ".join(gone)} was on that star: removed)' if gone else '')
+                 + '; u over it centres on the peak, s saves')
 
     # ---------------------------------------------------------------- automatic apertures
 
-    def recorded_target(self) -> tuple[str, Optional[tuple[float, float]]]:
-        """(star name, (ra, dec) or None) the camera wrote into the recording (TARGET-STAR,
-        TARGET-RA / -DEC); ('', None) if none."""
+    def recorded_target(self) -> tuple[str, Optional[tuple[float, float]], str]:
+        """(star name, (ra, dec) or None, asteroid) the recording names: the camera's TARGET-STAR,
+        TARGET-RA / -DEC; from OBJNAME the star of '(476) Hedwig occ. UCAC4 442-124351' (as
+        OccuRec writes it) when there is no TARGET-STAR, and the asteroid; '' / None if not."""
+        import re
+
+        from .wcs.asteroid import parse_asteroid
+        from .wcs.localcat import parse_star_id
         m = {str(k).upper(): v for k, v in (getattr(self.movie, 'metadata', {}) or {}).items()}
         name = str(m.get('TARGET-STAR') or '').strip()
         try:
@@ -1484,7 +1657,13 @@ class Viewer:
             radec = radec if all(np.isfinite(radec)) else None
         except (KeyError, TypeError, ValueError):
             radec = None
-        return name, radec
+        obj = str(m.get('OBJNAME') or '').strip()
+        occ = re.fullmatch(r'(.*?)\s+occ(?:\.|ults?|ulting)?\s+(.+)', obj, re.I)
+        if occ:
+            obj = occ.group(1)
+            if not name and parse_star_id(occ.group(2)) is not None:
+                name = occ.group(2).strip()
+        return name, radec, obj if obj != name and parse_asteroid(obj) is not None else ''
 
     def request_auto(self, target: Optional[str] = None, run: bool = False, solve: bool = True):
         """Automatic apertures (auto_apertures) as soon as the plate solution is there.
@@ -1499,23 +1678,28 @@ class Viewer:
             return
         self._auto_now()
 
+    def auto_from_field(self):
+        """Auto button / A: automatic apertures with the star typed in the star field as the target
+        (Enter not needed; empty: the field's marker, else the recording's). Solves first only
+        offline (p uploads)."""
+        text = self._star_box.text.strip()
+        marked = self.marker is not None and text == (self.marker.get('query') or self.marker.get('name'))
+        self.request_auto(text if text and not marked else None, solve=self.local_solver)
+
     def _auto_now(self):
         req, self._auto = self._auto, None
-        if req is None:
-            return
-        self._auto_ok = self.auto_apertures(req['target'])
-        if self._auto_ok and req['run']:
-            self.run()
+        if req is not None:
+            self.auto_apertures(req['target'], run=req['run'])
 
-    def _drift(self) -> tuple[float, float]:
-        """How far the field moves from the frame shown to the end of the recording (phase
+    def _drift(self, index: int) -> tuple[float, float]:
+        """How far the field moves from frame `index` to the end of the recording (phase
         correlation of stacks there and of the last frames): a star at p ends at p - (dx, dy)."""
         from skimage.registration import phase_cross_correlation
 
         from .wcs.solve import stack_frames
         count = int(self.cfg['astrometry']['stack_frames'])
         with open_movie(str(self.path)) as mv:
-            here = stack_frames(mv, self.index, count)
+            here = stack_frames(mv, index, count)
             last = stack_frames(mv, max(0, self.n - count), count)
             mv.close()
         try:
@@ -1525,56 +1709,81 @@ class Viewer:
             return 0.0, 0.0
         return float(dx), float(dy)
 
-    def auto_apertures(self, target: Optional[str] = None) -> bool:
-        """A (and --auto): replace the apertures by a target and references picked from the field.
+    def auto_apertures(self, target: Optional[str] = None, run: bool = False):
+        """A / Auto (and --auto): replace the apertures by a target and references picked from
+        the field. The lookups and the star search run in the background (_auto_done places them);
+        run: then analyse. self._auto_ok: None while busy, then whether a target and references
+        were set.
 
-        The target is the first of: `target` (a name or RA/Dec), the star field's marker, the
-        recording's TARGET-STAR (else its TARGET-RA / -DEC), the target aperture already there.
-        Names and RA/Dec need the plate solution. The target aperture sits where the solution
-        puts the star, even when it is faint (the tracking fits it from there).
-        References: autopick.pick_references on the frame shown, [auto] settings, the drift
-        over the recording kept inside the frame. Returns True when a target and references are set."""
+        The target is the first of: `target` (a name, RA/Dec or an asteroid), the star field's
+        marker, the recording's TARGET-STAR (else its TARGET-RA / -DEC, else an asteroid in
+        OBJNAME), the target aperture already there. Names and RA/Dec need the plate solution. The
+        target aperture sits where the solution puts the star, even when it is faint (the tracking
+        fits it from there). References: autopick.pick_references on the frame shown, [auto]
+        settings, the drift over the recording kept inside the frame."""
         from . import autopick
         from .wcs.solve import stamp_rows
-        ac = self.cfg.get('auto', {})
-        old_target = next((a for a in self.apertures if a.role == 'target'), None)
-        rec_name, rec_radec = self.recorded_target()
+        rec_name, rec_radec, rec_asteroid = self.recorded_target()
         queries = [q for q in (target,) if q]
         if not queries and self.marker is None:
             radec_text = f'{rec_radec[0]:.6f} {rec_radec[1]:.6f}' if rec_radec else ''
-            queries = [q for q in (rec_name, radec_text) if q]
+            queries = [q for q in (rec_name, radec_text, rec_asteroid) if q]
         note = ''
         if queries and self.wcs is None:
             note, queries = f'; {queries[0]}: needs the plate solution (p)', []
-        for q in queries:                           # looked up and marked, as typed in the star field
-            self.marker = None
-            self._star_submit(q)
-            if self.marker is not None:
-                if q is not queries[0] and not self.marker.get('ids'):    # by the recorded RA/Dec
-                    self.marker['name'] = rec_name
-                self._star_setting = True
-                self._star_box.set_val(q)
-                self._star_setting = False
-                break
-        keep = [old_target] if old_target is not None and self.marker is None else []
+        self._jobs.pop('lookup', None)              # a star-field lookup still going: superseded
+        ctx = self._lookup_context() if queries else None
+        index, image = self.index, np.asarray(self.image, np.float64)
+        self._auto_ok = None
+        self.say('auto: ' + (f'looking up {queries[0]}, ' if queries else '') + 'finding the stars ...')
+
+        def work():
+            found = None
+            for q in queries:
+                found = self.lookup_star(q, ctx)
+                if found is not None:
+                    if q == queries[0] or found.get('ids') or found.get('asteroid'):
+                        break
+                    found['name'] = rec_name or found.get('name', '')   # by the recorded RA/Dec
+                    break
+            stamp = stamp_rows(image)                # one frame: sharp stars, their true peaks
+            return found, autopick.candidates(image, stamp=stamp), stamp, self._drift(index)
+        self._background('auto', work, lambda res, err: self._auto_done(res, err, queries, note, index, run))
+
+    def _auto_done(self, res, err, queries, note, index, run):
+        from . import autopick
+        if err is not None:
+            self._auto_ok = False
+            self.say(f'auto failed: {err!r}')
+            return
+        found, stars, stamp, drift = res
+        if index != self.index:
+            self.go(index)                           # the stars were found on that frame
+        if queries and found is None:
+            why = getattr(self, '_lookup_msg', '')
+            self._lookup_msg = ''
+            note = f'; {queries[0]}: not found' + (f' ({why})' if why else '') + note
+        if found is not None:
+            self.set_marker(found)
+        old_target = next((a for a in self.apertures if a.role == 'target'), None)
+        use_marker = found is not None or (not queries and self.marker is not None)
+        keep = [old_target] if old_target is not None and not use_marker else []
         for a in self.apertures:
             if a not in keep:
                 self.ap_stars.pop(a.name, None)
                 self.ap_checks.pop(a.name, None)
         self.apertures = keep
         self._track = None                          # tracks of the last run: other apertures now
-        if self.marker is not None:
+        if use_marker:
             self.target_to_marker()
         t = next((a for a in self.apertures if a.role == 'target'), None)
-
-        image = np.asarray(self.image, np.float64)  # one frame: sharp stars, their true peaks
-        stamp = stamp_rows(image)
-        stars = autopick.candidates(image, stamp=stamp)
+        ac = self.cfg.get('auto', {})
         avoid = (self.centre_of(t),) if t is not None else ()
         level, _ = self.saturation_level()
-        refs = autopick.pick_references(stars, image.shape, n=int(ac.get('references', 5)), box=self.size,
-                                        full_scale=level, max_peak=float(ac.get('max_peak', 0.8)),
-                                        min_snr=float(ac.get('min_snr', 20.0)), drift=self._drift(),
+        refs = autopick.pick_references(stars, self.image.shape, n=int(ac.get('references', 5)),
+                                        box=self.size, full_scale=level,
+                                        max_peak=float(ac.get('max_peak', 0.8)),
+                                        min_snr=float(ac.get('min_snr', 20.0)), drift=drift,
                                         avoid=avoid, stamp=stamp)
         pm, r = self.cfg['pymovie'], self.roles['reference']
         for c in refs:
@@ -1591,10 +1800,13 @@ class Viewer:
                 left[c.note] = left.get(c.note, 0) + 1
         why = ', '.join(f'{v} {k}' for k, v in sorted(left.items(), key=lambda kv: -kv[1]))
         what = (f'target {self.marker_label() if self.marker is not None else t.name}'
+                + (self._asteroid_note() if self.marker is not None else '')
                 if t is not None else 'NO target (enter the star, or click it and press t)')
         self.say(f'auto: {what}; {len(refs)} references of {len(stars)} stars'
                  + (f' (left out: {why})' if why else '') + note + '; a runs, s saves')
-        return t is not None and bool(refs)
+        self._auto_ok = t is not None and bool(refs)
+        if self._auto_ok and run:
+            self.run()
 
     def start_rename(self, a):
         """n: type the new name in the text box at the top; Enter applies, Esc cancels."""
@@ -1604,6 +1816,7 @@ class Viewer:
         self._rename_ax.set_visible(True)
         self._star_ax.set_visible(False)        # the rename label runs over them
         self._set_target_ax.set_visible(False)
+        self._auto_ap_ax.set_visible(False)
         self._rename_box.set_active(True)
         self._rename_box.begin_typing()
         self._rename_box.cursor_index = len(a.name)
@@ -1618,6 +1831,7 @@ class Viewer:
         self._rename_ax.set_visible(False)
         self._star_ax.set_visible(True)
         self._set_target_ax.set_visible(True)
+        self._auto_ap_ax.set_visible(True)
         self.fig.canvas.draw_idle()
 
     def _rename_submit(self, text):
@@ -1714,8 +1928,8 @@ class Viewer:
             self.update_zooms()
         elif k == 'a':
             self.run()
-        elif k == 'A':                      # solves first only offline (p uploads)
-            self.request_auto(solve=self.local_solver)
+        elif k == 'A':
+            self.auto_from_field()
         elif k in ('1', '2') and ev.inaxes is self.ax:
             a = self.nearest(ev.xdata, ev.ydata)
             if a:
@@ -1771,6 +1985,7 @@ class Viewer:
     def run(self):
         if self._job is not None or not self.apertures:
             return
+        self.drop_doubles()                         # one star, two apertures: never analysed so
         aps = [Aperture(**{k: getattr(a, k) for k in AP_FIELDS}) for a in self.apertures]
         start = self.index
         # names are a bonus: not while a solve / identification still runs, or after Esc
@@ -1860,6 +2075,7 @@ class Viewer:
         wait('_solve_job', self._poll_solve)
         if self._solve_job is not None:
             self._poll_solve()
+        self.finish_jobs()                          # the automatic apertures (and run)
         if getattr(self, '_auto_ok', None) is False:
             print('auto: no target or no references found: nothing analysed')
             return 1

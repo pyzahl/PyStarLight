@@ -6,13 +6,28 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Viewer froze while a star was entered: the lookup (SIMBAD can take 20 s to give up) ran in the
+  GUI thread, also when just clicking elsewhere, and every key redrew the whole window (~0.2 s).
+  Lookups and Auto now run in the background, the text boxes redraw when idle.
+- Two apertures on one star (e.g. **Set target** onto a star that had a reference): the reference
+  put the target into its own normalisation and hid the drop. Set target, `t` and Run now remove
+  the second aperture and say so (`drop_doubles`).
+- Star field: hyphenated catalogue names (`UCAC4-593-004965`, `TYC-...`); a catalogue name that
+  is not in the field says so at once instead of asking SIMBAD.
+
 ### Added
 - Analysis: **automatic apertures**. `pystarlight analyze --auto [--target STAR] [--batch] FILE`
   plate-solves, puts the target aperture on the named star (`--target`, the star field, or the
   recording's new `TARGET-STAR` / `TARGET-RA` / `TARGET-DEC`), picks references and runs;
-  `--batch` without a window, exit code 1 when nothing was found. Viewer key `A` places them.
+  `--batch` without a window, exit code 1 when nothing was found. In the viewer: type the target
+  in the star field and click **Auto** (or key `A`) to place them.
   References (`autopick.py`, config `[auto]`): not saturated, bright enough, star-shaped, alone in
   their box, inside the frame over the whole drift; the brightest first, then spread over the field.
+- Viewer star field: an **asteroid** as the target (`(476) Hedwig`, `476 Hedwig`, `2003 SB60`):
+  its path during the recording from JPL Horizons (`wcs/asteroid.py`, topocentric), the target is
+  the catalogue star on it. Auto also reads the star from OBJNAME
+  (`(476) Hedwig occ. UCAC4 442-124351`) or the asteroid in it.
 - Camera: the target star goes into the recording as `TARGET-STAR` (catalogue name once looked
   up), with `TARGET-RA` / `TARGET-DEC` (RAVF header, SER `.meta.json`).
 - Camera: **Mount** panel (INDI; menu Mount / Shift+M, a dock that can float or hide; drivers and

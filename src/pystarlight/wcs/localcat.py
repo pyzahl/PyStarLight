@@ -47,8 +47,10 @@ def tyc_name(v: int) -> str:
 def parse_star_id(text: str) -> Optional[tuple[str, int]]:
     """('source_id' | 'ucac4' | 'tyc' | 'hip', number as stored in the catalogue) of a star
     name as Occult, OWC and Gaia write it: 'Gaia DR3 2071...', 'DR3 2071...', a bare source id,
-    'UCAC4 677-089123', 'TYC 3574-1718-1', 'HIP 101769'. None if it is none of these."""
+    'UCAC4 677-089123', 'TYC 3574-1718-1', 'HIP 101769'; also hyphenated as in file names
+    ('UCAC4-593-004965', 'Gaia-DR3-2071...'). None if it is none of these."""
     t = ' '.join(text.strip().upper().replace('_', ' ').split())
+    t = re.sub(r'^(GAIA|DR3|UCAC4|TYC|HIP)-', r'\1 ', re.sub(r'^GAIA-DR3-', 'GAIA DR3 ', t))
     m = re.fullmatch(r'(?:GAIA\s*)?(?:DR3\s*)?(\d{6,20})', t)
     if m:
         return 'source_id', int(m.group(1))

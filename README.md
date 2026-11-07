@@ -407,14 +407,14 @@ All keys:
 | Home / End, buttons `\|<` `>\|` | first / last frame |
 | buttons `-10 s` / `+10 s` | jump 10 s (frame count from the timestamps) |
 | `a`, button **Run** | analyse from the current frame to the end |
-| `A` | **automatic apertures**: the target from the star field (else from the recording, see [Fully automatic](#fully-automatic-auto)), references picked over the field; replaces the apertures |
+| `A`, button **Auto** (next to **Set target**) | **automatic apertures**: the star typed in the star field is the target (Enter not needed; empty: the recording's target, see [Fully automatic](#fully-automatic-auto)), references picked over the field; replaces the apertures. Then `a` runs |
 | checkbox **Optimal** | optimal extraction (ticked) or circular apertures, see [Run](#3-run) |
 | `e`, button **Send** | send `<movie>.event.json` to PySyzygos' observation report (see [Run](#3-run)) |
 | `s` / `l` | save / load apertures (`<movie>.apertures.json`) |
 | `p` | plate-solve again (offline with a local astrometry.net, else uploads to nova.astrometry.net) |
 | `i` | identify the stars in the apertures (local catalogue, else SIMBAD); stars without a name are tried again automatically |
 | `N`, button **Names** | star names on the image on / off (default `[display] star_names`) |
-| field **star**, button **Set target** | type the target star (Gaia DR3 id, `UCAC4 634-113397`, `TYC 3574-1718-1`, `HIP ...`, RA Dec, or any SIMBAD name) and Enter: found in the local catalogue around the plate solution (offline; also stars too faint to see) and marked with open ticks and its name, following the drift frame by frame. **Set target** puts the target aperture exactly there (`u` then centres it on the peak) and names it after that star. Kept in `<movie>.target.json`; an empty field removes the marker |
+| field **star**, button **Set target** | type the target star (Gaia DR3 id, `UCAC4 634-113397` or `UCAC4-634-113397`, `TYC 3574-1718-1`, `HIP ...`, RA Dec, any SIMBAD name, or the **asteroid**: `(476) Hedwig`, `476 Hedwig`, `2003 SB60`) and Enter: found in the local catalogue around the plate solution (offline; also stars too faint to see) and marked with open ticks and its name, following the drift frame by frame. An asteroid's position during the recording comes from JPL Horizons (network; topocentric with the recording's site), and the target is the catalogue star within 15″ of its path (else the asteroid's own position). Lookups run in the background: the window keeps responding while SIMBAD or Horizons think. **Set target** puts the target aperture exactly there (`u` then centres it on the peak) and names it after that star. Kept in `<movie>.target.json`; an empty field removes the marker |
 | Esc | stop plate solving / star identification |
 | ctrl+o, button **Open** | open another recording (file dialog) |
 | `f` | full screen (matplotlib) |
@@ -431,11 +431,14 @@ uv run pystarlight analyze --batch --auto RUN.ravf               # no window: re
 
 `--auto` plate-solves (offline, or with an upload to nova.astrometry.net when there is no local
 solver: `--auto` is the request), places the apertures and runs. Key `A` in the viewer places them
-only (solving first only offline).
+only (solving first only offline): type the target in the star field at the top, click
+**Auto** next to **Set target**, check the boxes, press `a`.
 
 - **Target:** `--target` (any name the star field takes, or RA Dec), else the star field's entry
   (`<movie>.target.json`), else the recording's `TARGET-STAR` / `TARGET-RA` / `TARGET-DEC` (the
-  camera writes them, see [CAPTURE.md](CAPTURE.md)), else a target aperture already placed. The
+  camera writes them, see [CAPTURE.md](CAPTURE.md)), else OBJNAME: its star in
+  `(476) Hedwig occ. UCAC4 442-124351` (OccuRec), or the asteroid alone, else a target aperture
+  already placed. The
   aperture goes where the plate solution puts the star, faint or not.
 - **References:** stars of the frame shown, of which [`[auto]`](src/pystarlight/config_template.toml)
   `references` (5) are taken: the brightest first, then always the one farthest from those

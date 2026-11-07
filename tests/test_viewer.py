@@ -702,6 +702,8 @@ def test_star_field_marks_a_catalogue_star_and_sets_the_target(movie, monkeypatc
     monkeypatch.setattr(localcat, 'local_catalog', lambda cfg=None: Cat())
     monkeypatch.setattr(identify, 'simbad_object', lambda name, timeout=0: None)
     v._star_box.set_val('tyc 3574 1718 1')
+    assert v.status.get_text() == 'looking up tyc 3574 1718 1 ...'     # in the background
+    v.finish_jobs()
     assert v.status.get_text().startswith('marked TYC 3574-1718-1  G 9.9 at')
     x, y = v.marker_xy()
     dx, dy = v._marker_shift[0]                     # the solution's stack vs this (shaken) frame
@@ -713,6 +715,7 @@ def test_star_field_marks_a_catalogue_star_and_sets_the_target(movie, monkeypatc
     assert len(v.apertures) == 1 and abs(t.center[0] - x) <= 1 and abs(t.center[1] - y) <= 1
     assert v.ap_stars[t.name].name == 'TYC 3574-1718-1' and v.ap_stars[t.name].gmag == 9.89
     v._star_box.set_val('HD 1')                     # not in the field, SIMBAD has nothing
+    v.finish_jobs()
     assert 'not found' in v.status.get_text() and v.marker['name'] == 'TYC 3574-1718-1'
     v2 = Viewer(str(movie))                         # the entry comes back with the movie
     assert v2.marker['name'] == 'TYC 3574-1718-1' and v2._star_box.text == 'tyc 3574 1718 1'
@@ -770,12 +773,14 @@ def test_tk_hint_names_the_python_and_the_fix(monkeypatch):
 def test_auto_key_picks_references_and_keeps_the_clicked_target(movie):
     v = Viewer(str(movie))                                  # no plate solution: no names, no upload
     key(v, 'A')
+    v.finish_jobs()
     assert 'NO target' in v.status.get_text() and len(v.apertures) == 3
     assert {a.role for a in v.apertures} == {'reference'}
     (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
     v.apertures = []
     click(v, c1, r1)                                        # the first click is the target
     key(v, 'A')
+    v.finish_jobs()
     t = [a for a in v.apertures if a.role == 'target']
     refs = [a for a in v.apertures if a.role == 'reference']
     assert len(t) == 1 and abs(t[0].center[0] - c1) <= 6 and abs(t[0].center[1] - r1) <= 6
@@ -841,3 +846,33 @@ def test_batch_without_a_target_analyses_nothing(movie, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert 'plate solve failed: no solver here' in out and 'nothing analysed' in out
     assert not movie.with_suffix('.csv').exists()
+
+
+def test_auto_button_takes_the_star_typed_in_the_field(movie, monkeypatch):
+    v = Viewer(str(movie))
+    calls = []
+    monkeypatch.setattr(Viewer, 'request_auto', lambda self, target=None, run=False, solve=True:
+                        calls.append((target, solve)))
+    v._star_setting = True                          # typed, Enter not pressed
+    v._star_box.set_val('  TYC 3574-1718-1 ')
+    v._star_setting = False
+    v._auto_ap_button._observers.process('clicked', None)
+    v.marker = {'name': 'TYC 3574-1718-1', 'query': 'TYC 3574-1718-1'}   # already marked: use it
+    key(v, 'A')
+    assert calls == [('TYC 3574-1718-1', False), (None, False)]
+
+
+def test_a_reference_on_the_target_star_is_removed(movie):
+    """Set target / t onto a star that has a reference already: the reference goes (it would put
+    the target into its own normalisation and hide the drop); Run checks again."""
+    v = Viewer(str(movie))
+    (r0, c0, _), (r1, c1, _), (r2, c2, _) = STARS
+    click(v, c1, r1)                                # target
+    click(v, c0, r0)                                # ref1
+    click(v, c2, r2)                                # ref2
+    key(v, 't', c0, r0)                             # the target onto ref1's star: ap1 kept as target
+    assert [(a.name, a.role) for a in v.apertures] == [('ap1', ''), ('target', 'target'), ('ref2', 'reference')]
+    v.apertures.append(v.apertures[2].__class__(**{k: getattr(v.apertures[2], k) for k in
+                       ('name', 'x0', 'y0', 'size', 'color', 'role')}))
+    v.apertures[-1].name = 'ref3'                   # loaded from a file: twice on one star
+    assert v.drop_doubles() == ['ref3'] and 'ref3 (on the same star as ref2)' in v.status.get_text()
