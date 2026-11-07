@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
+from .ravf_writer import drop_cache
 from .station_header import protect
 
 SER_HEADER_SIZE = 178
@@ -117,6 +118,7 @@ class SerWriter:
         for f in (self.f, self.times):
             f.flush()
             os.fsync(f.fileno())
+        drop_cache(self.f.fileno())        # keep the page cache from filling up (ravf_writer)
         self.last_sync = time.monotonic()
 
     def close(self):

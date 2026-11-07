@@ -657,12 +657,36 @@ calls the library through ctypes, so it runs with the Pi's system Python too.
   `TIMESTAMP-SOURCE` "Pi clock (NTP) when the frame had arrived over USB, minus the exposure"
   and `FRAME-TIMING-ACCURACY` 20 ms. As for video devices, true time needs GPS LED flashes in
   the field. Frames the SDK dropped (`ASIGetDroppedFrames`) leave a gap in the frame numbers.
-- The comment line carries the SDK version, USB2 / USB3, ADC depth, pixel size and sensor
-  temperature; the pixel size goes into `INSTRUMENT-SENSOR-PIXEL-SIZE-X/Y` (plate-scale hint).
+- **A reader thread of its own** takes the frames from the SDK into a ring of ~512 MB (at most
+  256 frames), so the SDK's few internal buffers never wait for live view or recorder.
+- **USB bandwidth and high-speed mode** stay as the camera has them (it keeps another program's
+  settings, e.g. FireCapture's); `--asi-bandwidth PCT` (40 .. 100) and `--asi-high-speed on/off`
+  set them. The start-up line `ASI: ...` and the recording's comment say what was used.
+- The comment line carries the SDK version, USB2 / USB3, ADC depth, pixel size, USB bandwidth,
+  high-speed mode and sensor temperature; the pixel size goes into
+  `INSTRUMENT-SENSOR-PIXEL-SIZE-X/Y` (plate-scale hint).
 
-Tested (2026-11-07) with an ASI178MM on USB3, PC (x86-64), SDK 1.27 (INDI's libasi): full
-frame 3096 × 2080 at 16.7 fps (16 bit) and 33 fps (8 bit), 1024 × 768 at 47.6 fps (20 ms
-exposure), time stamps 21.0 ms apart with no gaps in 238 frames.
+Tested (2026-11-07) with an ASI178MM on USB3, PC (x86-64, 8 cores, 32 GB), SDK 1.27 (INDI's
+libasi), recording to an NVMe SSD (1.8 GB/s), 1 ms exposure, `usbfs_memory_mb` 200:
+
+| region, depth, bandwidth | fps | lost |
+|---|---|---|
+| 1024 × 768, 16 bit (RAVF / SER), 60 % | 47.6 | **0** in 2855 frames (60 s); 8 before the reader thread |
+| full frame, 8 bit, 40 %, reading only (no GUI, no disk) | 23.6 | 0 in 30 s |
+| full frame, 8 bit, 40 %, written directly (no GUI) | 23.6 | 0 in 30 s |
+| full frame, 8 bit, 40 %, camera GUI recording | 22.6 .. 23.5 | 0 .. 36 in 30 s, run to run |
+| full frame, 8 bit, 60 % / 100 % | 31 / 14 | ~130 / ~1290 in 30 s |
+| full frame, 8 bit, 60 %, to a SATA QLC SSD (164 MB/s) | 26 | ~590 in 60 s, 162 of them by the recorder |
+
+The losses at full frame are stalls of 0.25 .. 1 s inside the SDK (`ASIGetVideoData` waiting,
+every Python thread idle; FireCapture drops there too). A gap-free stream: a region (or 8 bit and
+40 % bandwidth at full frame), a disk well above the stream's rate, and a check of the
+recording's frame numbers / intervals afterwards (player).
+
+**Page cache:** a recording at ~200 MB/s fills Linux's page cache; once free memory is used up
+(~15 s on this PC) the kernel's reclaim stalled the camera's USB transfers. The RAVF / SER
+writers therefore drop the pages they have synced (`posix_fadvise` DONTNEED, once a second):
+lost frames at full frame, 40 %, from 89 to 36 in 30 s.
 
 ## Timestamps: what the recordings hold
 

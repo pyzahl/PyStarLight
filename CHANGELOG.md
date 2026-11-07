@@ -7,6 +7,11 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- ZWO ASI: a reader thread of its own and a ~512 MB frame ring (1024 x 768 at 47.6 fps: 0 frames
+  lost in 60 s, 8 before); `--asi-bandwidth PCT` and `--asi-high-speed on/off` (the camera keeps
+  another program's settings; the start-up line and the recording's comment say what is used).
+- RAVF / SER writers drop the pages they have synced from the page cache (`posix_fadvise`), so a
+  fast recording doesn't fill the memory and stall the camera's USB transfers.
 - Camera GUI: exposures up to 60 s (`--max-exposure`, default now 60000 ms, was 2000). The
   slider spans up to 2 s; typing more than 2 s (or the `E` key past it) switches it to
   0.5 .. 60 s, typing less than 1 s back. Dragging never switches it.

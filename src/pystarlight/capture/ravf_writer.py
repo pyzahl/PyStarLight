@@ -113,6 +113,17 @@ def _get(entries, name, default=None):
     return next((e[2] for e in entries if e[0] == name), default)
 
 
+def drop_cache(fd):
+    """Tell the kernel the file's pages (written and synced) won't be read back: without this
+    a recording fills the page cache at the stream's rate, and once free memory is gone (~15 s
+    at 200 MB/s on a 32 GB PC) the reclaim stalls the camera's USB transfers: frames lost
+    upstream of the recorder (measured with a ZWO ASI178 at full frame). Linux; else a no-op."""
+    try:
+        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+    except (AttributeError, OSError):
+        pass
+
+
 def _f32(v):
     return float(v or 0.0)
 
@@ -282,6 +293,7 @@ class RavfWriter:
         self._write_header()
         self.f.flush()
         os.fsync(self.f.fileno())
+        drop_cache(self.f.fileno())
         self.last_sync = time.monotonic()
 
     def close(self):
