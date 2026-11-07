@@ -116,6 +116,26 @@ def test_ser_complete(tmp_path):
     assert "complete, 4 frames" in recorder.repair(str(path))
 
 
+def test_ser_records_the_bayer_pattern(tmp_path):
+    """A colour camera's SER says its Bayer pattern (ColorID), also after a repair; mono: 0."""
+    import struct
+    imgs = frames(2)
+    for fmt, cid in (("BayerBG16", 11), ("BayerRG8", 8), ("Mono16", 0)):
+        path = tmp_path / f"{fmt}.ser"
+        w = ser_writer.SerWriter(str(path), W, H, 12, {"pixel_format": fmt})
+        for i, img in enumerate(imgs):
+            w.write(img, T0 + i * 100_000_000)
+        w.sync()
+        assert struct.unpack_from("<i", path.read_bytes(), 18)[0] == cid       # while recording
+        cut = tmp_path / f"cut-{fmt}.ser"
+        cut.write_bytes(path.read_bytes())
+        shutil.copy(str(path) + ".times", str(cut) + ".times")
+        w.close()
+        assert movie.open_movie(path).color_id == cid
+        ser_writer.repair(str(cut))
+        assert struct.unpack_from("<i", cut.read_bytes(), 18)[0] == cid       # kept by repair
+
+
 def test_ser_unfinished_keeps_timestamps(tmp_path, capsys):
     imgs = frames(5)
     live = tmp_path / "live.ser"

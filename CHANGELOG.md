@@ -227,6 +227,8 @@ uses [Semantic Versioning](https://semver.org/).
   so they no longer hide "wrote ... -summary" and other messages.
 
 ### Fixed
+- SER recordings of a colour camera say their Bayer pattern (ColorID 8-11: RGGB, GRBG, GBRG,
+  BGGR), also after a repair; they were always marked mono. RAVF had it (`COLOR-TYPE`).
 - Event timing: the step fit and all figures now use mid-exposure times. They took the time
   stamps as mid-exposure, but RAVF (ASTRID, PyStarLight) stamps the exposure start: D / R times
   came out half an exposure early (0.25 s at 0.5 s exposures). Shift from the recording's

@@ -50,6 +50,14 @@ def meta_path(path):
 
 
 # RAVF entries that describe the RAVF file itself, not the recording
+# SER ColorID of a Bayer mosaic, by the pixel format's GenICam name (0: mono)
+COLOR_IDS = {"BayerRG": 8, "BayerGR": 9, "BayerGB": 10, "BayerBG": 11}    # RGGB GRBG GBRG BGGR
+
+
+def color_id(pixel_format):
+    return COLOR_IDS.get(str(pixel_format or "")[:7], 0)
+
+
 _LAYOUT = {"OFFSET-FRAMES", "OFFSET-INDEX", "FRAMES-COUNT", "IMAGE-ENDIANESS", "IMAGE-ROW-STRIDE",
            "IMAGE-FORMAT", "EQUINOX"}
 
@@ -89,6 +97,7 @@ class SerWriter:
         self.count = 0
         self.first = 0                      # ticks of the first frame
         self.text = tuple(meta.get(k, "") for k in ("observer", "instrument", "telescope"))
+        self.color_id = color_id(meta.get("pixel_format"))      # a colour camera's Bayer pattern
         self.f = open(path, "wb")
         self.times = open(times_path(path), "wb")
         write_meta(path, width, height, depth, meta)
@@ -99,7 +108,7 @@ class SerWriter:
         pos = self.f.tell()
         self.f.seek(0)
         self.f.write(_header(self.width, self.height, self.depth, self.count, self.text,
-                             self.first))
+                             self.first, self.color_id))
         self.f.seek(max(pos, SER_HEADER_SIZE))
 
     def write(self, image, exposure_ns, info=None):
@@ -134,9 +143,9 @@ class SerWriter:
         protect(self.path)                  # finished: read-only from here on
 
 
-def _header(width, height, depth, count, text, first_ticks):
+def _header(width, height, depth, count, text, first_ticks, color=0):
     local = _local_ticks(first_ticks) if first_ticks else 0
-    hdr = struct.pack(SER_HEADER, b"LUCAM-RECORDER", 0, 0, 0, width, height, depth, count,
+    hdr = struct.pack(SER_HEADER, b"LUCAM-RECORDER", 0, color, 0, width, height, depth, count,
                       *(t.encode("latin-1", "replace")[:40] for t in text), local, first_ticks)
     assert len(hdr) == SER_HEADER_SIZE
     return hdr
@@ -151,7 +160,7 @@ def repair(path):
     size = os.path.getsize(path)
     with open(path, "rb") as f:
         fields = struct.unpack(SER_HEADER, f.read(SER_HEADER_SIZE))
-    width, height, depth, count = fields[4:8]
+    color, (width, height, depth, count) = fields[2], fields[4:8]
     text = tuple(t.rstrip(b"\0").decode("latin-1") for t in fields[8:11])
     frame_bytes = width * height * (2 if depth > 8 else 1)
     tpath = times_path(path)
@@ -170,7 +179,7 @@ def repair(path):
         f.write(ticks)
         first = struct.unpack_from("<q", ticks)[0] if ticks else 0
         f.seek(0)
-        f.write(_header(width, height, depth, frames, text, first))
+        f.write(_header(width, height, depth, frames, text, first, color))
     if os.path.exists(tpath):
         os.remove(tpath)
     protect(path)
