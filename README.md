@@ -152,6 +152,11 @@ Note that each `uv sync` installs exactly the extras it names and removes the ot
 `--extra camera` on later syncs. To update: `git pull` and the same `uv sync` again, in the
 `PyStarLight` folder.
 
+uv uses Python 3.12 (`.python-version`; it downloads it if needed), whatever else is installed: a
+brand-new Python (3.15 in 2026-11) has no ready-made wheels of scikit-image and friends yet, so they
+would be compiled, which needs a C/C++ compiler. A `.venv` made earlier with another Python: delete it
+(`rm -rf .venv`) and run `uv sync` again.
+
 Without uv, plain pip works in a virtual environment (Python 3.10+, with Tk as in step 1):
 
 ```bash
