@@ -510,6 +510,7 @@ def test_exposure_slider_switches_range(monkeypatch):
                  "set_exposure_widgets", "step_exposure"):
         setattr(w, name, getattr(gui.MainWindow, name).__get__(w))
     w._quiet = gui.MainWindow._quiet
+    w.remember_camera_settings = lambda: None
     w.choose_exp_range(20e3)
     assert w.exp_range == (32.0, 2e6)
     w.set_exposure(5e6, typed=True)                       # typed 5 s: long range
@@ -527,3 +528,42 @@ def test_exposure_slider_switches_range(monkeypatch):
     w.exp_range = None
     w.set_exposure(5e6, typed=True)
     assert w.exp_range == (32.0, 1e6)
+
+
+def test_exposure_and_gain_remembered_per_camera(monkeypatch, tmp_path):
+    """Gain and exposure as last used with the camera model; --gain / --exposure win."""
+    from types import SimpleNamespace
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    try:
+        from pystarlight.capture import gui
+        from pystarlight.capture.qt import QtCore, QtWidgets
+    except ImportError as e:
+        pytest.skip(f"no Qt: {e}")
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])   # noqa: F841
+    for fmt in (QtCore.QSettings.NativeFormat, QtCore.QSettings.IniFormat):   # not the user's settings
+        QtCore.QSettings.setPath(fmt, QtCore.QSettings.UserScope, str(tmp_path / "settings"))
+
+    def window(**args):
+        sent = {}
+        c = SimpleNamespace(exp_min=32.0, exp_max=60e6, gain_min=0.0, gain_max=35.0,
+                            describe=lambda: "ZWO ASI432MM",
+                            controller=SimpleNamespace(request=lambda k, v: sent.__setitem__(k, v)))
+        w = SimpleNamespace(c=c, args=SimpleNamespace(**{"exposure": None, "gain": None, **args}),
+                            target={"exposure": 50e3, "gain": 10.9},
+                            settings=QtCore.QSettings("PyStarLight", "camera"))
+        for name in ("camera_key", "restore_camera_settings", "remember_camera_settings"):
+            setattr(w, name, getattr(gui.MainWindow, name).__get__(w))
+        return w, sent
+
+    w, sent = window()
+    w.restore_camera_settings()                 # nothing saved: the camera's own values
+    assert sent == {} and w.target == {"exposure": 50e3, "gain": 10.9}
+    w.target.update(exposure=2e3, gain=20.0)
+    w.remember_camera_settings()
+    w.settings.sync()
+    w, sent = window()
+    w.restore_camera_settings()
+    assert sent == {"exposure": 2e3, "gain": 20.0} and w.target["gain"] == 20.0
+    w, sent = window(gain=5.0)                  # an explicit --gain wins (already set by configure)
+    w.restore_camera_settings()
+    assert sent == {"exposure": 2e3}

@@ -615,6 +615,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.target = {"exposure": ctx.controller.exposure_us, "gain": ctx.controller.gain_db}
 
         self.settings = QtCore.QSettings("PyStarLight", "camera")  # layout, target, observer, telescope
+        self.restore_camera_settings()
         self.view = ImageView()
         self.view.changed.connect(self.on_view_changed)
         self.view.selected.connect(self.on_roi_selected)
@@ -747,6 +748,35 @@ class MainWindow(QtWidgets.QMainWindow):
         self.gain_spin.valueChanged.connect(self.set_gain)
         return box
 
+    def camera_key(self, what):
+        """QSettings key of a per-camera value, e.g. 'camera/ZWO ASI432MM/gain_db'."""
+        return f"camera/{self.c.describe()}/{what}"
+
+    def restore_camera_settings(self):
+        """Exposure and gain as last used with this camera model, unless --exposure / --gain
+        say otherwise (the camera itself may hold another program's values)."""
+        saved = {}
+        for what, arg, key in (("exposure", "exposure", "exposure_us"), ("gain", "gain", "gain_db")):
+            v = self.settings.value(self.camera_key(key), None)
+            if v is None or getattr(self.args, arg, None) is not None:
+                continue
+            try:
+                saved[what] = float(v)
+            except (TypeError, ValueError):
+                continue
+        if "exposure" in saved:
+            us = float(np.clip(saved["exposure"], self.c.exp_min, self.c.exp_max))
+            self.target["exposure"] = us
+            self.c.controller.request("exposure", us)
+        if "gain" in saved:
+            db = float(np.clip(saved["gain"], self.c.gain_min, self.c.gain_max))
+            self.target["gain"] = db
+            self.c.controller.request("gain", db)
+
+    def remember_camera_settings(self):
+        self.settings.setValue(self.camera_key("exposure_us"), self.target["exposure"])
+        self.settings.setValue(self.camera_key("gain_db"), self.target["gain"])
+
     def exp_ranges(self):
         """(short, long) slider ranges in us; long is None when the camera stops at 2 s."""
         lo, hi = self.c.exp_min, self.c.exp_max
@@ -804,6 +834,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.target["exposure"] = us
         self.set_exposure_widgets(us)
         self.c.controller.request("exposure", us)
+        self.remember_camera_settings()
 
     def step_exposure(self, factor):
         self.set_exposure(self.target["exposure"] * factor, typed=True)
@@ -813,6 +844,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.target["gain"] = db
         self.set_gain_widgets(db)
         self.c.controller.request("gain", db)
+        self.remember_camera_settings()
 
     def show_bits(self):
         bits = self.c.pixel_format if self.c.is_v4l2 else format_bits(self.c.pixel_format)

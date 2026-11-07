@@ -7,6 +7,8 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Camera GUI: exposure and gain are remembered per camera model and restored at start (the
+  camera itself may hold another program's values); `--exposure` / `--gain` override.
 - ZWO ASI: a reader thread of its own and a ~512 MB frame ring (1024 x 768 at 47.6 fps: 0 frames
   lost in 60 s, 8 before); `--asi-bandwidth PCT` and `--asi-high-speed on/off` (the camera keeps
   another program's settings; the start-up line and the recording's comment say what is used).

@@ -99,7 +99,7 @@ uv run pystarlight-camera --repair ~/data/*.ravf                   # finish cras
 | panel | contents |
 |---|---|
 | image | fit to the window; **mouse wheel** zooms around the cursor (up to 64×, pixels as blocks past 1:1), **left drag** pans, **double-click** fits again |
-| **Camera** | exposure (log slider + ms box; the slider spans up to 2 s, typing more than 2 s in the box switches it to 0.5 .. 60 s, typing less than 1 s back; `--max-exposure` caps it, default 60 s or the camera's limit), gain, resolution, peak value; measured frame number, rate, interval (mean ± jitter, min..max over ~200 frames), exposure read back from the camera and, in free run, its frame period; **Depth** 12 / 10 / 8 bit |
+| **Camera** | exposure and gain as last used with this camera model (kept in the GUI's settings; `--exposure` / `--gain` override), exposure (log slider + ms box; the slider spans up to 2 s, typing more than 2 s in the box switches it to 0.5 .. 60 s, typing less than 1 s back; `--max-exposure` caps it, default 60 s or the camera's limit), gain, resolution, peak value; measured frame number, rate, interval (mean ± jitter, min..max over ~200 frames), exposure read back from the camera and, in free run, its frame period; **Depth** 12 / 10 / 8 bit |
 | **Display** | as in the player and `pystarlight analyze`: **Black** / **White** point (slider + box, raw values), **Auto** (zscale of the shown image, key `a`), **Full** (0 to the largest raw value: the start setting, and after a depth change unless on Auto), **per frame** (auto levels recomputed on every frame), display **gamma** (keys `d/D`). Display only; the recording is untouched |
 | **Sensor region (ROI)** | x / y / w / h boxes, **Select** (then drag a rectangle on the image; shown in yellow until applied), **Apply**, **Full sensor**; current region |
 | **Trigger** | **GPS trigger** checkbox (off = free run, or the `--trigger hw/sw` mode), **GPS frame rate**: pick 30 / 20 / 15 / 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1.5 / 1 / 0.5 fps or type fps or a period (`250 ms`) and press Enter, **Trigger delay** (ms), **y-trigger row** (VEYE, GPS mode; see below), warnings (exposure longer than the pulse period, rate too high for the camera, pulses skipped because of the delay, no fix, anchoring to GPS UTC, frames or TIM-TP pulses off the grid), missed pulses |
@@ -677,6 +677,14 @@ libasi), recording to an NVMe SSD (1.8 GB/s), 1 ms exposure, `usbfs_memory_mb` 2
 | full frame, 8 bit, 40 %, camera GUI recording | 22.6 .. 23.5 | 0 .. 36 in 30 s, run to run |
 | full frame, 8 bit, 60 % / 100 % | 31 / 14 | ~130 / ~1290 in 30 s |
 | full frame, 8 bit, 60 %, to a SATA QLC SSD (164 MB/s) | 26 | ~590 in 60 s, 162 of them by the recorder |
+
+ASI432MM (IMX432, global shutter, 1608 × 1104, 9 µm, 12 bit left-aligned in 16), same PC, 80 %:
+
+| region, depth | fps | lost |
+|---|---|---|
+| full frame / 8 bit / 800 × 500 16 bit, reading only (5 s) | 84 / 115 / 238 | 0 |
+| 800 × 500, 16 bit, GUI recording 60 s (≈ 190 MB/s) | 247 | 51 in 14 821 (single frames) |
+| full frame, 16 bit, GUI recording 30 s (≈ 300 MB/s) | 83.9 | ~103, 88 of them by the recorder (its pipeline's limit) |
 
 The losses at full frame are stalls of 0.25 .. 1 s inside the SDK (`ASIGetVideoData` waiting,
 every Python thread idle; FireCapture drops there too). A gap-free stream: a region (or 8 bit and
