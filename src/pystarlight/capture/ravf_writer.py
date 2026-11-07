@@ -231,6 +231,11 @@ def header_entries(width, height, depth, meta):
         ["TRIGGER-DELAY-NS", UINT64, int(m("trigger_delay_ns") or 0)],
         *station_entries(meta),
     ]
+    if m("target_star"):                # the occultation star as looked up in the camera (catalogue
+        entries.append(["TARGET-STAR", UTF8, str(m("target_star"))])          # name, else as typed)
+        if m("target_ra") is not None and m("target_dec") is not None:     # deg, ICRS at the date
+            entries += [["TARGET-RA", FLOAT64, float(m("target_ra"))],
+                        ["TARGET-DEC", FLOAT64, float(m("target_dec"))]]
     if m("pixel_um"):                   # ASTRID's names for the pixel pitch (um), as stored (32 bit),
         um = struct.unpack("<f", struct.pack("<f", float(m("pixel_um"))))[0]   # so the digest matches
         entries += [["INSTRUMENT-SENSOR-PIXEL-SIZE-X", FLOAT32, um],

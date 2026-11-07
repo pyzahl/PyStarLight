@@ -56,6 +56,7 @@ the file or are read from a VTI overlay. MIT licence.
 - [Getting started](#getting-started)
   - [1. Configure (once)](#1-configure-once)
   - [2. Mark the stars](#2-mark-the-stars)
+  - [Fully automatic (`--auto`)](#fully-automatic-auto)
   - [3. Run](#3-run)
   - [Event timing: the automatic step fit](#event-timing-the-automatic-step-fit)
   - [4. Open in PyOTE](#4-open-in-pyote)
@@ -330,7 +331,7 @@ apertures of the current one are not saved on the way (`s` saves them).
 The field is **plate-solved** from a median stack of the first frames. With a
 [local astrometry.net](#optional-offline-plate-solving-local-astrometrynet) this happens offline
 as soon as the movie opens; otherwise press `p` to upload it to nova.astrometry.net in the
-background (private upload; nothing is uploaded without `p`). The result is cached as
+background (private upload; nothing is uploaded without `p` or [`--auto`](#fully-automatic-auto)). The result is cached as
 `<movie>.wcs.fit` and loaded when the movie is opened again. Burnt-in timestamp rows are blanked
 first. Hints: the recording's own RA/Dec (ADV) as the field centre, and the plate scale from the
 recording's optics, else `[fallback_equipment]` (not for a recording made more than 20 km from
@@ -406,6 +407,7 @@ All keys:
 | Home / End, buttons `\|<` `>\|` | first / last frame |
 | buttons `-10 s` / `+10 s` | jump 10 s (frame count from the timestamps) |
 | `a`, button **Run** | analyse from the current frame to the end |
+| `A` | **automatic apertures**: the target from the star field (else from the recording, see [Fully automatic](#fully-automatic-auto)), references picked over the field; replaces the apertures |
 | checkbox **Optimal** | optimal extraction (ticked) or circular apertures, see [Run](#3-run) |
 | `e`, button **Send** | send `<movie>.event.json` to PySyzygos' observation report (see [Run](#3-run)) |
 | `s` / `l` | save / load apertures (`<movie>.apertures.json`) |
@@ -418,6 +420,35 @@ All keys:
 | `f` | full screen (matplotlib) |
 | `o` | zoom rectangle (matplotlib toolbar); click the house icon to reset |
 | sliders **levels** / **gamma**, **Auto**, **per frame** | display only: drag the levels for manual black/white points (kept across frames); **Auto** returns to the automatic (zscale) stretch; **per frame** re-stretches every frame; gamma < 1 brightens faint stars. Defaults in `[display]` of the config |
+
+### Fully automatic (`--auto`)
+
+```bash
+uv run pystarlight analyze --auto RUN.ravf                       # target from the recording
+uv run pystarlight analyze --auto --target "TYC 3574-1718-1" RUN.ravf
+uv run pystarlight analyze --batch --auto RUN.ravf               # no window: results, then exit
+```
+
+`--auto` plate-solves (offline, or with an upload to nova.astrometry.net when there is no local
+solver: `--auto` is the request), places the apertures and runs. Key `A` in the viewer places them
+only (solving first only offline).
+
+- **Target:** `--target` (any name the star field takes, or RA Dec), else the star field's entry
+  (`<movie>.target.json`), else the recording's `TARGET-STAR` / `TARGET-RA` / `TARGET-DEC` (the
+  camera writes them, see [CAPTURE.md](CAPTURE.md)), else a target aperture already placed. The
+  aperture goes where the plate solution puts the star, faint or not.
+- **References:** stars of the frame shown, of which [`[auto]`](src/pystarlight/config_template.toml)
+  `references` (5) are taken: the brightest first, then always the one farthest from those
+  chosen, among the brighter good ones. Left out (and counted in the status line): saturated
+  (brightest pixel ≥ `max_peak`, 0.8, of full scale), faint (fitted peak < `min_snr`, 20, × sky
+  noise), not star-shaped (FWHM outside 0.6–1.6 × the field's median: doubles, galaxies, hot
+  pixels), at the edge (the box leaves the frame or touches a timestamp now or by the end of the
+  drift), a neighbour in its box (spoils the local background), next to the target.
+- `--batch` writes what **Run** writes (CSVs, figures, `event.json`, the field stack) and exits
+  with 1 when no target or references were found.
+
+On the test recording near Deneb the five automatic references gave the target a normalised
+scatter of 8.9 % against 9.1 % with three chosen by hand (same photometry).
 
 ### 3. Run
 
@@ -717,7 +748,8 @@ x, y = wcs.target_pixel(wcs.load_wcs(fits_path), '18h12m01s +22d07m00s')
 | `calibrate` | master dark/flat, gain and defect maps, per-aperture correction |
 | `normalize` | reference-star normalisation, relative flux, Δmag, SNR |
 | `plot` | publication figures (matplotlib) |
-| `viewer` | `pystarlight analyze`: step frames, timestamps, place apertures, run |
+| `autopick` | automatic reference stars: candidates with fit, SNR and peak, `pick_references` (left out with a reason, spread over the field) |
+| `viewer` | `pystarlight analyze`: step frames, timestamps, place apertures (by hand or `--auto`), run, `--batch` |
 | `cli` | the `pystarlight` command: analyze, player, camera, config |
 | `capture` | the camera program and the player (Qt), see [CAPTURE.md](CAPTURE.md) |
 

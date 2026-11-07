@@ -7,6 +7,14 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Analysis: **automatic apertures**. `pystarlight analyze --auto [--target STAR] [--batch] FILE`
+  plate-solves, puts the target aperture on the named star (`--target`, the star field, or the
+  recording's new `TARGET-STAR` / `TARGET-RA` / `TARGET-DEC`), picks references and runs;
+  `--batch` without a window, exit code 1 when nothing was found. Viewer key `A` places them.
+  References (`autopick.py`, config `[auto]`): not saturated, bright enough, star-shaped, alone in
+  their box, inside the frame over the whole drift; the brightest first, then spread over the field.
+- Camera: the target star goes into the recording as `TARGET-STAR` (catalogue name once looked
+  up), with `TARGET-RA` / `TARGET-DEC` (RAVF header, SER `.meta.json`).
 - Camera: **Mount** panel (INDI; menu Mount / Shift+M, a dock that can float or hide; drivers and
   connection in Mount → INDI settings…; the jog area green / red for tracking): drivers from
   the installed ones (ZWO AM5 `indi_lx200am5`, ASI EAF `indi_asi_focuser`, simulators), our own

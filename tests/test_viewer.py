@@ -765,3 +765,79 @@ def test_tk_hint_names_the_python_and_the_fix(monkeypatch):
     assert 'rm -rf .venv && uv sync --python-preference only-managed' in hint
     monkeypatch.setattr(sys, '_base_executable', '/home/x/.local/share/uv/python/cpython-3.12/bin/python3.12')
     assert 'uv python install --reinstall' in viewer.tk_hint()
+
+
+def test_auto_key_picks_references_and_keeps_the_clicked_target(movie):
+    v = Viewer(str(movie))                                  # no plate solution: no names, no upload
+    key(v, 'A')
+    assert 'NO target' in v.status.get_text() and len(v.apertures) == 3
+    assert {a.role for a in v.apertures} == {'reference'}
+    (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
+    v.apertures = []
+    click(v, c1, r1)                                        # the first click is the target
+    key(v, 'A')
+    t = [a for a in v.apertures if a.role == 'target']
+    refs = [a for a in v.apertures if a.role == 'reference']
+    assert len(t) == 1 and abs(t[0].center[0] - c1) <= 6 and abs(t[0].center[1] - r1) <= 6
+    assert len(refs) == 2 and min(abs(a.center[0] - c0) + abs(a.center[1] - r0) for a in refs) <= 12
+    msg = v.status.get_text()
+    assert msg.startswith('auto: target ') and '2 references of 3 stars' in msg
+
+
+def test_batch_auto_finds_the_recorded_target_and_writes_the_results(movie, monkeypatch, capsys):
+    """The camera's TARGET-STAR / -RA / -DEC (SER sidecar) -> target aperture via the plate
+    solution; references picked; analysed headless; files next to the movie."""
+    from astropy.wcs import WCS
+
+    from pystarlight import viewer
+    from pystarlight.capture import ser_writer
+    from pystarlight.wcs import identify, localcat, orientation, solve
+    w = WCS(naxis=2)
+    w.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    w.wcs.crval = (310.36, 45.1)
+    w.wcs.crpix = (160, 120)
+    w.wcs.cd = [[0, 2.07 / 3600], [2.07 / 3600, 0]]
+    (r0, c0, _) = STARS[0]
+    ra, dec = (float(q) for q in w.wcs_pix2world(c0, r0, 0))
+    h, wd = movie_shape(str(movie))
+    meta = movie.with_name(movie.name + '.meta.json')
+    meta.chmod(0o644)                                       # the capture leaves it read-only
+    ser_writer.write_meta(str(movie), wd, h, 16, {'target_star': 'UCAC4 676-090000', 'target_ra': ra,
+                                                  'target_dec': dec})
+
+    class Cat:                                  # the name is not in it: found by the recorded RA/Dec
+        def find(self, *a, **kw):
+            return None
+
+        def cone(self, *a, **kw):
+            return []
+    monkeypatch.setattr(localcat, 'local_catalog', lambda cfg=None: Cat())
+    monkeypatch.setattr(identify, 'simbad_object', lambda name, timeout=0: None)
+    monkeypatch.setattr(identify, 'simbad_lookup', lambda *a, **kw: None)
+    monkeypatch.setattr(solve, 'solve_movie', lambda *a, **kw: (w, orientation(w, (h, wd))))
+    monkeypatch.setattr(solve, 'field_stars', lambda *a, **kw: [])
+    monkeypatch.setattr(Viewer, 'batch', False)             # main sets it; undone after the test
+    assert viewer.main(['--batch', '--auto', str(movie)]) == 0
+    out = capsys.readouterr().out
+    assert 'auto: target UCAC4 676-090000; 2 references of 3 stars' in out
+    aps = load_apertures(movie.with_suffix('.apertures.json'))
+    t = next(a for a in aps if a.role == 'target')
+    assert abs(t.center[0] - c0) <= 6 and abs(t.center[1] - r0) <= 6
+    assert sum(a.role == 'reference' for a in aps) == 2
+    ev = json.loads(movie.with_suffix('.event.json').read_text())
+    assert ev['target']['name'] == 'UCAC4 676-090000'
+    assert movie.with_suffix('.csv').exists()
+
+
+def test_batch_without_a_target_analyses_nothing(movie, monkeypatch, capsys):
+    from pystarlight import viewer
+    from pystarlight.wcs import solve
+
+    def fail(*a, **kw):
+        raise RuntimeError('no solver here')
+    monkeypatch.setattr(solve, 'solve_movie', fail)
+    monkeypatch.setattr(Viewer, 'batch', False)
+    assert viewer.main(['--batch', '--auto', str(movie)]) == 1
+    out = capsys.readouterr().out
+    assert 'plate solve failed: no solver here' in out and 'nothing analysed' in out
+    assert not movie.with_suffix('.csv').exists()

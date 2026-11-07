@@ -128,6 +128,13 @@ max = 0
 track = false
 normalize = false
 
+[auto]
+# automatic apertures (viewer key A, pystarlight analyze --auto): the target from --target, the
+# viewer's star field, or the recording's TARGET-STAR (camera); references picked from the field
+references = 5             # how many, spread over the field
+max_peak = 0.8             # leave out stars whose brightest pixel reaches this x full scale
+min_snr = 20.0             # peak SNR of a reference at least this (on the stacked frames)
+
 [analysis]
 mode = "global"            # "global" (all stars track together, peak fits) or "pymovie" (exact PyMovie)
 radius = 0.0               # photometry radius, px; 0 = radius_fwhm x median FWHM (follows the seeing)

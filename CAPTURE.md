@@ -286,7 +286,9 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
 - **File names** carry the target before the time:
   `MV-MIPI-IMX178M_UCAC4-634-113397_20261102T001500Z.ravf` (the catalogue name once the target was
   looked up, else the Target text as typed; spaces and other characters become `-`). No target:
-  `<camera>_<time>Z` as before. The target name also goes into the RAVF header as OBJNAME.
+  `<camera>_<time>Z` as before. The target name also goes into the RAVF header as OBJNAME, and
+  always as `TARGET-STAR`, with `TARGET-RA` / `TARGET-DEC` (degrees, ICRS at the date) once it was
+  looked up: `pystarlight analyze --auto` puts the target aperture there by itself.
   First use (2026-11-01, 400 mm f/6, 1.24"/px): Gaia DR3 1963716673315870848 -> UCAC4
   634-113397, G 11.2; brightest UCAC4 637-109640, 638-109181, 636-111806.
   With an **Asteroid** the name carries it before the star,
@@ -502,6 +504,9 @@ isn't needed on the Pi).
   5 ms: GPS otherwise, 2 ms: Pi clock), and user entries `TIMESTAMP-SOURCE`, `ROW-TIME-NS`
   (rolling-shutter line time), `ROI-X`/`ROI-Y`, `TRIGGER`, `TRIGGER-DELAY-NS` (already in the
   time stamps: a GPS-triggered frame is stamped at pulse + delay).
+- The target star, when one was entered: `TARGET-STAR` (catalogue name once looked up, else as
+  typed), `TARGET-RA` / `TARGET-DEC` (degrees, once looked up). The analysis's automatic
+  apertures (`--auto`, key `A`) start from them.
 - Station and site (see [Station data in the recording](#station-data-in-the-recording)):
   `OBSERVER-2`, `OBSERVERS-MORE`, `STATION`, `TELESCOPE-TYPE`, `APERTURE-MM`, `FOCAL-LENGTH-MM`,
   `FOCAL-REDUCER`, `MOUNT`, `OBSERVING-METHOD`, `CAMERA-DELAY-S` / `CAMERA-DELAY-APPLIED`,

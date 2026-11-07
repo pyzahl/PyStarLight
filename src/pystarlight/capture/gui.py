@@ -1524,8 +1524,12 @@ class MainWindow(QtWidgets.QMainWindow):
         rec.out_dir = os.path.expanduser(self.dir_edit.text().strip() or self.args.record_dir)
         asteroid = self.asteroid_edit.text().strip()
         # observer / telescope come from the config ([observer], station_header); the command line overrides
+        star = self.target_edit.text().strip()
+        looked_up = bool(star) and self.target_found is not None and self.target_found[0] == star
+        ra, dec = self.target_radec if looked_up and self.target_radec else (None, None)
         rec.text.update(observer=self.args.observer, telescope=self.args.telescope,
-                        objname=asteroid or self.target_name())
+                        objname=asteroid or self.target_name(), target_star=self.target_name(),
+                        target_ra=ra, target_dec=dec)   # TARGET-*: the analysis places its aperture
         # file name: <camera>_<asteroid>_<star>_<UTC>
         rec.tag = "_".join(t for t in (file_tag(asteroid), file_tag(self.target_name())) if t)
         self.settings.setValue("asteroid", asteroid)

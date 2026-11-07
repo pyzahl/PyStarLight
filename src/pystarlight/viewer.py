@@ -2,6 +2,8 @@
 
     pystarlight analyze OTEVideo/run_1/run_1.ravf      (also: pystarlight-view)
     pystarlight analyze                    (no movie: file dialog)
+    pystarlight analyze --auto [--target STAR] [--batch] RUN.ravf
+                                           (solve, place apertures, run; --batch: no window)
 
 Mouse   left click     add aperture (snaps to the star's brightest pixels; the first is the
                        target, later ones references)
@@ -17,10 +19,12 @@ Keys    left / right   previous / next frame      page up / down  -/+ 25 frames
         n              rename nearest aperture (text box at the top: Enter applies, Esc cancels)
         1 / 2          show the aperture under the mouse in zoom view 1 / 2 (right side)
         a              run the analysis from this frame to the end (Optimal box: photometry)
+        A              automatic apertures: the target from the star field (else the recording's
+                       TARGET-STAR), references picked over the field ([auto] in the config)
         e              send <movie>.event.json to PySyzygos' observation report (also Send)
         s / l          save / load apertures (<movie>.apertures.json)
         p              plate-solve again (cached as <movie>.wcs.fit; automatic on opening when cached
-                       or solved offline with solve-field, uploads to nova.astrometry.net only on p)
+                       or solved offline with solve-field, uploads to nova.astrometry.net only on p or --auto)
         i              identify the stars in the apertures (local Gaia catalogue, SIMBAD); also automatic
         N              star names on the image on / off (also the Names button)
         Esc            stop plate solving / star identification (Run then skips the names)
@@ -445,6 +449,7 @@ class Viewer:
         self.ax.format_coord = self.format_coord
         self._solve_job = None
         self._solve_msg = ''
+        self._auto = None             # request_auto: automatic apertures once solved
         # never uploads on its own: a cached solution is loaded, an offline solver (solve-field +
         # index files) solves right away, an upload to nova.astrometry.net needs key p
         from .wcs.solve import solution_path
@@ -463,14 +468,25 @@ class Viewer:
     def aperture_file(self) -> Path:
         return self.path.with_suffix('.apertures.json')
 
+    batch = False                     # --batch: no window, messages to the terminal
+
     def say(self, msg):
         self.status.set_text(msg)
         self.fig.canvas.draw_idle()
+        self._print(msg)
+
+    def _print(self, msg):
+        """--batch: each new message once; running counters (elapsed time, frame) left out."""
+        if self.batch and msg and msg != getattr(self, '_printed', None) and not msg.startswith(
+                ('analysing ...', 'plate solving (', 'naming stars (', 'identifying:', 'starting ...')):
+            self._printed = msg
+            print(msg, flush=True)
 
     def say_job(self, msg):
         """Background jobs (plate solve, identification, stacking): line below the status line."""
         self.job_status.set_text(msg)
         self.fig.canvas.draw_idle()
+        self._print(msg)
 
     def frames_per(self, seconds: float) -> int:
         """Frames in `seconds`, from the timestamps (else the file's frame rate, else 6 fps,
@@ -511,7 +527,7 @@ class Viewer:
             'u auto-center peak',
             'n rename  1 2 zoom view',
             '<- ->  1 frame  PgUp/Dn 25',
-            'a run  s/l save/load',
+            'a run  A auto  s/l save/load',
             'e send event.json',
             'p plate-solve' + (' (offline)' if self.local_solver else ' (upload)'),
             'i identify  N names',
@@ -800,8 +816,10 @@ class Viewer:
         self._solve_job = None
         if self.orient is None:
             self.say_job(self._solve_msg)
+            self._auto_now()                        # references only (no names without a solution)
             return
         self._show_solution()
+        self._auto_now()
         if self._unidentified() and not self._skip_ident:
             self.start_identify()
 
@@ -1454,6 +1472,130 @@ class Viewer:
         self.update_zooms()
         self.say(f'target aperture on {self.marker_label()}; u over it centres on the peak, s saves')
 
+    # ---------------------------------------------------------------- automatic apertures
+
+    def recorded_target(self) -> tuple[str, Optional[tuple[float, float]]]:
+        """(star name, (ra, dec) or None) the camera wrote into the recording (TARGET-STAR,
+        TARGET-RA / -DEC); ('', None) if none."""
+        m = {str(k).upper(): v for k, v in (getattr(self.movie, 'metadata', {}) or {}).items()}
+        name = str(m.get('TARGET-STAR') or '').strip()
+        try:
+            radec = (float(m['TARGET-RA']), float(m['TARGET-DEC']))
+            radec = radec if all(np.isfinite(radec)) else None
+        except (KeyError, TypeError, ValueError):
+            radec = None
+        return name, radec
+
+    def request_auto(self, target: Optional[str] = None, run: bool = False, solve: bool = True):
+        """Automatic apertures (auto_apertures) as soon as the plate solution is there.
+        solve: solve first when there is none (with an online solver this uploads the stacked
+        frames, private); else go ahead without (references only, the target as placed).
+        run: start the analysis right after."""
+        self._auto = {'target': target, 'run': run}
+        if self._solve_job is not None:
+            return                                  # _poll_solve goes on
+        if self.wcs is None and solve:
+            self.start_solve()
+            return
+        self._auto_now()
+
+    def _auto_now(self):
+        req, self._auto = self._auto, None
+        if req is None:
+            return
+        self._auto_ok = self.auto_apertures(req['target'])
+        if self._auto_ok and req['run']:
+            self.run()
+
+    def _drift(self) -> tuple[float, float]:
+        """How far the field moves from the frame shown to the end of the recording (phase
+        correlation of stacks there and of the last frames): a star at p ends at p - (dx, dy)."""
+        from skimage.registration import phase_cross_correlation
+
+        from .wcs.solve import stack_frames
+        count = int(self.cfg['astrometry']['stack_frames'])
+        with open_movie(str(self.path)) as mv:
+            here = stack_frames(mv, self.index, count)
+            last = stack_frames(mv, max(0, self.n - count), count)
+            mv.close()
+        try:
+            (dy, dx), _, _ = phase_cross_correlation(here.astype(np.float64), last.astype(np.float64),
+                                                     upsample_factor=4, normalization=None)
+        except ValueError:
+            return 0.0, 0.0
+        return float(dx), float(dy)
+
+    def auto_apertures(self, target: Optional[str] = None) -> bool:
+        """A (and --auto): replace the apertures by a target and references picked from the field.
+
+        The target is the first of: `target` (a name or RA/Dec), the star field's marker, the
+        recording's TARGET-STAR (else its TARGET-RA / -DEC), the target aperture already there.
+        Names and RA/Dec need the plate solution. The target aperture sits where the solution
+        puts the star, even when it is faint (the tracking fits it from there).
+        References: autopick.pick_references on the frame shown, [auto] settings, the drift
+        over the recording kept inside the frame. Returns True when a target and references are set."""
+        from . import autopick
+        from .wcs.solve import stamp_rows
+        ac = self.cfg.get('auto', {})
+        old_target = next((a for a in self.apertures if a.role == 'target'), None)
+        rec_name, rec_radec = self.recorded_target()
+        queries = [q for q in (target,) if q]
+        if not queries and self.marker is None:
+            radec_text = f'{rec_radec[0]:.6f} {rec_radec[1]:.6f}' if rec_radec else ''
+            queries = [q for q in (rec_name, radec_text) if q]
+        note = ''
+        if queries and self.wcs is None:
+            note, queries = f'; {queries[0]}: needs the plate solution (p)', []
+        for q in queries:                           # looked up and marked, as typed in the star field
+            self.marker = None
+            self._star_submit(q)
+            if self.marker is not None:
+                if q is not queries[0] and not self.marker.get('ids'):    # by the recorded RA/Dec
+                    self.marker['name'] = rec_name
+                self._star_setting = True
+                self._star_box.set_val(q)
+                self._star_setting = False
+                break
+        keep = [old_target] if old_target is not None and self.marker is None else []
+        for a in self.apertures:
+            if a not in keep:
+                self.ap_stars.pop(a.name, None)
+                self.ap_checks.pop(a.name, None)
+        self.apertures = keep
+        self._track = None                          # tracks of the last run: other apertures now
+        if self.marker is not None:
+            self.target_to_marker()
+        t = next((a for a in self.apertures if a.role == 'target'), None)
+
+        image = np.asarray(self.image, np.float64)  # one frame: sharp stars, their true peaks
+        stamp = stamp_rows(image)
+        stars = autopick.candidates(image, stamp=stamp)
+        avoid = (self.centre_of(t),) if t is not None else ()
+        level, _ = self.saturation_level()
+        refs = autopick.pick_references(stars, image.shape, n=int(ac.get('references', 5)), box=self.size,
+                                        full_scale=level, max_peak=float(ac.get('max_peak', 0.8)),
+                                        min_snr=float(ac.get('min_snr', 20.0)), drift=self._drift(),
+                                        avoid=avoid, stamp=stamp)
+        pm, r = self.cfg['pymovie'], self.roles['reference']
+        for c in refs:
+            x0, y0 = self.place_sky(c.x, c.y)
+            name = self._free_name(r['name'], numbered=r['max'] != 1)
+            self.apertures.append(Aperture(name, x0, y0, self.size, role='reference', color='yellow',
+                                           thresh=pm['threshold'],
+                                           default_mask_radius=pm['default_mask_radius']))
+        self.draw_apertures()
+        self.update_zooms()
+        left = {}
+        for c in stars:
+            if c.note and c.note not in ('spare', 'the target'):
+                left[c.note] = left.get(c.note, 0) + 1
+        why = ', '.join(f'{v} {k}' for k, v in sorted(left.items(), key=lambda kv: -kv[1]))
+        what = (f'target {self.marker_label() if self.marker is not None else t.name}'
+                if t is not None else 'NO target (enter the star, or click it and press t)')
+        self.say(f'auto: {what}; {len(refs)} references of {len(stars)} stars'
+                 + (f' (left out: {why})' if why else '') + note + '; a runs, s saves')
+        return t is not None and bool(refs)
+
     def start_rename(self, a):
         """n: type the new name in the text box at the top; Enter applies, Esc cancels."""
         self._renaming = None               # set_val submits: not a rename yet
@@ -1572,6 +1714,8 @@ class Viewer:
             self.update_zooms()
         elif k == 'a':
             self.run()
+        elif k == 'A':                      # solves first only offline (p uploads)
+            self.request_auto(solve=self.local_solver)
         elif k in ('1', '2') and ev.inaxes is self.ax:
             a = self.nearest(ev.xdata, ev.ydata)
             if a:
@@ -1704,6 +1848,41 @@ class Viewer:
             self.start_stack(lc)
         if (self.cfg.get('pysyzygos_observations') or {}).get('auto_send'):
             self.send_event()
+
+    def run_batch(self) -> int:
+        """--batch: plate solve, apertures (request_auto, or the saved ones), analysis and its
+        files, the field stack and the send as configured; then return (0: results written).
+        Agg timers never fire, so the jobs are polled here."""
+        def wait(job, poll):
+            while getattr(self, job, None) is not None and getattr(self, job).is_alive():
+                time.sleep(0.2)
+                poll()
+        wait('_solve_job', self._poll_solve)
+        if self._solve_job is not None:
+            self._poll_solve()
+        if getattr(self, '_auto_ok', None) is False:
+            print('auto: no target or no references found: nothing analysed')
+            return 1
+        if self._job is None and self._lc is None:
+            wait('_ident_job', self._poll_identify)
+            if self._ident_job is not None:
+                self._poll_identify()
+            if not self.apertures:
+                print('no apertures: --auto places them, or save some in the viewer (s)')
+                return 1
+            self.run()
+        wait('_job', self.poll)
+        if self._job is not None:
+            self.poll()
+        if self._lc is None:
+            return 1
+        wait('_stack_job', lambda: None)
+        if getattr(self, '_stack_job', None) is not None:
+            self._poll_stack()
+        wait('_send_job', lambda: None)
+        if getattr(self, '_send_job', None) is not None:
+            self._poll_send()
+        return 0
 
     # ---------------------------------------------------------------- stacked field image
 
@@ -2095,12 +2274,25 @@ def main(argv=None):
     p.add_argument('movie', nargs='?', help='movie file or FITS folder (default: file dialog)')
     p.add_argument('--config', help='config file (default: see pystarlight-config path)')
     p.add_argument('--calibration', help='.npz from Calibration.save() (default: [calibration] in config)')
+    p.add_argument('--auto', action='store_true',
+                   help='plate solve, place the target and references ([auto] in the config), run')
+    p.add_argument('--target', metavar='STAR',
+                   help='the target star for --auto (implies it): a catalogue or SIMBAD name or RA Dec; '
+                        "default: the viewer's star field, else the recording's TARGET-STAR")
+    p.add_argument('--batch', action='store_true',
+                   help='no window: run (with --auto or the saved apertures), write the results, exit')
     a = p.parse_args(argv)
     cfg = config_mod.load(a.config)
-    problem = gui_problem()
-    if problem:                         # say it plainly instead of a silent fallback
-        print(problem, file=sys.stderr)
-        return 1
+    if a.batch:
+        if not a.movie:
+            p.error('--batch needs a movie')
+        plt.switch_backend('agg')
+        Viewer.batch = True
+    else:
+        problem = gui_problem()
+        if problem:                     # say it plainly instead of a silent fallback
+            print(problem, file=sys.stderr)
+            return 1
     # Qt backends on Wayland: silence a harmless focus warning (see capture/qt.py)
     os.environ['QT_LOGGING_RULES'] = ';'.join(
         r for r in (os.environ.get('QT_LOGGING_RULES'), 'qt.qpa.wayland.textinput=false') if r)
@@ -2108,7 +2300,11 @@ def main(argv=None):
     if not movie:
         return 1
     # --calibration overrides the config; otherwise [calibration] clips are stacked on the first run
-    Viewer(movie, cfg, Calibration.load(a.calibration) if a.calibration else None)
+    v = Viewer(movie, cfg, Calibration.load(a.calibration) if a.calibration else None)
+    if a.auto or a.target:
+        v.request_auto(a.target, run=True)
+    if a.batch:
+        return v.run_batch()
     plt.show()
 
 
