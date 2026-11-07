@@ -446,6 +446,18 @@ STAR_COLUMNS = ('frame', 'signal', 'sum', 'area', 'bkavg', 'bkstd', 'noise', 'xc
 SKY_COLUMNS = ('frame', 'bkavg', 'bkstd', 'xc', 'yc')
 
 
+def seeing_fwhm(fits) -> Optional[float]:
+    """The seeing from several stars' peak fits: their FWHM's median weighted by the fits'
+    SNR^2 (PeakFit.weight, capped), so faint stars, whose fitted widths scatter (and come out
+    narrow on noise), hardly move it. None without a good fit."""
+    good = [(f.fwhm, f.weight) for f in fits if f.ok and np.isfinite(f.fwhm) and f.weight > 0]
+    if not good:
+        return None
+    good.sort()
+    w = np.cumsum([g[1] for g in good])
+    return float(good[int(np.searchsorted(w, w[-1] / 2))][0])
+
+
 def auto_radius(fwhms, factor: float = 1.5) -> float:
     """Photometry radius from the measured star widths: factor x median FWHM (at least
     1.5 px; 4 px without any fit). The FWHM is set by the seeing, so this adapts to it.
@@ -470,7 +482,8 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
                    cancel: Optional[threading.Event] = None) -> LightCurves:
     """Track all star apertures together and measure with sub-pixel circular apertures.
 
-    radius: photometry radius in px; default radius_fwhm x median FWHM on the first frame.
+    radius: photometry radius in px; default radius_fwhm x the seeing on the first frame
+        (seeing_fwhm: the stars' FWHM, median weighted by SNR^2).
     background: 'local' (robust mean of each aperture's box, as PyMovie), or 'sky'
         (robust mean over the sky apertures; needs at least one).
     search: px around the predicted position to look for each star (doubled once
@@ -490,8 +503,9 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
         target_drift: plus the target's interpolated own offset).
     photometry: 'aperture' (circle of `radius`) or 'optimal': Naylor's optimal extraction
         (optimal_stats) at the tracked centre, out to optimal_radius_fwhm x FWHM. The
-        profile FWHM is the frame's seeing: the median FWHM of the reference and check
-        stars' fits (not faded), running median over seeing_frames frames; so the target's
+        profile FWHM is the frame's seeing: the FWHM of the reference and check stars' fits
+        (not faded), their median weighted by SNR^2 (seeing_fwhm: faint stars' noisy widths
+        barely count), running median over seeing_frames frames; so the target's
         own (faint, during the event) fit is never needed. Per row in frame_info['psf_fwhm'];
         frame_info['radius'] then holds the FWHM (the zoom views draw it).
         With 'optimal', sum is sum(W*D) and area sum(W) (the effective number of pixels).
@@ -519,11 +533,11 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
     tr = GlobalTracker(apertures, search, rotation, min_snr, calibration, dim_fraction, fitter)
     target = next((a for a in apertures if a.role == 'target'), None)
     tr.initialize(first)
-    fw = [f.fwhm for f in (fitter(first, *tr.ref[a.name], 3, calibration=calibration)
-                           for a in tr.stars) if f.ok]
+    first_fits = [fitter(first, *tr.ref[a.name], 3, calibration=calibration) for a in tr.stars]
+    fw0 = seeing_fwhm(first_fits)
     if radius is None:
-        radius = auto_radius(fw, radius_fwhm)
-    seeing = deque([float(np.median(fw)) if fw else radius / radius_fwhm], maxlen=max(1, seeing_frames))
+        radius = auto_radius([fw0] if fw0 is not None else [], radius_fwhm)
+    seeing = deque([fw0 if fw0 is not None else radius / radius_fwhm], maxlen=max(1, seeing_frames))
     comparison = [a.name for a in tr.stars if a.role in ('reference', 'check')] or [a.name for a in tr.stars]
 
     def measure(img, cx, cy, fwhm):
@@ -539,10 +553,10 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
         img = preprocess(fr.image) if preprocess else fr.image
         in_event = event is not None and target is not None and event[0] <= fr.index <= event[1]
         centres, fits, info = tr.step(img, exclude=(target.name,) if in_event else ())
-        now = [fits[n].fwhm for n in comparison if fits[n].ok and not getattr(fits[n], 'dimmed', False)
-               and not getattr(fits[n], 'excluded', False)]
-        if now:
-            seeing.append(float(np.median(now)))
+        now = seeing_fwhm([fits[n] for n in comparison if not getattr(fits[n], 'dimmed', False)
+                           and not getattr(fits[n], 'excluded', False)])
+        if now is not None:
+            seeing.append(now)
         info['psf_fwhm'] = float(np.median(seeing))
 
         sky_vals = {}

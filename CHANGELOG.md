@@ -7,6 +7,9 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Global mode: the seeing (optimal extraction's profile FWHM, the auto radius) is the stars' FWHM
+  median weighted by SNR^2 (`seeing_fwhm`), no longer the plain median: three faint references
+  pulled it 0.1-0.2 px narrower and changed a marginal event's result.
 - ADV / AAV: D and R were **half an exposure early** (0.5 s on a 1 s DVTI recording). The reader
   takes Adv2's start-of-exposure time (as PyMovie; the file stores the middle) but the analysis
   took it as mid-exposure and never shifted it. Now `start`, shifted by half the frame's

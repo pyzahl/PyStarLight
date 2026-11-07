@@ -1217,7 +1217,14 @@ class Viewer:
         fitted centre: a circle, or optimal extraction (as the checkbox) with the median FWHM.
         Apertures do not move. Results go to the zoom views, cyan + marks and the status line;
         returns them."""
-        from .globaltrack import auto_radius, box_background, circle_stats, fit_peak, optimal_stats
+        from .globaltrack import (
+            auto_radius,
+            box_background,
+            circle_stats,
+            fit_peak,
+            optimal_stats,
+            seeing_fwhm,
+        )
 
         a_cfg = self.cfg['analysis']
         optimal = a_cfg['photometry'] == 'optimal'
@@ -1228,11 +1235,11 @@ class Viewer:
             return {}
         fits = {a.name: fitter(self.image, *self.centre_of(a), search=min(15, a.size / 2),
                                calibration=self.calibration) for a in stars}
-        fw = [f.fwhm for f in fits.values() if f.ok]
+        fw = seeing_fwhm(fits.values())
         if optimal:
-            radius = float(np.median(fw)) if fw else 3.0        # the profile FWHM (drawn in the zooms)
+            radius = fw if fw is not None else 3.0               # the profile FWHM (drawn in the zooms)
         else:
-            radius = a_cfg['radius'] or auto_radius(fw, a_cfg['radius_fwhm'])
+            radius = a_cfg['radius'] or auto_radius([fw] if fw is not None else [], a_cfg['radius_fwhm'])
         readings = {}
         for a in stars:
             f = fits[a.name]
