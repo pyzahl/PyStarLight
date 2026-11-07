@@ -696,6 +696,59 @@ recording's frame numbers / intervals afterwards (player).
 writers therefore drop the pages they have synced (`posix_fadvise` DONTNEED, once a second):
 lost frames at full frame, 40 %, from 89 to 36 in 30 s.
 
+## Mount and focuser (INDI)
+
+The camera window's **Mount** panel (menu **Mount**, Mount panel, or Shift+M; a dock: beside the
+side panel, or pulled out as a window of its own, closed when not needed; Qt remembers the
+arrangement) drives a mount through [INDI](https://www.indilib.org). The panel holds only what is
+used at the telescope (Connect, position, target, goto / sync, jog, park / home); the drivers and
+the connection are in **Mount → INDI settings…**, a window of their own. It follows ASTRID's approach: pick the drivers,
+and the program runs `indiserver` with them.
+
+- **Drivers** (INDI settings): the lists show the installed INDI drivers (from INDI's XML files in
+  `/usr/share/indi`), e.g. **ZWO AM5** (`indi_lx200am5`) and **ASI EAF** (`indi_asi_focuser`,
+  package `indi-asi`); `indi_simulator_telescope` for trying it out. Debian / Raspberry Pi OS:
+  `sudo apt install indi-bin indi-asi`. The choice is saved in the config's `[indi]`
+  (`mount_driver`, `focuser_driver`, `start_server`, `host`, `port`).
+- **USB or Wi-Fi** (INDI settings): the **Connection** list (config `mount_connection`: `usb`, `wifi` or empty for the
+  driver's default). **The AM5 driver defaults to Wi-Fi** (192.168.4.1), so USB has to be chosen;
+  the port is then the system port named ZWO (here `/dev/serial/by-id/usb-ZWO_Systems_ZWO_Device_
+  123456-if00`, i.e. `/dev/ttyACM0`), or the one typed (`mount_port`). The user needs to be in the
+  `dialout` group. Wi-Fi: the driver's address is the AM5's own hotspot (`192.168.4.1:4030`;
+  join its network); an AM5 on your own network: type its `host[:port]` in the same field. Tested (2026-11-07): an AM5 over USB, INDI 1.9.9: connects, reads position,
+  tracking and park state; its home is the driver's `GO_HOME` (element `GO`). Its clock read
+  2000-01-01 before Connect set the time.
+- A second `indiserver` on the machine (e.g. the tests' simulator next to the AM5's) gets its own
+  local socket (`-u /tmp/indiserver-<port>`; INDI 1.9 ends a second one at once otherwise).
+- **Connect** starts `indiserver` with the drivers (stopped again on Disconnect and on exit), or,
+  with "Start the INDI server here" off, connects to one at host:port (another computer, KStars /
+  Ekos). The mount gets the site (GPS fix, else `[observer]`) and the time (UTC).
+- **Status:** where the mount points (RA / Dec J2000, altitude / azimuth at the site), slewing /
+  tracking / parked, the driver's last message; one line in the status bar too.
+- **Target:** typed (`20:41:25.9 +45:16:49`, `20h41m25.9s +45d16m49s` or degrees, J2000), or
+  **From target** (the Recording panel's looked-up target) / **From last solve**.
+- **Goto** (then tracking), **Goto, no tracking** (slews with tracking on and switches it off once
+  there, as ASTRID does: some mounts ignore a slew without tracking), **Sync to target**,
+  **Abort** (INDI's `TELESCOPE_ABORT_MOTION`: stops any goto / slew / homing, and ends a running
+  Solve & sync or Center), **Tracking**, **Park / Unpark** and **Home**, both asking first (Unpark does not), **Home** (INDI 2's `TELESCOPE_HOME`, or the driver's
+  own `GO_HOME` as the AM5's in INDI 1.9; greyed out when the driver has neither).
+- **Jog:** square N / S / W / E buttons around the speed list move the mount while held; the
+  jog area's background shows tracking (light green) or not (light red), plain when not connected (INDI's `TELESCOPE_MOTION_NS` / `_WE`), at the
+  **Speed** picked from the driver's rates (AM5: 0.25x .. 1440x sidereal; remembered per mount).
+  Release stops it, also when the mouse slides off the button; a lost release is caught by the
+  next status poll (twice a second); Abort and Disconnect stop it too.
+- **Solve & sync:** a new stack (as `s`), plate-solved, and the mount synced to its centre.
+  **Center:** goto the target, solve & sync, and goto again until within 1′ (at most 4 rounds).
+- Positions are J2000 throughout; the mount gets the current epoch (`EQUATORIAL_EOD_COORD`, IAU
+  1976 precession, within 0.1″ of astropy; nutation / aberration, under 1′, go with the sync).
+  A driver with `EQUATORIAL_COORD` gets J2000 as it is.
+
+The INDI client (`capture/indi.py`) and the mount (`capture/mount.py`) use only the standard
+library (the Pi's system Python). Tested against INDI 1.9.9's telescope simulator (goto, sync,
+tracking off after a slew, the Center loop); not yet on the AM5. Next: pre-pointing a favorite
+(goto ahead with tracking, or the fixed-alt/az point for a mount that does not track) and EAF
+autofocus from the stars' FWHM.
+
 ## Timestamps: what the recordings hold
 
 **Which instant of the exposure** a recording's time stamps mark is in its header,

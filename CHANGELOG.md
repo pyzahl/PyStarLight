@@ -7,6 +7,15 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Camera: **Mount** panel (INDI; menu Mount / Shift+M, a dock that can float or hide; drivers and
+  connection in Mount → INDI settings…; the jog area green / red for tracking): drivers from
+  the installed ones (ZWO AM5 `indi_lx200am5`, ASI EAF `indi_asi_focuser`, simulators), our own
+  `indiserver` or one at host:port (config `[indi]`), USB or Wi-Fi with the port found by itself
+  (the AM5 driver's default is Wi-Fi), site and time from the GPS, position in
+  J2000 and alt / az, goto (with or without tracking), sync, tracking, abort, park, home, jog N/S/W/E at the driver's speeds (AM5 0.25x .. 1440x), **Solve &
+  sync** and **Center** (goto, solve, sync, repeat to 1′). `capture/indi.py` (an INDI XML client,
+  standard library), `capture/mount.py` (IAU 1976 precession J2000 <-> JNow, sidereal time),
+  `capture/telescope_gui.py`. Tested on INDI's telescope simulator.
 - Camera GUI: exposure and gain are remembered per camera model and restored at start (the
   camera itself may hold another program's values); `--exposure` / `--gain` override.
 - ZWO ASI: a reader thread of its own and a ~512 MB frame ring (1024 x 768 at 47.6 fps: 0 frames

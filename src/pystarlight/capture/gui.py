@@ -651,6 +651,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self.splitter)
         self.status = QtWidgets.QLabel()
         self.statusBar().addWidget(self.status, 1)
+        self.make_telescope_docks()
         view_w = int(ctx.width * self.args.scale)
         self.resize(view_w + panel_w + 20, max(int(ctx.height * self.args.scale) + 40, 600))
         self.splitter.setSizes([view_w, panel_w])
@@ -2275,9 +2276,35 @@ class MainWindow(QtWidgets.QMainWindow):
                                    f"stacking {st.count}/{st.target}" if st.state == "stacking"
                                    else "")
 
+    # ---- telescope docks (telescope_gui): hidden until wanted, arrangement remembered ----
+    def make_telescope_docks(self):
+        from .telescope_gui import MountDock
+        self.mount_status = QtWidgets.QLabel()
+        self.mount_status.setToolTip("the mount (INDI); click to show the Mount panel")
+        self.mount_status.mousePressEvent = lambda e: self.show_dock(self.mount_dock)
+        self.statusBar().addPermanentWidget(self.mount_status)
+        self.mount_dock = MountDock(self)
+        self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.mount_dock)
+        self.mount_dock.hide()
+        menu = self.menuBar().addMenu("&Mount")
+        act = self.mount_dock.toggleViewAction()
+        act.setText("Mount &panel")
+        act.setShortcut(QtGui.QKeySequence("Shift+M"))
+        menu.addAction(act)
+        menu.addAction("INDI &settings…", self.mount_dock.show_settings)
+        state = self.settings.value("dock_state")
+        if state is not None:
+            self.restoreState(state)
+
+    def show_dock(self, dock):
+        dock.show()
+        dock.raise_()
+
     def closeEvent(self, event):
         if self.solve_cancel is not None:
             self.solve_cancel.set()
+        self.settings.setValue("dock_state", self.saveState())
+        self.mount_dock.shutdown()
         self.settings.setValue("splitter", self.splitter.sizes())
         self.frame_timer.stop()
         self.status_timer.stop()

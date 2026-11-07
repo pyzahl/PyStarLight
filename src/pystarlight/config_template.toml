@@ -169,6 +169,18 @@ gaia_dir = ""
 record_before_s = 30.0     # start this long before the event ...
 record_after_s = 30.0      # ... and stop this long after it
 
+[indi]
+# Mount and focuser through INDI (the camera's Mount panel, View menu / Shift+M). Drivers by
+# executable name, e.g. "indi_lx200am5" (ZWO AM5), "indi_asi_focuser" (ZWO EAF),
+# "indi_simulator_telescope"; the panel lists the installed ones and saves the choice here.
+mount_driver = ""
+focuser_driver = ""
+start_server = true        # run indiserver with these drivers; false: connect to host:port
+host = "localhost"
+port = 7624
+mount_connection = "usb"   # "usb" (serial), "wifi" (TCP) or "" (the driver's default; the AM5's is Wi-Fi)
+mount_port = ""            # serial port, e.g. "/dev/ttyACM0"; "": the listed port named ZWO, else the only one
+
 [pysyzygos_server]
 # The camera's Favorites button: tonight's events from a PySyzygos server (its SERVER_MODE.md,
 # favorites API). url e.g. "http://home:8080"; token from 'pysyzygos gui --new-token PyStarLight'
