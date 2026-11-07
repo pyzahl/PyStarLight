@@ -1654,6 +1654,7 @@ class Viewer:
         if lc is None:
             self.say(f'analysis failed: {self._error!r}')
             return
+        self.set_time_base(lc)
         csv = self.path.with_suffix('.csv')
         stars = self.all_stars()
         notes = self.measure_saturation(lc)
@@ -1848,6 +1849,23 @@ class Viewer:
             self.say_job(msg)
         return good_refs, good_checks
 
+    def set_time_base(self, lc):
+        """Figures and the step fit on mid-exposure times: lc.time_shift_s from where the
+        recording's time stamps sit in the exposure (station.time_reference); the CSV files keep
+        the time stamps as recorded."""
+        from .station import mid_exposure_shift_s, movie_format, station_of
+        lc.time_shift_s = 0.0
+        t = plot.seconds(lc)
+        dt = np.diff(t[np.isfinite(t)])
+        interval = float(np.median(dt)) if dt.size else None
+        timing = station_of(getattr(lc, 'metadata', {}) or {}, movie_format(self.path))['timing']
+        lc.time_shift_s, how = mid_exposure_shift_s(timing, interval)
+        self._time_base = {'timestamp_reference': timing.get('timestamp_reference'),
+                           'timestamp_reference_source': timing.get('timestamp_reference_source'),
+                           'shift_to_mid_exposure_s': lc.time_shift_s, 'time_shift': how}
+        print(f'{self.path.name}: {how} ({timing.get("timestamp_reference_source")})')
+        return lc.time_shift_s
+
     def show_result(self):
         """The summary figure of the last run (drawn again in its window if that is still open)
         and its saved files."""
@@ -1951,7 +1969,8 @@ class Viewer:
         base = {'time_base_accuracy_s': tm.get('accuracy_s'), 'time_source': tm.get('source', ''),
                 'camera_delay_s': tm.get('camera_delay_s'),
                 'camera_delay_applied': tm.get('delay_applied', False),
-                'trigger_delay_applied': tm.get('trigger_delay_applied')}
+                'trigger_delay_applied': tm.get('trigger_delay_applied'),
+                **getattr(self, '_time_base', {})}
         report['time_base'] = base
         for ev in report['events']:         # sigma_s / duration_sigma_s are the fit's alone
             ev.update(base)
@@ -1978,9 +1997,10 @@ class Viewer:
                                          'ensemble of the references',
                            'band': self._mag_band},
             'step_fit': report,
-            'notes': ['times are the frame time stamps as recorded (mid-exposure assumed, exposure = '
-                      'frame interval); no camera delay correction by the analysis (see '
-                      'step_fit.time_base)',
+            'notes': ['times are mid-exposure: the time stamps as recorded, shifted by '
+                      'step_fit.time_base.shift_to_mid_exposure_s (from timestamp_reference; the '
+                      'CSV files keep the recorded stamps); the step fit takes the exposure as the '
+                      'frame interval; no camera delay correction by the analysis',
                       'no event: step_fit.events is empty, searched from searched_start_utc to '
                       'searched_end_utc',
                       'step model is sharp: no diffraction or stellar diameter',

@@ -21,9 +21,9 @@ programs behind it:
   - magnitude histograms;
   - an `event.json` with every detail of the event.
 - **`pystarlight camera`, capture on a Raspberry Pi 5 (experimental).** It records frames
-  GPS-triggered and stamped in UTC (VEYE MIPI and Aravis cameras, u-blox GPS; any `/dev/video`
-  device such as an analog grabber, with driver time stamps) to RAVF or SER, with a live stack
-  and plate solve. Every recording carries the station and equipment data and the GPS position.
+  GPS-triggered and stamped in UTC (VEYE MIPI and Aravis cameras, u-blox GPS) to RAVF or SER;
+  ZWO ASI cameras and any `/dev/video` device (e.g. an analog grabber) free-run with the
+  computer's time stamps. It has a live stack and plate solve. Every recording carries the station and equipment data and the GPS position.
   Tonight's events can be loaded from a [PySyzygos](https://github.com/pyzahl/PySyzygos)
   favorites server: target star, asteroid and the recording window are filled in for you.
 - **`pystarlight player`, a player that knows about time.** Unlike a normal video player it
@@ -526,8 +526,18 @@ without a value (NaN) are left out.
    change is less than `min_significance` = 5 times its error (both levels' errors combined)
    is removed, and the levels are recomputed until all steps pass.
 
+**Where in the exposure the time stamps sit.** A recording says which instant of each exposure
+its time stamps mark (`TIMESTAMP-REFERENCE`: `start`, `middle`, `end` or `unknown`; PyStarLight's
+camera writes it). Without it the format decides: RAVF (ASTRID) stamps the exposure **start**,
+ADV / AAV (DVTI, OccuRec) the **middle**, FITS `DATE-OBS` the start and `MIDTIME` the middle; SER
+and AVI are `unknown`. Before the fit, and in all figures, the times are moved to **mid-exposure**:
++½ exposure for start stamps (−½ for end), the exposure from the recording (else the frame
+interval). On a 0.5 s ASTRID recording that is +0.25 s. The shift, its reason and the reference
+are in `event.json` (`step_fit.time_base`); the CSV files keep the time stamps as recorded, so
+in PyOTE give the time stamp position as usual.
+
 **Transition times, below one frame.** Each frame is taken as an exposure of one frame interval
-(the median spacing of the time stamps), centred on its time stamp. A frame that the step falls
+(the median spacing of the time stamps), centred on its mid-exposure time. A frame that the step falls
 into therefore sees a mix of both levels, in proportion to the part of its exposure before the
 step. The step time tau is scanned on a grid of 1/20 frame across the frames around the step
 (up to 30 either side, at most half of each level). The chi² uses each level's own variance,
@@ -556,10 +566,11 @@ step at all.
 **Limits.** The model is a sharp step. Fresnel diffraction, the star's diameter and gradual
 events (grazes, an extended or double star that is not resolved) are not modelled. For a
 report, fit the CSV in PyOTE as well and compare; these times are a quick, independent
-check. The partial-exposure model assumes the exposure fills the frame interval and the time
-stamps are mid-exposure, as on ASTRID and the Pi camera. With much shorter exposures than
-the interval the sub-frame part is only approximate, but the sigma (from the Monte Carlo)
-stays honest. Very strong red noise can still give a spurious slow step. The significance in the
+check. The partial-exposure model assumes the exposure fills the frame interval. With much
+shorter exposures than the interval the sub-frame part is only approximate, but the sigma
+(from the Monte Carlo) stays honest. When the recording does not say where its time stamps
+sit (`unknown`: SER from other programs, AVI), they are taken as mid-exposure, which can be
+off by half an exposure; the job line and `event.json` say so. Very strong red noise can still give a spurious slow step. The significance in the
 status line and in `event.json` shows how strong each step is.
 
 From Python:

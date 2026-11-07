@@ -173,7 +173,8 @@ def test_station_of_adv_metadata():
     assert st["observers"] == ["Carsten Ziolek"]
     assert st["equipment"] == {"telescope": "C-14 EHD + 0.4x Red.", "camera": "DVTI+CAM", "serial": "43",
                                "sensor": "Sony IMX430LLJ-C (9.2mm 1624x1240 4.5um CIS)"}
-    assert st["timing"] == {"camera_delay_s": 0.0}
+    assert st["timing"] == {"camera_delay_s": 0.0, "timestamp_reference": "middle",
+                            "timestamp_reference_source": "ADV format (mid-exposure time stamps)"}
     assert "acquisition_delay_raw" in station_of({**ADV_META, "ACQUISITION-DELAY": "16"}, "ADV")["timing"]
     ser = station_of({"Observer": "X", "FileID": "LUCAM-RECORDER"}, "SER")
     assert ser["recorder"] == "SER (LUCAM-RECORDER)" and ser["observers"] == ["X"]
@@ -546,3 +547,43 @@ def test_fallback_equipment_for_recordings_without_optics():
                - 206.265 * 2.4 / 343) < 1e-9
     assert fallback_scale({}, {"focal_length_mm": 0.0, "pixel_um": 3.45}) is None     # not set
     assert fallback_scale({}, None) is None
+
+
+def test_time_reference_and_mid_exposure_shift():
+    from pystarlight.station import mid_exposure_shift_s, time_reference
+    assert time_reference({"TIMESTAMP-REFERENCE": "start"}, "SER") == \
+        ("start", "recording (TIMESTAMP-REFERENCE)")
+    assert time_reference({"timestamp-reference": "Mid"}, "RAVF")[0] == "middle"
+    assert time_reference({"INSTRUMENT": "Astrid"}, "RAVF") == ("start", "RAVF format (start_timestamp)")
+    assert time_reference({}, "ADV")[0] == "middle"
+    assert time_reference({"DATE-OBS": "2026-10-11T04:11:34"}, "FITS")[0] == "start"
+    assert time_reference({"MIDTIME": "04:11:34"}, "FITS")[0] == "middle"
+    assert time_reference({}, "SER") == ("unknown", "not in the recording")
+    assert time_reference({}, "AVI")[0] == "unknown"
+    # ASTRID: 0.5 s exposures stamped at their start -> +0.25 s to mid-exposure
+    tm = station_of({"INSTRUMENT": "Astrid", "INSTRUMENT-SHUTTER": 500000000}, "RAVF")["timing"]
+    shift, how = mid_exposure_shift_s(tm)
+    assert shift == pytest.approx(0.25) and "start" in how
+    assert mid_exposure_shift_s({"timestamp_reference": "end", "exposure_s": 0.1})[0] == pytest.approx(-0.05)
+    assert mid_exposure_shift_s({"timestamp_reference": "start"}, 0.2)[0] == pytest.approx(0.1)  # interval
+    assert mid_exposure_shift_s({"timestamp_reference": "start"})[0] == 0.0          # nothing known
+    assert mid_exposure_shift_s({"timestamp_reference": "middle", "exposure_s": 1})[0] == 0.0
+    assert mid_exposure_shift_s({"timestamp_reference": "unknown", "exposure_s": 1})[0] == 0.0
+
+
+def test_capture_header_has_time_reference_and_pixel_size():
+    from pystarlight.capture import station_header
+    from pystarlight.capture.ravf_writer import header_entries
+    from pystarlight.wcs.solve import recorded_pixel_um
+    meta = {"pixel_um": 2.4, "timestamp_reference": "start"}
+    entries = {n: v for n, _, v in header_entries(100, 80, 16, meta)}
+    assert entries["TIMESTAMP-REFERENCE"] == "start"
+    assert recorded_pixel_um(entries) == pytest.approx(2.4)
+    assert station_header.check(entries) == "ok"
+    import struct  # as read back from the file: 32-bit floats
+    read = {n: struct.unpack("<f", struct.pack("<f", v))[0] if k == ravf_writer.FLOAT32 else v
+            for n, k, v in header_entries(100, 80, 16, meta)}
+    assert station_header.check(read) == "ok"
+    assert {n for n, _, v in header_entries(100, 80, 16, {})} >= {"TIMESTAMP-REFERENCE"}   # default: start
+    assert "INSTRUMENT-SENSOR-PIXEL-SIZE-X" not in {n for n, _, v in header_entries(100, 80, 16, {})}
+    assert recorded_pixel_um({"INSTRUMENT-SENSOR-PIXEL-SIZE-X": 3.450000047683716}) == 3.45  # ASTRID

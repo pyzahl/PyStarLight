@@ -486,3 +486,44 @@ def test_player_target_position_from_the_analysis(tmp_path):
     (tmp_path / "m.event.json").write_text(json.dumps({"target": {"aperture": "ap1",
                                                                   "name": "UCAC4 544-008819"}}))
     assert load_analysis(rec)["label"] == "UCAC4 544-008819"
+
+
+def test_exposure_slider_switches_range(monkeypatch):
+    """Typing more than 2 s switches the slider to 0.5 .. 60 s, typing less than 1 s back; the
+    slider itself never switches (a drag stays in its range)."""
+    from types import SimpleNamespace
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    try:
+        from pystarlight.capture import gui
+        from pystarlight.capture.qt import QtWidgets
+    except ImportError as e:
+        pytest.skip(f"no Qt: {e}")
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])   # noqa: F841
+    sent = []
+    w = SimpleNamespace(c=SimpleNamespace(exp_min=32.0, exp_max=60e6,
+                                          controller=SimpleNamespace(request=lambda k, v: sent.append(v))),
+                        target={"exposure": 20e3},
+                        exp_slider=QtWidgets.QSlider(maximum=gui.EXP_STEPS),
+                        exp_spin=QtWidgets.QDoubleSpinBox())
+    w.exp_spin.setRange(0, 1e6)
+    for name in ("exp_ranges", "choose_exp_range", "exp_to_slider", "slider_to_exp", "set_exposure",
+                 "set_exposure_widgets", "step_exposure"):
+        setattr(w, name, getattr(gui.MainWindow, name).__get__(w))
+    w._quiet = gui.MainWindow._quiet
+    w.choose_exp_range(20e3)
+    assert w.exp_range == (32.0, 2e6)
+    w.set_exposure(5e6, typed=True)                       # typed 5 s: long range
+    assert w.exp_range == (0.5e6, 60e6) and sent[-1] == 5e6
+    assert w.slider_to_exp(w.exp_slider.value()) == pytest.approx(5e6, rel=0.01)
+    w.set_exposure(1.5e6, typed=True)                     # 1.5 s: stays long
+    assert w.exp_range == (0.5e6, 60e6)
+    w.set_exposure(0.6e6)                                 # slider drag below 1 s: stays long
+    assert w.exp_range == (0.5e6, 60e6)
+    w.set_exposure(0.8e6, typed=True)                     # typed below 1 s: back to short
+    assert w.exp_range == (32.0, 2e6)
+    w.set_exposure(90e6, typed=True)                      # capped at the camera's / --max-exposure
+    assert sent[-1] == 60e6
+    w.c.exp_max = 1e6                                     # a camera that stops at 1 s: short only
+    w.exp_range = None
+    w.set_exposure(5e6, typed=True)
+    assert w.exp_range == (32.0, 1e6)

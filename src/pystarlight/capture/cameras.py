@@ -6,10 +6,12 @@ Backends:
   - veye_mvcam.Camera: VEYE MV-MIPI cameras on the Raspberry Pi 5 CSI ports.
   - v4l2_cam.Camera: any Linux video device (/dev/videoN): USB grabbers for analog video
     cameras, UVC webcams. No trigger; frames stamped by the driver and the Pi clock.
+  - asi_cam.Camera: ZWO ASI cameras through ZWO's libASICamera2 (when installed). Free run;
+    frames stamped with the Pi clock on arrival.
 
 All offer the subset of Aravis.Camera that the capture app uses, plus:
-  kind               "aravis" / "veye" / "v4l2"
-  can_trigger        False: no trigger input (v4l2); missing: True
+  kind               "aravis" / "veye" / "v4l2" / "asi"
+  can_trigger        False: no trigger input (v4l2, asi); missing: True
   success            buffer status of a complete frame
   create_stream(n)   a stream with n buffers queued
   close_stream(s)    release a stream before a new one is made
@@ -21,7 +23,7 @@ settings; the app attaches its threads and the GPS to it, and the GUI works from
 """
 import threading
 
-from . import v4l2_cam, veye_mvcam
+from . import asi_cam, v4l2_cam, veye_mvcam
 from .decode import FORMATS_BY_BITS, Decoder
 from .timing import IMX178, exposure_start, sensor_timing, trigger_delay_ns
 
@@ -82,6 +84,10 @@ def find_cameras():
         cams += v4l2_cam.find_cameras()
     except Exception as e:                  # not Linux, no /dev/video*
         print(f"V4L2 devices not listed ({e})")
+    try:
+        cams += asi_cam.find_cameras()
+    except Exception as e:
+        print(f"ZWO ASI cameras not listed ({e})")
     return cams
 
 
@@ -110,6 +116,8 @@ def open_camera(info):
         return veye_mvcam.Camera(info)
     if backend == "v4l2":
         return v4l2_cam.Camera(info)
+    if backend == "asi":
+        return asi_cam.Camera(info)
     return AravisCamera(info)
 
 
@@ -174,6 +182,7 @@ class CameraSession:
         self.camera = camera
         self.is_veye = camera.kind == "veye"
         self.is_v4l2 = camera.kind == "v4l2"        # a video device: no trigger, driver time stamps
+        self.is_asi = camera.kind == "asi"          # ZWO ASI: free run, Pi clock on arrival
         self.can_trigger = getattr(camera, "can_trigger", True)
         # how the camera times its exposures (VEYE: by sensor; others: not modelled)
         self.timing = sensor_timing(camera.get_model_name()) if self.is_veye else IMX178
@@ -187,7 +196,8 @@ class CameraSession:
         self.acquiring = False
         self.controller = self.grabber = self.recorder = self.stacker = None
         self.gps = self.compass = None
-        self.pixel_um = pixel_um(camera.get_model_name())   # um, for the plate-scale hint
+        self.pixel_um = (getattr(camera, "pixel_um", None)  # um, for the plate-scale hint
+                         or pixel_um(camera.get_model_name()))
         self.focal_mm = 0.0                                  # lens / telescope (0: unknown)
         self._refresh()
 
@@ -203,7 +213,7 @@ class CameraSession:
 
     # ---- setup (before streaming) ----
     def configure(self, pixel_format=None, bits=12, roi=None, fps=None, exposure_ms=None,
-                  gain_db=None, max_exposure_ms=2000.0):
+                  gain_db=None, max_exposure_ms=60000.0):
         """Pixel format (explicit, or the preferred one of a bit depth), region (full sensor
         unless roi), no binning, manual exposure and gain, frame rate (fixed or free)."""
         camera = self.camera

@@ -76,3 +76,21 @@ def test_live_saturation_mark():
     assert not v.is_saturated(Aperture.centered_at('ref2', 10, 10, size=11))
     v.movie = SimpleNamespace(metadata={})                         # unknown depth: 16-bit full scale
     assert not v.is_saturated(Aperture.centered_at('ref1', 30, 30, size=21))
+
+
+def test_viewer_time_base_mid_exposure(tmp_path):
+    """RAVF stamps the exposure start: figures and the step fit get +exposure / 2."""
+    pytest.importorskip('matplotlib')
+    from pathlib import Path
+
+    from pystarlight import plot
+    from pystarlight.viewer import Viewer
+    v = Viewer.__new__(Viewer)
+    v.path = Path(tmp_path / 'x.ravf')
+    lc = SimpleNamespace(time=['04:00:00.000', '04:00:00.500', '04:00:01.000'],
+                         metadata={'INSTRUMENT': 'Astrid', 'INSTRUMENT-SHUTTER': 500_000_000})
+    assert v.set_time_base(lc) == pytest.approx(0.25)
+    assert plot.seconds(lc)[0] == pytest.approx(4 * 3600 + 0.25)
+    assert v._time_base['timestamp_reference'] == 'start'
+    v.path = Path(tmp_path / 'x.adv')                    # ADV: mid-exposure already
+    assert v.set_time_base(lc) == 0.0

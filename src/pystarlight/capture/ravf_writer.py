@@ -211,6 +211,8 @@ def header_entries(width, height, depth, meta):
         ["IMAGE-BIT-DEPTH", UINT8, depth],
         ["TIMESTAMP-SOURCE", UTF8, m("timestamp_source", "")],
         ["TIMESTAMP-ROW", UTF8, m("timestamp_row") or "exposure start of image row 0"],
+        # which instant of the exposure the frame time stamps mark: start / middle / end / unknown
+        ["TIMESTAMP-REFERENCE", UTF8, m("timestamp_reference") or "start"],
         ["ROW-TIME-NS", UINT32, int(m("row_time_ns") or 0)],     # rolling shutter, 0: unknown
         ["ROI-X", UINT32, int(m("roi_x") or 0)],
         ["ROI-Y", UINT32, int(m("roi_y") or 0)],
@@ -218,6 +220,10 @@ def header_entries(width, height, depth, meta):
         ["TRIGGER-DELAY-NS", UINT64, int(m("trigger_delay_ns") or 0)],
         *station_entries(meta),
     ]
+    if m("pixel_um"):                   # ASTRID's names for the pixel pitch (um), as stored (32 bit),
+        um = struct.unpack("<f", struct.pack("<f", float(m("pixel_um"))))[0]   # so the digest matches
+        entries += [["INSTRUMENT-SENSOR-PIXEL-SIZE-X", FLOAT32, um],
+                    ["INSTRUMENT-SENSOR-PIXEL-SIZE-Y", FLOAT32, um]]
     # light protection: a digest of the station, timing and identity entries (station_header)
     entries.append(["STATION-DIGEST", UTF8, digest({n: v for n, _, v in entries})])
     return entries

@@ -37,6 +37,11 @@ from .timing import (
 )
 
 EXP_STEPS = 1000            # exposure slider resolution (log scale)
+# exposure slider ranges (us): short up to 2 s; typing a longer exposure switches it to 0.5 .. 60 s
+# (or the camera's limit), typing one below 1 s back
+EXP_SHORT_MAX_US = 2e6
+EXP_LONG_MIN_US = 0.5e6
+EXP_BACK_DOWN_US = 1e6
 REANCHOR_LEAD_NS = 20 * 10**9   # set start time: anchor on GPS UTC this long before
 GAIN_STEPS = 10             # gain slider: 0.1 dB per step
 GAMMA_MIN, GAMMA_MAX = 0.1, 4.0
@@ -723,6 +728,7 @@ class MainWindow(QtWidgets.QMainWindow):
         g.addWidget(QtWidgets.QLabel("Depth"), 7, 0)
         g.addWidget(self.bits_combo, 7, 1, 1, 2)
 
+        self.choose_exp_range(self.target["exposure"])
         self.set_exposure_widgets(self.target["exposure"])
         self.set_gain_widgets(self.target["gain"])
         if c.is_v4l2:                       # a video device: its own controls, where it has them
@@ -735,19 +741,46 @@ class MainWindow(QtWidgets.QMainWindow):
                     if fixed:
                         w.setToolTip(f"this video device has no {what} control: the camera sets it")
         self.exp_slider.valueChanged.connect(lambda p: self.set_exposure(self.slider_to_exp(p)))
-        self.exp_spin.valueChanged.connect(lambda ms: self.set_exposure(ms * 1000))
+        self.exp_spin.valueChanged.connect(lambda ms: self.set_exposure(ms * 1000, typed=True))
         self.gain_slider.valueChanged.connect(
             lambda p: self.set_gain(c.gain_min + p / GAIN_STEPS))
         self.gain_spin.valueChanged.connect(self.set_gain)
         return box
 
+    def exp_ranges(self):
+        """(short, long) slider ranges in us; long is None when the camera stops at 2 s."""
+        lo, hi = self.c.exp_min, self.c.exp_max
+        short = (lo, min(hi, EXP_SHORT_MAX_US))
+        return short, ((max(lo, EXP_LONG_MIN_US), hi) if hi > EXP_SHORT_MAX_US else None)
+
+    def choose_exp_range(self, us):
+        """Slider range for a typed exposure: long above 2 s, short below 1 s, else as it is
+        (the slider itself never switches it, so a drag stays in its range)."""
+        short, long = self.exp_ranges()
+        current = getattr(self, "exp_range", None)
+        if long is not None and us > EXP_SHORT_MAX_US:
+            new = long
+        elif current is None or long is None or us < EXP_BACK_DOWN_US:
+            new = short
+        else:
+            new = current
+        if new == current:
+            return
+        self.exp_range = new
+        tip = f"exposure {new[0] / 1000:g} .. {new[1] / 1000:g} ms (log scale)"
+        if long is not None:
+            tip += (f"; type more than 2 s in the box for up to {long[1] / 1e6:g} s" if new == short
+                    else "; type less than 1 s in the box for the short range")
+        self.exp_slider.setToolTip(tip)
+
     def exp_to_slider(self, us):
-        c = self.c
-        return int(round(EXP_STEPS * np.log(us / c.exp_min) / np.log(c.exp_max / c.exp_min)))
+        lo, hi = self.exp_range
+        us = min(max(us, lo), hi)
+        return int(round(EXP_STEPS * np.log(us / lo) / np.log(hi / lo)))
 
     def slider_to_exp(self, pos):
-        c = self.c
-        return float(c.exp_min * (c.exp_max / c.exp_min) ** (pos / EXP_STEPS))
+        lo, hi = self.exp_range
+        return float(lo * (hi / lo) ** (pos / EXP_STEPS))
 
     @staticmethod
     def _quiet(widget, value):
@@ -756,21 +789,24 @@ class MainWindow(QtWidgets.QMainWindow):
         widget.blockSignals(False)
 
     def set_exposure_widgets(self, us):
-        self._quiet(self.exp_slider, self.exp_to_slider(np.clip(us, self.c.exp_min, self.c.exp_max)))
+        self._quiet(self.exp_slider, self.exp_to_slider(float(np.clip(us, self.c.exp_min, self.c.exp_max))))
         self._quiet(self.exp_spin, us / 1000)
 
     def set_gain_widgets(self, db):
         self._quiet(self.gain_slider, int(round((db - self.c.gain_min) * GAIN_STEPS)))
         self._quiet(self.gain_spin, db)
 
-    def set_exposure(self, us):
+    def set_exposure(self, us, typed=False):
+        """typed: from the box or the e / E keys, which may switch the slider's range."""
         us = float(np.clip(us, self.c.exp_min, self.c.exp_max))
+        if typed:
+            self.choose_exp_range(us)
         self.target["exposure"] = us
         self.set_exposure_widgets(us)
         self.c.controller.request("exposure", us)
 
     def step_exposure(self, factor):
-        self.set_exposure(self.target["exposure"] * factor)
+        self.set_exposure(self.target["exposure"] * factor, typed=True)
 
     def set_gain(self, db):
         db = float(np.clip(db, self.c.gain_min, self.c.gain_max))
@@ -945,12 +981,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ytrig_spin.setValue(self.c.height // 2 if self.args.y_trigger is None else self.args.y_trigger)
         self.ytrig_check.setVisible(self.c.is_veye)
         self.ytrig_spin.setVisible(self.c.is_veye)
-        if not self.c.can_trigger:          # a video device (/dev/videoN)
+        if not self.c.can_trigger:          # a video device (/dev/videoN), a ZWO ASI camera
+            what = "an ASI camera" if self.c.is_asi else "a video device"
             self.gps_check.setChecked(False)
-            self.gps_check.setText("GPS trigger  (not for a video device)")
-            self.gps_check.setToolTip("a video device cannot be triggered: frames carry the "
-                                      "driver's time (Pi clock, NTP). For the true time record an "
-                                      "embedded time code (VTI) or GPS LED flashes in the image")
+            self.gps_check.setText(f"GPS trigger  (not for {what})")
+            self.gps_check.setToolTip(f"{what} is not triggered here: frames carry the "
+                                      + ("Pi clock (NTP) of their arrival over USB" if self.c.is_asi
+                                         else "driver's time (Pi clock, NTP)")
+                                      + ". For the true time record an embedded time code (VTI) "
+                                      "or GPS LED flashes in the image")
             self.delay_spin.setEnabled(False)
         g.addWidget(self.gps_check, 0, 0, 1, 2)
         g.addWidget(QtWidgets.QLabel("GPS frame rate"), 1, 0)

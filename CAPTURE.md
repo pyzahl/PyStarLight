@@ -1,8 +1,9 @@
 # Capture on the Raspberry Pi 5 with GPS-timed frames
 
 `src/pystarlight/camera.py` starts a live viewer and recorder (RAVF or SER) for the Raspberry Pi 5. It drives a
-VEYE MV-MIPI camera on a CSI port, any Aravis (GenICam USB3/GigE) camera, or any Linux video device
-(`/dev/videoN`: a USB grabber for an analog camera, a UVC webcam; [limited timing](#video-devices-devvideon)). A u-blox GPS can
+VEYE MV-MIPI camera on a CSI port, any Aravis (GenICam USB3/GigE) camera, a [ZWO ASI](#zwo-asi-cameras)
+camera, or any Linux video device (`/dev/videoN`: a USB grabber for an analog camera, a UVC webcam);
+the last two free-run with the computer's time stamps ([limited timing](#video-devices-devvideon)). A u-blox GPS can
 trigger the camera, so that each frame belongs to a known UTC instant. These notes describe the
 hardware, how to run the program, how it works, and the timing measurements behind its timestamps.
 
@@ -14,6 +15,7 @@ The code is the `src/pystarlight/capture/` package (`uv run pystarlight-camera`)
 | `app.py` | command line, wiring of camera, threads, GPS and GUI, shutdown |
 | `gui.py` | PyQt5 GUI: image view, control panel, status |
 | `cameras.py` | camera backends behind one interface (`AravisCamera`, VEYE) and `CameraSession`: pixel format, region, trigger, stream, reconfigure, exposure-start time stamps |
+| `asi_cam.py` | ZWO ASI cameras through ZWO's libASICamera2 (ctypes): RAW8 / RAW16, the camera's region, exposure and gain (0.1 dB); free run, frames stamped on arrival; no trigger |
 | `v4l2_cam.py` | any Linux video device (`/dev/videoN`): V4L2 mmap capture, luminance of GREY / Y16 / YUYV / UYVY / MJPG, analog standard and input, the device's own exposure / gain controls; no trigger |
 | `veye_mvcam.py` | VEYE MV-MIPI camera through the `veye_mvcam` kernel driver: I2C registers, media pipeline, V4L2 buffers; the same interface as an Aravis camera |
 | `decode.py` | pixel formats, unpacking of packed 10/12-bit buffers |
@@ -97,7 +99,7 @@ uv run pystarlight-camera --repair ~/data/*.ravf                   # finish cras
 | panel | contents |
 |---|---|
 | image | fit to the window; **mouse wheel** zooms around the cursor (up to 64×, pixels as blocks past 1:1), **left drag** pans, **double-click** fits again |
-| **Camera** | exposure (log slider + ms box), gain, resolution, peak value; measured frame number, rate, interval (mean ± jitter, min..max over ~200 frames), exposure read back from the camera and, in free run, its frame period; **Depth** 12 / 10 / 8 bit |
+| **Camera** | exposure (log slider + ms box; the slider spans up to 2 s, typing more than 2 s in the box switches it to 0.5 .. 60 s, typing less than 1 s back; `--max-exposure` caps it, default 60 s or the camera's limit), gain, resolution, peak value; measured frame number, rate, interval (mean ± jitter, min..max over ~200 frames), exposure read back from the camera and, in free run, its frame period; **Depth** 12 / 10 / 8 bit |
 | **Display** | as in the player and `pystarlight analyze`: **Black** / **White** point (slider + box, raw values), **Auto** (zscale of the shown image, key `a`), **Full** (0 to the largest raw value: the start setting, and after a depth change unless on Auto), **per frame** (auto levels recomputed on every frame), display **gamma** (keys `d/D`). Display only; the recording is untouched |
 | **Sensor region (ROI)** | x / y / w / h boxes, **Select** (then drag a rectangle on the image; shown in yellow until applied), **Apply**, **Full sensor**; current region |
 | **Trigger** | **GPS trigger** checkbox (off = free run, or the `--trigger hw/sw` mode), **GPS frame rate**: pick 30 / 20 / 15 / 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1.5 / 1 / 0.5 fps or type fps or a period (`250 ms`) and press Enter, **Trigger delay** (ms), **y-trigger row** (VEYE, GPS mode; see below), warnings (exposure longer than the pulse period, rate too high for the camera, pulses skipped because of the delay, no fix, anchoring to GPS UTC, frames or TIM-TP pulses off the grid), missed pulses |
@@ -629,7 +631,47 @@ uv run pystarlight-camera --camera v4l2 --video-std PAL --video-input 0 --video-
 Tested with a MacroSilicon MS2109 (uvcvideo): YUYV 1920x1080 at 5 fps, 1280x720 at 10 fps,
 intervals 200.0 / 100.0 ms, driver stamp at the transfer start.
 
+## ZWO ASI cameras
+
+ZWO ASI cameras (USB2 / USB3) show up in the camera list when ZWO's library is installed;
+`--camera ASI` or the model (`--camera ASI178`) picks one. The backend (`capture/asi_cam.py`)
+calls the library through ctypes, so it runs with the Pi's system Python too.
+
+- **The library** (closed source, free): `libASICamera2.so` from ZWO's developer SDK
+  (zwoastro.com, Software, "For Developers", Linux, `lib/<arch>/`), or INDI's `libasi` package
+  (puts it in `/usr/lib/<arch>-linux-gnu`). Found via `$ZWO_ASI_LIB`, the linker's path,
+  `/usr/local/lib`, `/usr/lib` or `/usr/lib/<arch>-linux-gnu`.
+- **Access without root:** ZWO's udev rule (`lib/asi.rules` in the SDK) into `/etc/udev/rules.d/`.
+- **USB3 buffer memory:** Linux gives USB 16 MB by default, too little for full frames of the
+  bigger sensors; ZWO recommends 200 MB:
+  `echo 200 | sudo tee /sys/module/usbcore/parameters/usbfs_memory_mb` (lost at reboot; for good:
+  `usbcore.usbfs_memory_mb=200` on the kernel command line, `/boot/firmware/cmdline.txt` on the Pi).
+- **Formats:** RAW8 and RAW16 as Mono8 / Mono16 (colour cameras: Bayer..8 / ..16). The GUI's
+  12 bit is RAW16. RAW16 holds the ADC's bits left-aligned in 16 (the ASI178's 14 bit read
+  0 .. 65528, in steps of 4), like ASTRID. Region: the camera's own (width in steps of 8,
+  height of 2). Exposure in µs from the camera's limits; gain in ZWO's 0.1 dB steps, shown as dB.
+- **No trigger, no hard timing:** the camera free-runs as fast as exposure and USB allow (no
+  frame-rate setting; the trigger modes of the few trigger cameras are not used). The SDK gives
+  no time stamp: each frame is stamped with the Pi clock (NTP) when it has arrived, minus the
+  exposure. Readout and transfer time are not known, some ms to a frame, so the header says
+  `TIMESTAMP-SOURCE` "Pi clock (NTP) when the frame had arrived over USB, minus the exposure"
+  and `FRAME-TIMING-ACCURACY` 20 ms. As for video devices, true time needs GPS LED flashes in
+  the field. Frames the SDK dropped (`ASIGetDroppedFrames`) leave a gap in the frame numbers.
+- The comment line carries the SDK version, USB2 / USB3, ADC depth, pixel size and sensor
+  temperature; the pixel size goes into `INSTRUMENT-SENSOR-PIXEL-SIZE-X/Y` (plate-scale hint).
+
+Tested (2026-11-07) with an ASI178MM on USB3, PC (x86-64), SDK 1.27 (INDI's libasi): full
+frame 3096 × 2080 at 16.7 fps (16 bit) and 33 fps (8 bit), 1024 × 768 at 47.6 fps (20 ms
+exposure), time stamps 21.0 ms apart with no gaps in 238 frames.
+
 ## Timestamps: what the recordings hold
+
+**Which instant of the exposure** a recording's time stamps mark is in its header,
+`TIMESTAMP-REFERENCE`: `start` for every PyStarLight recording (each backend works the
+exposure start out of the pulse, the frame start or the arrival), `unknown` for a video
+device without an exposure control. The analysis moves the times to mid-exposure from it
+(README, "Event timing"); recordings without the entry follow their format (RAVF start, ADV
+middle). DVTI cameras, for example, stamp the middle of the exposure.
 
 Each frame's timestamp is the **exposure start of row 0**. The IMX178 has a rolling shutter, so **row y
 starts y × 14.33 µs later**: 29.6 ms down to the last of 2064 rows. For an object at row y, add

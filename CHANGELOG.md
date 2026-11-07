@@ -7,6 +7,17 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Camera GUI: exposures up to 60 s (`--max-exposure`, default now 60000 ms, was 2000). The
+  slider spans up to 2 s; typing more than 2 s (or the `E` key past it) switches it to
+  0.5 .. 60 s, typing less than 1 s back. Dragging never switches it.
+- Camera: ZWO ASI cameras (`capture/asi_cam.py`) through ZWO's libASICamera2 (ctypes; found via
+  `$ZWO_ASI_LIB`, the linker path, `/usr/local/lib`, `/usr/lib/<arch>-linux-gnu`): RAW8 / RAW16,
+  region, exposure, gain in 0.1 dB; free run, frames stamped with the Pi clock on arrival minus
+  the exposure, SDK-dropped frames as gaps. Tested with an ASI178MM (USB3, SDK 1.27).
+- Recordings say where their time stamps sit in the exposure: header `TIMESTAMP-REFERENCE`
+  (`start` / `middle` / `end` / `unknown`; PyStarLight's camera: start), and the pixel pitch as
+  ASTRID does (`INSTRUMENT-SENSOR-PIXEL-SIZE-X/Y`, also read for the plate-scale hint). Both in
+  the station digest (older recordings stay valid).
 - Install notes: the player needs Qt (PySide6 or PyQt5). The install step is now
   `uv sync --extra all --extra camera` (PySide6 wheels on Linux, macOS, Windows), with notes per
   OS and a check line. Without Qt, `pystarlight player` / `camera` now say what to install
@@ -209,6 +220,11 @@ uses [Semantic Versioning](https://semver.org/).
   so they no longer hide "wrote ... -summary" and other messages.
 
 ### Fixed
+- Event timing: the step fit and all figures now use mid-exposure times. They took the time
+  stamps as mid-exposure, but RAVF (ASTRID, PyStarLight) stamps the exposure start: D / R times
+  came out half an exposure early (0.25 s at 0.5 s exposures). Shift from the recording's
+  `TIMESTAMP-REFERENCE` or its format (`station.time_reference`), in `event.json`
+  `step_fit.time_base`; the CSV files keep the recorded stamps.
 - Capture (VEYE): the frame period used for GPS stamps and the y-trigger could keep another bit
   depth's value after a depth change (stale cached register, and a frame-rate register faster
   than the sensor can read out); 12-bit stamps on a small region were up to ~1.2 ms early. The

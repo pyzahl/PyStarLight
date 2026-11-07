@@ -43,10 +43,11 @@ def rate_arg(text):
     return text
 
 
-parser = argparse.ArgumentParser(description="Aravis / VEYE MIPI live view and recorder")
+parser = argparse.ArgumentParser(
+    description="Live view and recorder: VEYE MIPI, Aravis (GenICam), ZWO ASI and /dev/video cameras")
 parser.add_argument("--camera", default=None,
                     help="which camera to open: any part of its ID, vendor, model or serial "
-                         "(e.g. Basler, a2A1920, Grasshopper, 2316xxxx, VEYE, IMX178). "
+                         "(e.g. Basler, a2A1920, Grasshopper, 2316xxxx, VEYE, IMX178, ASI178). "
                          "Default: first found")
 parser.add_argument("--list", action="store_true", help="list connected cameras and exit")
 parser.add_argument("--video-std", default=None, metavar="STD",
@@ -69,8 +70,10 @@ parser.add_argument("--exposure", type=float, default=None,
                     help="initial exposure time in ms (manual; auto-exposure is turned off)")
 parser.add_argument("--gain", type=float, default=None,
                     help="initial gain in dB (manual; auto-gain is turned off)")
-parser.add_argument("--max-exposure", type=float, default=2000.0,
-                    help="upper end of the exposure slider in ms (default 2000)")
+parser.add_argument("--max-exposure", type=float, default=60000.0,
+                    help="longest exposure in ms (default 60000, or the camera's limit). The GUI's "
+                         "slider spans up to 2 s and switches to 0.5 .. 60 s when a longer one is "
+                         "typed in, back below 1 s")
 parser.add_argument("--scale", type=float, default=0.5,
                     help="initial window size as a fraction of the image (default 0.5); "
                          "the view follows the window, data is always full resolution")
@@ -83,6 +86,11 @@ parser.add_argument("--usb-mode", choices=["sync", "async"], default=None,
                     help="Aravis USB3 transfer mode (default: Aravis' own default)")
 parser.add_argument("--bandwidth", type=float, default=None,
                     help="limit camera USB throughput in MB/s (e.g. 200)")
+parser.add_argument("--asi-bandwidth", type=int, default=None, metavar="PCT",
+                    help="ZWO ASI: USB bandwidth in %% (40 .. 100; default: as the camera is set, "
+                         "it keeps another program's setting)")
+parser.add_argument("--asi-high-speed", choices=["on", "off"], default=None,
+                    help="ZWO ASI: high-speed readout (default: as the camera is set)")
 parser.add_argument("--buffers", type=int, default=16,
                     help="number of stream buffers (default 16)")
 parser.add_argument("--trigger", choices=["off", "gps", "hw", "sw"], default="off",
@@ -208,6 +216,12 @@ def main(argv=None):
         s.apply_trigger("free" if args.trigger == "off" else args.trigger)
         if camera.kind == "aravis":
             camera.set_usb(args.usb_mode, args.bandwidth)   # before the stream is created
+        if s.is_asi:
+            if args.asi_bandwidth is not None:
+                camera.set_usb_bandwidth(args.asi_bandwidth)
+            if args.asi_high_speed is not None:
+                camera.set_high_speed(args.asi_high_speed == "on")
+            print(f"ASI: {camera.describe()}")
 
         s.controller = Controller(camera, s.apply_trigger, s.reconfigure)
         # files start with the model name; a video device's ("USB Video: USB Video") made safe
@@ -226,6 +240,7 @@ def main(argv=None):
                 "vendor": camera.get_vendor_name(),
                 "serial": cam_info.get("serial", ""),
                 "sensor": camera.get_model_name().split("-")[-1] if s.is_veye else "",
+                "pixel_um": s.pixel_um,
                 "timestamp_row": ("exposure start (global shutter: all rows)"
                                   if s.is_veye and s.timing.global_shutter
                                   else "exposure start of image row 0"),
@@ -242,15 +257,23 @@ def main(argv=None):
                                      "V4L2 driver time of the frame's transfer, Pi clock (NTP); "
                                      "not the exposure: an embedded time code (VTI) or GPS LED "
                                      "flashes in the image give the true time" if s.is_v4l2 else
+                                     "Pi clock (NTP) when the frame had arrived over USB, minus the "
+                                     "exposure (ZWO ASI SDK, free run; readout and transfer time not "
+                                     "known)" if s.is_asi else
                                      "Pi clock (NTP)"),
                 # measured on the IMX178 at 12 bit to ~0.1 ms; NTP ~1 ms; a video device:
-                # transfer latency unknown, at least a frame; else unknown
+                # transfer latency unknown, at least a frame; ASI: readout + USB transfer,
+                # some ms to a frame (taken as 20 ms); else unknown
                 "timing_accuracy_ns": (100_000 if gps_stamped and s.is_veye
                                        and s.timing.calibrated(bits) else
                                        5_000_000 if gps_stamped else
                                        int(camera.frame_period_ns() or 40e6) if s.is_v4l2 else
+                                       20_000_000 if s.is_asi else
                                        2_000_000),
                 "row_time_ns": s.timing.line(bits) if s.is_veye else 0,
+                # every backend stamps the exposure start (worked out from the pulse, the frame
+                # start or the arrival); a video device without an exposure control: unknown
+                "timestamp_reference": "unknown" if s.exposure_fixed() else "start",
             }
             if s.is_v4l2:
                 src = camera.describe_input()
@@ -260,6 +283,9 @@ def main(argv=None):
                                             else ", minus the exposure"))
                 info["comment"] = (f"video device {camera.device} ({camera.driver}, "
                                    f"{camera.pixel_format}{', ' + src if src else ''})")
+            if s.is_asi:
+                info["timestamp_row"] = "frame arrival (Pi clock), minus the exposure"
+                info["comment"] = camera.describe()
             # station and equipment from the config's [observer]; the site from the GPS only
             # with a fix (else the config's, marked SITE-SOURCE "config")
             observer = localconfig.section("observer")
@@ -284,7 +310,7 @@ def main(argv=None):
 
         s.grabber.frame_info = frame_info
 
-        s.pixel_um = args.pixel_um or pixel_um(camera.get_model_name())
+        s.pixel_um = args.pixel_um or s.pixel_um or pixel_um(camera.get_model_name())
         # the plate-scale hint of the live solve: --focal-mm, else the station's effective focal
         # length ([observer], as every recording says); the GUI changes it
         s.focal_mm = args.focal_mm or station_header.optics_mm(localconfig.section("observer"))[1]

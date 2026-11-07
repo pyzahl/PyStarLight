@@ -401,9 +401,16 @@ def stamp_rows(image: np.ndarray, edge_fraction: float = 0.15, min_fraction: flo
 
 
 def recorded_pixel_um(metadata: dict) -> Optional[float]:
-    """Pixel pitch (um) of the recording's sensor, from its name (capture.cameras.PIXEL_UM)."""
+    """Pixel pitch (um) of the recording's sensor: INSTRUMENT-SENSOR-PIXEL-SIZE-X (ASTRID,
+    PyStarLight's capture), else from the sensor's name (capture.cameras.PIXEL_UM)."""
     from ..capture.cameras import pixel_um
     m = {str(k).upper(): v for k, v in (metadata or {}).items()}
+    try:
+        um = float(m.get('INSTRUMENT-SENSOR-PIXEL-SIZE-X') or 0)
+    except (TypeError, ValueError):
+        um = 0.0
+    if 0.5 < um < 50:
+        return round(um, 3)
     return next((pixel_um(str(m[k])) for k in ('INSTRUMENT-SENSOR', 'INSTRUMENT', 'CAMERA-SENSOR-INFO')
                  if m.get(k) and pixel_um(str(m[k]))), None)
 

@@ -10,7 +10,14 @@ them into
      gps_fix, satellites, hdop, position_utc}, "station", "observers": [...],
      "equipment": {telescope, telescope_type, aperture_mm, focal_length_mm, focal_reducer, mount,
      camera, serial, sensor, method}, "timing": {source, source_text, exposure_s, accuracy_s,
-     camera_delay_s, delay_applied, trigger_delay_s, trigger_delay_applied}}
+     camera_delay_s, delay_applied, trigger_delay_s, trigger_delay_applied,
+     timestamp_reference, timestamp_reference_source}}
+
+timing.timestamp_reference: which instant of a frame's exposure its time stamp marks, "start",
+"middle", "end" or "unknown" (time_reference): the recording's TIMESTAMP-REFERENCE (PyStarLight's
+capture), else what the format defines (RAVF: start, as ASTRID's start_timestamp; ADV / AAV:
+middle, Adv2's mid-exposure time; FITS: DATE-OBS start, MIDTIME middle); SER and AVI: unknown.
+mid_exposure_shift_s() turns it into the shift that puts the time stamps on mid-exposure.
 
 Values that are not in the recording are left out (never filled from the config). site.source
 says where the position came from: "GPS" (the capture's GPS fix), "config" (the capture's
@@ -39,6 +46,47 @@ def movie_format(path) -> str:
     if os.path.isdir(p):
         return 'FITS'
     return FORMATS.get(os.path.splitext(p)[1].lower(), os.path.splitext(p)[1].lstrip('.').upper())
+
+
+REFERENCES = ('start', 'middle', 'end', 'unknown')
+
+
+def time_reference(metadata: dict, fmt: str = '') -> tuple[str, str]:
+    """(reference, where it comes from): which instant of the exposure a frame's time stamp
+    marks, 'start' / 'middle' / 'end' / 'unknown', see the module docstring."""
+    m = _upper(metadata)
+    ref = _text(m.get('TIMESTAMP-REFERENCE')).strip().lower()
+    ref = {'mid': 'middle', 'mid-exposure': 'middle', 'center': 'middle', 'centre': 'middle'}.get(ref, ref)
+    if ref in REFERENCES:
+        return ref, 'recording (TIMESTAMP-REFERENCE)'
+    fmt = (fmt or '').upper()
+    if fmt == 'RAVF':
+        return 'start', 'RAVF format (start_timestamp)'
+    if fmt in ('ADV', 'AAV'):
+        return 'middle', 'ADV format (mid-exposure time stamps)'
+    if fmt == 'FITS':
+        if m.get('DATE-OBS'):
+            return 'start', 'FITS DATE-OBS'
+        if m.get('MIDTIME'):
+            return 'middle', 'FITS MIDTIME'
+    return 'unknown', 'not in the recording'
+
+
+def mid_exposure_shift_s(timing: dict, frame_interval_s=None) -> tuple[float, str]:
+    """(seconds to add to the time stamps to get mid-exposure, how): +exposure / 2 for 'start',
+    -exposure / 2 for 'end', 0 for 'middle' and 'unknown'. The exposure is the recording's,
+    else the frame interval (the step fit's assumption)."""
+    ref = timing.get('timestamp_reference', 'unknown')
+    if ref not in ('start', 'end'):
+        return 0.0, ('time stamps are mid-exposure' if ref == 'middle'
+                     else 'time stamp position in the exposure unknown: taken as mid-exposure')
+    exp, what = timing.get('exposure_s'), 'exposure'
+    if not exp:
+        exp, what = frame_interval_s, 'frame interval (exposure not recorded)'
+    if not exp or not math.isfinite(exp):
+        return 0.0, f'time stamps mark the exposure {ref}, but its length is unknown: not shifted'
+    sign = 1.0 if ref == 'start' else -1.0
+    return sign * exp / 2, f'time stamps mark the exposure {ref}: {sign * exp / 2:+.4f} s (half the {what})'
 
 
 def _upper(metadata: dict) -> dict:
@@ -178,6 +226,7 @@ def station_of(metadata: dict, fmt: str = '') -> dict:
         timing['trigger_delay_s'] = trig / 1e9
         # PyStarLight's capture stamps a GPS-triggered frame at pulse + trigger delay
         timing['trigger_delay_applied'] = 'trigger pulse' in raw
+    timing['timestamp_reference'], timing['timestamp_reference_source'] = time_reference(metadata, fmt)
     out['timing'] = timing
     warn = implausible(eq)
     # essentials a report needs; missing in an odd or incomplete recording (another program's,

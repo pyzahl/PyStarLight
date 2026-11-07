@@ -83,8 +83,9 @@ def zscale(image: np.ndarray) -> tuple[float, float]:
 
 
 def seconds(lc) -> np.ndarray:
-    """Row times of a LightCurves as seconds since midnight (UTC), rollover unwrapped."""
-    return unwrap_midnight(parse_times(lc.time))
+    """Row times of a LightCurves as seconds since midnight (UTC), rollover unwrapped, plus
+    lc.time_shift_s when set (the viewer: shift to mid-exposure, station.mid_exposure_shift_s)."""
+    return unwrap_midnight(parse_times(lc.time)) + float(getattr(lc, 'time_shift_s', 0.0) or 0.0)
 
 
 def _time_axis(ax, lc, t):
