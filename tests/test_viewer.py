@@ -1,6 +1,7 @@
 """Viewer and plots, driven headless (Agg backend)."""
 
 import json
+import sys
 from types import SimpleNamespace
 
 import numpy as np
@@ -728,6 +729,8 @@ def test_missing_tk_is_explained(monkeypatch):
     monkeypatch.setattr(matplotlib, 'get_backend', lambda: 'agg')     # matplotlib's silent fallback
     monkeypatch.delenv('MPLBACKEND', raising=False)
     monkeypatch.setitem(sys.modules, 'tkinter', None)                 # a Python without Tk
+    monkeypatch.setattr(sys, '_base_executable', '/usr/bin/python3', raising=False)   # the system's,
+    monkeypatch.setattr(sys, 'base_prefix', sys.prefix)                               # no venv
     msg = viewer.gui_problem()
     assert 'python3-tk' in msg and 'brew install python-tk' in msg and 'tcl/tk' in msg
     monkeypatch.setattr(matplotlib, 'get_backend', lambda: 'tkagg')
@@ -748,3 +751,17 @@ def test_first_click_is_the_target_later_clicks_references(movie):
     click(v, *STARS[0][1::-1], button=3)          # the target removed: the next click is the target
     click(v, *STARS[0][1::-1])
     assert (v.apertures[-1].name, v.apertures[-1].role) == ('target', 'target')
+
+
+def test_tk_hint_names_the_python_and_the_fix(monkeypatch):
+    """A uv environment on the system's Python: Tk for that Python, or the venv rebuilt on uv's own."""
+    pytest.importorskip('matplotlib')
+    from pystarlight import viewer
+    monkeypatch.setattr(sys, '_base_executable', '/usr/bin/python3.11', raising=False)
+    monkeypatch.setattr(sys, 'base_prefix', '/usr')
+    monkeypatch.setattr(sys, 'prefix', '/home/x/pystarlight/.venv')
+    hint = viewer.tk_hint()
+    assert '/usr/bin/python3.11' in hint and 'sudo apt install python3-tk' in hint
+    assert 'rm -rf .venv && uv sync --python-preference only-managed' in hint
+    monkeypatch.setattr(sys, '_base_executable', '/home/x/.local/share/uv/python/cpython-3.12/bin/python3.12')
+    assert 'uv python install --reinstall' in viewer.tk_hint()

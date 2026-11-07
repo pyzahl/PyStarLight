@@ -236,6 +236,10 @@ uses [Semantic Versioning](https://semver.org/).
   so they no longer hide "wrote ... -summary" and other messages.
 
 ### Fixed
+- Viewer without Tk: the hint names the Python the environment runs on. A uv environment built
+  on the system's Python (uv takes it when it finds one) gets the two fixes that apply: Tk for that
+  Python, or the environment rebuilt on uv's own (`rm -rf .venv && uv sync --python-preference
+  only-managed --extra all`); the old hint suggested uv as if it were not in use.
 - SER recordings of a colour camera say their Bayer pattern (ColorID 8-11: RGGB, GRBG, GBRG,
   BGGR), also after a repair; they were always marked mono. RAVF had it (`COLOR-TYPE`).
 - Event timing: the step fit and all figures now use mid-exposure times. They took the time

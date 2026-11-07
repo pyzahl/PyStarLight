@@ -1,0 +1,13 @@
+# LaTeX build files; the PDF is built with make (not kept in git: it would go stale)
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.vrb
+pystarlight_math.pdf
+version.tex

@@ -117,8 +117,12 @@ capture setup uses ([CAPTURE.md](CAPTURE.md)).
 - The commands below run in PowerShell.
 - Qt for the player: nothing to do beforehand, `--extra camera` in step 3 installs PySide6.
 
-**Or let uv bring its own Python**, on any of the three: uv's Python builds include Tk. Run
-`uv python install` once, then add `--python-preference only-managed` to `uv sync` in step 3.
+**Or let uv bring its own Python**, on any of the three: uv's Python builds include Tk. uv
+otherwise takes the system's Python when it finds one (on Linux usually without Tk). Add
+`--python-preference only-managed` to `uv sync` in step 3. An environment already built on the
+system's Python is not switched by that (nor by `uv python install`): rebuild it, in the
+PyStarLight folder, with `rm -rf .venv && uv sync --python-preference only-managed --extra all`.
+When Tk is missing, the viewer says which Python it runs on and which of the two fixes applies.
 
 ### 2. Install uv
 

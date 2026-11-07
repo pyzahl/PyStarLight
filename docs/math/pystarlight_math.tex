@@ -1,0 +1,33 @@
+% PyStarLight: how a light curve is measured and timed (the method slides on their own).
+% Build: make   (latexmk -pdf)   The same slides are part of the author's PySyzygos/PyStarLight talk.
+\documentclass[aspectratio=169,11pt]{beamer}
+\input{preamble}
+\graphicspath{{figures/}{../../src/pystarlight/}}
+
+\title{PyStarLight: how a light curve is measured and timed}
+\subtitle{Alignment, astrometry, photometry on the G scale, optimal extraction, step fit}
+\InputIfFileExists{version.tex}{}{\newcommand{\pyversion}{?}}  % make writes it from src/pystarlight/__init__.py
+\author{Percy Zahl}
+\institute{\faGithub\ \href{https://github.com/pyzahl/PyStarLight}{github.com/pyzahl/PyStarLight}\\[0.3ex]
+  For PyStarLight version \pyversion}
+\date{\today}
+\titlegraphic{\vspace*{-0.8cm}\hfill\includegraphics[height=1.3cm]{pystarlight_logo.png}}
+
+\begin{document}
+\maketitle
+
+\section{How it works}
+\input{math_slides}
+
+\begin{frame}{References}
+  \footnotesize
+  \begin{itemize}\setlength{\itemsep}{0.4ex}
+    \item PyMovie and PyOTE: B.~Anderson, github.com/bob-anderson-ok
+    \item Optimal extraction: Naylor (1998), MNRAS 296, 339
+    \item PRAIA: Assafin et al.\ (2011), Gaia-FUN-SSO workshop proceedings, IMCCE, p.\,85
+    \item Astrometry.net: Lang et al.\ (2010), AJ 139, 1782
+    \item Change points: Olshen et al.\ (2004), Biostatistics 5, 557
+    \item Gaia DR3: Gaia Collaboration, Vallenari et al.\ (2023), A\&A 674, A1
+  \end{itemize}
+\end{frame}
+\end{document}

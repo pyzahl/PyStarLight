@@ -87,16 +87,46 @@ print(p or '')
 """
 
 
-TK_HINT = """\
-pystarlight-view needs Tk (Python's tkinter) for its window and file dialog, and this Python
-has none. Install it, then start again:
+TK_PACKAGES = """\
   Debian / Ubuntu / Raspberry Pi OS:  sudo apt install python3-tk
   Fedora:                             sudo dnf install python3-tkinter
   Arch:                               sudo pacman -S tk
   macOS, Homebrew Python:             brew install python-tk
-  or use uv's own Python, which includes Tk:
-    uv python install && uv sync --python-preference only-managed --extra all
   (python.org installers for macOS and Windows include Tk; on Windows keep "tcl/tk and IDLE" ticked)"""
+
+UV_REBUILD = "rm -rf .venv && uv sync --python-preference only-managed --extra all"
+
+
+def tk_hint() -> str:
+    """Why there is no Tk, for the Python actually running: in a uv / venv environment built on
+    the system's Python (uv takes it when it finds one) the fix is Tk for that Python, or the
+    environment rebuilt on uv's own Python (which has Tk; `uv python install` alone does not
+    switch an existing .venv)."""
+    import platform
+    import textwrap
+    base = getattr(sys, '_base_executable', None) or sys.executable
+    version = platform.python_version()
+    in_venv = sys.prefix != sys.base_prefix
+    uv_managed = '/uv/python/' in base.replace('\\', '/')
+    head = ("PyStarLight's viewer needs Tk (Python's tkinter) for its window and file dialog.\n")
+    if in_venv and not uv_managed:
+        major_minor = '.'.join(version.split('.')[:2])
+        return (head +
+                f"This environment ({sys.prefix}) runs on {base} (Python {version}), a Python of the\n"
+                "system that has no Tk; uv takes such a Python when it finds one. Either:\n"
+                f"  1. add Tk to that Python (for the system's python3; for another version, e.g.\n"
+                f"     python{major_minor}-tk), then start again:\n"
+                + textwrap.indent(TK_PACKAGES, "     ") + "\n"
+                "  2. or rebuild the environment on uv's own Python, which includes Tk (in the\n"
+                "     PyStarLight folder; later `uv sync` runs keep it):\n"
+                f"       {UV_REBUILD}")
+    if uv_managed:
+        return (head + f"This Python ({base}, {version}) is uv's own but has no Tk: reinstall it\n"
+                f"  uv python install --reinstall {'.'.join(version.split('.')[:2])}\n"
+                f"and rebuild the environment:\n  {UV_REBUILD}")
+    return (head + f"This Python ({base}, {version}) has none. Install it, then start again:\n"
+            + TK_PACKAGES + "\n  or run it from a uv environment on uv's own Python, which includes Tk:\n"
+            f"    {UV_REBUILD}")
 
 
 def gui_problem() -> Optional[str]:
@@ -117,7 +147,7 @@ def gui_problem() -> Optional[str]:
     try:
         import tkinter  # noqa: F401
     except ImportError:
-        return TK_HINT
+        return tk_hint()
     return ('no display to open a window on (DISPLAY / WAYLAND_DISPLAY not set: run it on the '
             'desktop, or with ssh -X)')
 
@@ -144,7 +174,7 @@ def ask_movie_path(initial_dir=None) -> Optional[str]:
                                capture_output=True, text=True, check=True)
         except (OSError, subprocess.CalledProcessError) as e:
             err = str(getattr(e, 'stderr', '') or e)
-            print(TK_HINT if 'tkinter' in err else f'no file dialog: {err}', file=sys.stderr)
+            print(tk_hint() if 'tkinter' in err else f'no file dialog: {err}', file=sys.stderr)
             return None
         path = r.stdout.strip()
     if not path:
