@@ -92,5 +92,8 @@ def test_viewer_time_base_mid_exposure(tmp_path):
     assert v.set_time_base(lc) == pytest.approx(0.25)
     assert plot.seconds(lc)[0] == pytest.approx(4 * 3600 + 0.25)
     assert v._time_base['timestamp_reference'] == 'start'
-    v.path = Path(tmp_path / 'x.adv')                    # ADV: mid-exposure already
+    v.path = Path(tmp_path / 'x.adv')                    # ADV: the start is read (Adv2), shifted too
+    lc.metadata = {'EXPOSURE-S': 1.0}
+    assert v.set_time_base(lc) == pytest.approx(0.5)
+    v.path = Path(tmp_path / 'x.ser')                    # SER: unknown, taken as mid-exposure
     assert v.set_time_base(lc) == 0.0

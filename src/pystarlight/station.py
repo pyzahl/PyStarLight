@@ -16,7 +16,9 @@ them into
 timing.timestamp_reference: which instant of a frame's exposure its time stamp marks, "start",
 "middle", "end" or "unknown" (time_reference): the recording's TIMESTAMP-REFERENCE (PyStarLight's
 capture), else what the format defines (RAVF: start, as ASTRID's start_timestamp; ADV / AAV:
-middle, Adv2's mid-exposure time; FITS: DATE-OBS start, MIDTIME middle); SER and AVI: unknown.
+start: the file stores the mid-exposure time, but the reader gives Adv2's
+StartOfExposureTimestamp (mid minus half the exposure), as PyMovie does, so the CSVs match;
+FITS: DATE-OBS start, MIDTIME middle); SER and AVI: unknown.
 mid_exposure_shift_s() turns it into the shift that puts the time stamps on mid-exposure.
 
 Values that are not in the recording are left out (never filled from the config). site.source
@@ -62,8 +64,8 @@ def time_reference(metadata: dict, fmt: str = '') -> tuple[str, str]:
     fmt = (fmt or '').upper()
     if fmt == 'RAVF':
         return 'start', 'RAVF format (start_timestamp)'
-    if fmt in ('ADV', 'AAV'):
-        return 'middle', 'ADV format (mid-exposure time stamps)'
+    if fmt in ('ADV', 'AAV'):                   # movie.AdvReader: StartOfExposureTimestampString
+        return 'start', 'ADV: start of exposure as read (the file stores mid-exposure)'
     if fmt == 'FITS':
         if m.get('DATE-OBS'):
             return 'start', 'FITS DATE-OBS'

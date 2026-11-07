@@ -7,6 +7,10 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- ADV / AAV: D and R were **half an exposure early** (0.5 s on a 1 s DVTI recording). The reader
+  takes Adv2's start-of-exposure time (as PyMovie; the file stores the middle) but the analysis
+  took it as mid-exposure and never shifted it. Now `start`, shifted by half the frame's
+  exposure (`EXPOSURE-S` from the frame). The CSV files keep the times as before.
 - Viewer froze while a star was entered: the lookup (SIMBAD can take 20 s to give up) ran in the
   GUI thread, also when just clicking elsewhere, and every key redrew the whole window (~0.2 s).
   Lookups and Auto now run in the background, the text boxes redraw when idle.

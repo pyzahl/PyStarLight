@@ -304,6 +304,14 @@ class AdvReader(MovieReader):
             self.metadata = self._r.getAdvFileMetaData()
             # full scale of the data (DVTI: 12 bit scaled to 16, 65535), for saturation
             self.max_pixel_value = getattr(self._r.FileInfo, 'MaxPixelValue', None)
+            # the exposure of frame 0 (ns): the time stamps read are its start, the analysis
+            # shifts them by half of it to mid-exposure (station.time_reference)
+            try:
+                exp = float(self._r.getMainImageAndStatusData(0)[2].Exposure) / 1e9
+                if exp > 0:
+                    self.metadata.setdefault('EXPOSURE-S', exp)
+            except Exception:
+                pass
         self.is_aav = Path(self.path).suffix.lower() == '.aav'
         self.integrated_frames = None
         if self.is_aav:

@@ -571,9 +571,10 @@ without a value (NaN) are left out.
 
 **Where in the exposure the time stamps sit.** A recording says which instant of each exposure
 its time stamps mark (`TIMESTAMP-REFERENCE`: `start`, `middle`, `end` or `unknown`; PyStarLight's
-camera writes it). Without it the format decides: RAVF (ASTRID) stamps the exposure **start**,
-ADV / AAV (DVTI, OccuRec) the **middle**, FITS `DATE-OBS` the start and `MIDTIME` the middle; SER
-and AVI are `unknown`. Before the fit, and in all figures, the times are moved to **mid-exposure**:
+camera writes it). Without it the format decides: RAVF (ASTRID) stamps the exposure **start**;
+ADV / AAV (DVTI, OccuRec) store the middle, but the time read (Adv2's `StartOfExposureTimestamp`,
+as in PyMovie, so the CSV files for PyOTE are the same) is the **start**, the exposure is taken
+from the frame; FITS `DATE-OBS` the start and `MIDTIME` the middle; SER and AVI are `unknown`. Before the fit, and in all figures, the times are moved to **mid-exposure**:
 +½ exposure for start stamps (−½ for end), the exposure from the recording (else the frame
 interval). On a 0.5 s ASTRID recording that is +0.25 s. The shift, its reason and the reference
 are in `event.json` (`step_fit.time_base`); the CSV files keep the time stamps as recorded, so

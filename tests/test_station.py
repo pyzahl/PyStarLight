@@ -11,7 +11,7 @@ import pytest
 
 from pystarlight import movie, report_push
 from pystarlight.capture import ravf_writer, ser_writer, station_header
-from pystarlight.station import movie_format, station_of
+from pystarlight.station import mid_exposure_shift_s, movie_format, station_of
 
 T0 = 1_792_000_000 * 10**9
 W, H = 16, 12
@@ -173,8 +173,12 @@ def test_station_of_adv_metadata():
     assert st["observers"] == ["Carsten Ziolek"]
     assert st["equipment"] == {"telescope": "C-14 EHD + 0.4x Red.", "camera": "DVTI+CAM", "serial": "43",
                                "sensor": "Sony IMX430LLJ-C (9.2mm 1624x1240 4.5um CIS)"}
-    assert st["timing"] == {"camera_delay_s": 0.0, "timestamp_reference": "middle",
-                            "timestamp_reference_source": "ADV format (mid-exposure time stamps)"}
+    assert st["timing"] == {"camera_delay_s": 0.0, "timestamp_reference": "start",
+                            "timestamp_reference_source": "ADV: start of exposure as read (the file "
+                                                          "stores mid-exposure)"}
+    tm = station_of({**ADV_META, "EXPOSURE-S": 1.0}, "ADV")["timing"]     # movie.AdvReader adds it
+    assert mid_exposure_shift_s(tm) == (0.5, "time stamps mark the exposure start: +0.5000 s "
+                                             "(half the exposure)")
     assert "acquisition_delay_raw" in station_of({**ADV_META, "ACQUISITION-DELAY": "16"}, "ADV")["timing"]
     ser = station_of({"Observer": "X", "FileID": "LUCAM-RECORDER"}, "SER")
     assert ser["recorder"] == "SER (LUCAM-RECORDER)" and ser["observers"] == ["X"]
@@ -555,7 +559,7 @@ def test_time_reference_and_mid_exposure_shift():
         ("start", "recording (TIMESTAMP-REFERENCE)")
     assert time_reference({"timestamp-reference": "Mid"}, "RAVF")[0] == "middle"
     assert time_reference({"INSTRUMENT": "Astrid"}, "RAVF") == ("start", "RAVF format (start_timestamp)")
-    assert time_reference({}, "ADV")[0] == "middle"
+    assert time_reference({}, "ADV")[0] == "start"           # Adv2's StartOfExposureTimestamp
     assert time_reference({"DATE-OBS": "2026-10-11T04:11:34"}, "FITS")[0] == "start"
     assert time_reference({"MIDTIME": "04:11:34"}, "FITS")[0] == "middle"
     assert time_reference({}, "SER") == ("unknown", "not in the recording")

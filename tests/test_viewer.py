@@ -871,7 +871,8 @@ def test_a_reference_on_the_target_star_is_removed(movie):
     click(v, c0, r0)                                # ref1
     click(v, c2, r2)                                # ref2
     key(v, 't', c0, r0)                             # the target onto ref1's star: ap1 kept as target
-    assert [(a.name, a.role) for a in v.apertures] == [('ap1', ''), ('target', 'target'), ('ref2', 'reference')]
+    assert [(a.name, a.role) for a in v.apertures] == [('ap1', ''), ('target', 'target'),
+                                                       ('ref2', 'reference')]
     v.apertures.append(v.apertures[2].__class__(**{k: getattr(v.apertures[2], k) for k in
                        ('name', 'x0', 'y0', 'size', 'color', 'role')}))
     v.apertures[-1].name = 'ref3'                   # loaded from a file: twice on one star
