@@ -150,8 +150,13 @@ uv run pystarlight player               # the player, also with a file dialog
 
 Only the viewer wanted? `uv sync --extra all` is enough; the player then says what is missing.
 Note that each `uv sync` installs exactly the extras it names and removes the others, so keep
-`--extra camera` on later syncs. To update: `git pull` and the same `uv sync` again, in the
-`PyStarLight` folder.
+`--extra camera` on later syncs.
+
+> **After every update** (`git pull`, in the `PyStarLight` folder) run the same `uv sync` with
+> your extras again, e.g. `uv sync --extra all --extra camera --extra aravis` on the Pi. `uv run`
+> alone installs only the base packages: new dependencies of an extra stay missing, and when the
+> Python version changed (`.python-version`) it rebuilds `.venv` without any extras, so the
+> camera stops with `No module named 'serial'` (or `PySide6`, `gi`) until you sync.
 
 uv uses Python 3.12 (`.python-version`; it downloads it if needed), whatever else is installed: a
 brand-new Python (3.15 in 2026-11) has no ready-made wheels of scikit-image and friends yet, so they
