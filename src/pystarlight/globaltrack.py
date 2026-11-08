@@ -458,6 +458,29 @@ def seeing_fwhm(fits) -> Optional[float]:
     return float(good[int(np.searchsorted(w, w[-1] / 2))][0])
 
 
+def reference_scatter(cols: dict, names) -> Optional[float]:
+    """How well a photometry measures the references: the median over the stars `names` of
+    the robust scatter (1.4826 MAD) of each one's signal divided by the sum of the others,
+    relative to its median. The target is not involved, so an event cannot sway it. None with
+    fewer than two stars or no common good rows."""
+    names = list(names)
+    if len(names) < 2:
+        return None
+    sig = np.array([np.asarray(cols[n]['signal'], dtype=float) for n in names])
+    ok = np.all(np.isfinite(sig), axis=0)
+    if ok.sum() < 5:
+        return None
+    sig = sig[:, ok]
+    out = []
+    for i in range(len(names)):
+        q = sig[i] / (sig.sum(axis=0) - sig[i])
+        med = np.median(q)
+        if med > 0:
+            q = q / med
+            out.append(1.4826 * float(np.median(np.abs(q - 1))))
+    return float(np.median(out)) if out else None
+
+
 def auto_radius(fwhms, factor: float = 1.5) -> float:
     """Photometry radius from the measured star widths: factor x median FWHM (at least
     1.5 px; 4 px without any fit). The FWHM is set by the seeing, so this adapts to it.
@@ -501,7 +524,7 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
         not faded or excluded, within `radius` of the global solution). Elsewhere, e.g.
         the target during the event, the global solution places it as before (with
         target_drift: plus the target's interpolated own offset).
-    photometry: 'aperture' (circle of `radius`) or 'optimal': Naylor's optimal extraction
+    photometry: 'aperture' (circle of `radius`), 'auto' or 'optimal': Naylor's optimal extraction
         (optimal_stats) at the tracked centre, out to optimal_radius_fwhm x FWHM. The
         profile FWHM is the frame's seeing: the FWHM of the reference and check stars' fits
         (not faded), their median weighted by SNR^2 (seeing_fwhm: faint stars' noisy widths
@@ -509,6 +532,11 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
         own (faint, during the event) fit is never needed. Per row in frame_info['psf_fwhm'];
         frame_info['radius'] then holds the FWHM (the zoom views draw it).
         With 'optimal', sum is sum(W*D) and area sum(W) (the effective number of pixels).
+        'auto' measures every star both ways (tracking and background shared) and keeps the
+        one whose references scatter less against each other (reference_scatter; the
+        target is not looked at); lc.photometry holds the choice and both scatters. Bright
+        stars and short exposures (scintillation) favour the circle, faint sky-limited stars
+        the optimal extraction.
     Columns per star: signal (sum - area*bkavg), sum, area, bkavg, bkstd,
         noise (bkstd*sqrt(area), background-only), xc/yc (aperture centre used),
         x_fit/y_fit/fwhm/peak_snr (this star's own fit), used (1 if it steered tracking),
@@ -517,8 +545,9 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
     """
     if background not in ('local', 'sky'):
         raise ValueError("background must be 'local' or 'sky'")
-    if photometry not in ('aperture', 'optimal'):
-        raise ValueError("photometry must be 'aperture' or 'optimal'")
+    if photometry not in ('aperture', 'optimal', 'auto'):
+        raise ValueError("photometry must be 'aperture', 'optimal' or 'auto'")
+    methods = ('aperture', 'optimal') if photometry == 'auto' else (photometry,)
     sky = [a for a in apertures if a.role == 'sky']
     if background == 'sky' and not sky:
         raise ValueError("background='sky' needs at least one aperture with role 'sky'")
@@ -540,10 +569,13 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
     seeing = deque([fw0 if fw0 is not None else radius / radius_fwhm], maxlen=max(1, seeing_frames))
     comparison = [a.name for a in tr.stars if a.role in ('reference', 'check')] or [a.name for a in tr.stars]
 
-    def measure(img, cx, cy, fwhm):
-        if photometry == 'optimal':
-            return optimal_stats(img, cx, cy, fwhm, optimal_radius_fwhm, calibration)
-        return circle_stats(img, cx, cy, radius, calibration)
+    def measure_with(method):
+        def measure(img, cx, cy, fwhm):
+            if method == 'optimal':
+                return optimal_stats(img, cx, cy, fwhm, optimal_radius_fwhm, calibration)
+            return circle_stats(img, cx, cy, radius, calibration)
+        return measure
+    measures = {m: measure_with(m) for m in methods}
 
     rows = []
     glob = {a.name: [] for a in apertures if a.role != 'sky'}   # global-solution centres
@@ -566,18 +598,18 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
         sky_level = np.median([v[0] for v in sky_vals.values()]) if sky else None
         sky_std = np.median([v[1] for v in sky_vals.values()]) if sky else None
 
-        vals = {}
+        vals = {m: {} for m in methods}
         for a in apertures:
             cx, cy = centres[a.name]
             if a.role == 'sky':
-                vals[a.name] = (fr.index, *sky_vals[a.name])
+                for m in methods:
+                    vals[m][a.name] = (fr.index, *sky_vals[a.name])
                 continue
             glob[a.name].append((cx, cy))
             f = fits.get(a.name)
             if (savgol_fit and f is not None and f.ok and not getattr(f, 'dimmed', False)
                     and not getattr(f, 'excluded', False) and math.hypot(f.x - cx, f.y - cy) <= radius):
                 cx, cy = f.x, f.y                        # centre from the fitted model
-            s, area, maxpx, hits = measure(img, cx, cy, info['psf_fwhm'])
             if background == 'sky':
                 bk, bs = sky_level, sky_std
             else:
@@ -585,20 +617,33 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
             fx, fy, fw, snr, used = ((f.x, f.y, f.fwhm, f.snr, float(getattr(f, 'used', False)))
                                      if f is not None and f.ok else (np.nan,) * 4 + (0.0,))
             dimmed = float(getattr(f, 'dimmed', False) or getattr(f, 'excluded', False)) if f else 0.0
-            vals[a.name] = (fr.index, s - area * bk, s, area, bk, bs, bs * math.sqrt(area),
-                            cx, cy, fx, fy, fw, snr, used, dimmed, maxpx, hits)
+            for m in methods:
+                s, area, maxpx, hits = measures[m](img, cx, cy, info['psf_fwhm'])
+                vals[m][a.name] = (fr.index, s - area * bk, s, area, bk, bs, bs * math.sqrt(area),
+                                   cx, cy, fx, fy, fw, snr, used, dimmed, maxpx, hits)
         rows.append((fr.index, fr.date, fr.time, info, vals))
         if progress:
-            progress(fr.index, vals)
+            progress(fr.index, vals[methods[0]])
 
     order = np.argsort([r[0] for r in rows], kind='stable')
     rows = [rows[i] for i in order]
     glob = {n: np.array(v, dtype=float).reshape(-1, 2)[order] for n, v in glob.items()}
-    cols = {}
-    for a in apertures:
-        names = SKY_COLUMNS if a.role == 'sky' else STAR_COLUMNS
-        data = np.array([r[4][a.name] for r in rows], dtype=float).reshape(-1, len(names))
-        cols[a.name] = {c: data[:, i] for i, c in enumerate(names)}
+    by_method = {}
+    for m in methods:
+        cols = {}
+        for a in apertures:
+            names = SKY_COLUMNS if a.role == 'sky' else STAR_COLUMNS
+            data = np.array([r[4][m][a.name] for r in rows], dtype=float).reshape(-1, len(names))
+            cols[a.name] = {c: data[:, i] for i, c in enumerate(names)}
+        by_method[m] = cols
+    refs = [a.name for a in apertures if a.role == 'reference']
+    if len(refs) < 2:
+        refs = [a.name for a in apertures if a.role in ('reference', 'check')]
+    scatter = {m: reference_scatter(by_method[m], refs) for m in methods}
+    chosen = methods[0]
+    if photometry == 'auto' and all(v is not None for v in scatter.values()):
+        chosen = min(methods, key=lambda m: scatter[m])
+    cols, measure = by_method[chosen], measures[chosen]
     info_keys = list(rows[0][3]) if rows else []
     psf = np.array([r[3]['psf_fwhm'] for r in rows], dtype=float)
     if target_drift and target is not None and rows:
@@ -612,12 +657,18 @@ def analyze_global(reader: MovieReader, apertures: list[Aperture],
             _apply_target_drift(reader, tc, target, background, cols,
                                 sky, calibration, preprocess, lunar, cancel, measure, psf)
     frame_info = {k: np.array([r[3][k] for r in rows], dtype=float) for k in info_keys}
-    frame_info['radius'] = psf if photometry == 'optimal' else np.full(len(rows), radius)
-    frame_info['optimal'] = np.full(len(rows), float(photometry == 'optimal'))
+    frame_info['radius'] = psf if chosen == 'optimal' else np.full(len(rows), radius)
+    frame_info['optimal'] = np.full(len(rows), float(chosen == 'optimal'))
+    phot = {'method': chosen, 'requested': photometry, 'radius_px': float(radius),
+            'reference_scatter': {m: v for m, v in scatter.items() if v is not None},
+            'stars_compared': refs}
+    if photometry == 'auto':
+        phot['why'] = ('lower reference scatter' if all(v is not None for v in scatter.values())
+                       else 'fewer than two references: circular aperture')
     return LightCurves(cols, [r[1] for r in rows], [r[2] for r in rows], [None] * len(rows),
                        roles={a.name: a.role for a in apertures}, frame_info=frame_info,
                        source=str(getattr(reader, 'path', '')), metadata=dict(reader.metadata),
-                       mode='global', apertures=list(apertures))
+                       mode='global', apertures=list(apertures), photometry=phot)
 
 
 def _running_median(y, window):

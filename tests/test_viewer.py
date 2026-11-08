@@ -285,14 +285,16 @@ def test_display_levels_and_gamma(movie):
     assert v.per_frame and v.levels_auto
 
 
-def test_optimal_checkbox_switches_photometry(movie):
+def test_photometry_button_cycles_auto_circle_optimal(movie):
     v = Viewer(str(movie))
-    assert v.cfg['analysis']['photometry'] == 'optimal'                  # the default: ticked
-    assert v._optimal_box.get_status() == [True]
-    v._optimal_box.set_active(0)
+    assert v.cfg['analysis']['photometry'] == 'auto'                     # the default
+    assert v._phot_button.label.get_text() == 'phot: auto'
+    v._phot_button._observers.process('clicked', None)
     assert v.cfg['analysis']['photometry'] == 'aperture' and 'circular aperture' in v.status.get_text()
-    v._optimal_box.set_active(0)
-    assert v.cfg['analysis']['photometry'] == 'optimal'
+    v._phot_button._observers.process('clicked', None)
+    assert v.cfg['analysis']['photometry'] == 'optimal' and v._phot_button.label.get_text() == 'phot: optimal'
+    v._phot_button._observers.process('clicked', None)
+    assert v.cfg['analysis']['photometry'] == 'auto'
 
 
 def test_aperture_size_controls_resize_boxes(movie):
@@ -877,3 +879,26 @@ def test_a_reference_on_the_target_star_is_removed(movie):
                        ('name', 'x0', 'y0', 'size', 'color', 'role')}))
     v.apertures[-1].name = 'ref3'                   # loaded from a file: twice on one star
     assert v.drop_doubles() == ['ref3'] and 'ref3 (on the same star as ref2)' in v.status.get_text()
+
+
+def test_auto_after_a_run_and_a_run_without_references(movie):
+    """Auto ap after a run: the old result plot is not redrawn half way (it had a target and no
+    references yet: crashed, and the references were never placed). A run with only a target
+    says so instead of failing."""
+    v = Viewer(str(movie))
+    (r0, c0, _), (r1, c1, _), _ = STARS
+    click(v, c0, r0)
+    click(v, c1, r1)
+    v.run()
+    v._job.join()
+    v.poll()
+    assert v._lc is not None
+    v.apertures = [a for a in v.apertures if a.role == 'target']
+    key(v, 'A')
+    v.finish_jobs()
+    assert sum(a.role == 'reference' for a in v.apertures) == 2 and 'auto: target' in v.status.get_text()
+    v.apertures = [a for a in v.apertures if a.role == 'target']
+    v.run()
+    v._job.join()
+    v.poll()
+    assert 'no reference stars' in v.status.get_text()

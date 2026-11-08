@@ -407,8 +407,8 @@ All keys:
 | Home / End, buttons `\|<` `>\|` | first / last frame |
 | buttons `-10 s` / `+10 s` | jump 10 s (frame count from the timestamps) |
 | `a`, button **Run** | analyse from the current frame to the end |
-| `A`, button **Auto** (next to **Set target**) | **automatic apertures**: the star typed in the star field is the target (Enter not needed; empty: the recording's target, see [Fully automatic](#fully-automatic-auto)), references picked over the field; replaces the apertures. Then `a` runs |
-| checkbox **Optimal** | optimal extraction (ticked) or circular apertures, see [Run](#3-run) |
+| `A`, button **Auto ap** (next to **Set target**; the **Auto** below the image is the display stretch) | **automatic apertures**: the star typed in the star field is the target (Enter not needed; empty: the recording's target, see [Fully automatic](#fully-automatic-auto)), references picked over the field; replaces the apertures. Then `a` runs |
+| button **phot: auto** | photometry of the next run: auto (the better of the two by the references), circle, optimal; see [Run](#3-run) |
 | `e`, button **Send** | send `<movie>.event.json` to PySyzygos' observation report (see [Run](#3-run)) |
 | `s` / `l` | save / load apertures (`<movie>.apertures.json`) |
 | `p` | plate-solve again (offline with a local astrometry.net, else uploads to nova.astrometry.net) |
@@ -432,7 +432,7 @@ uv run pystarlight analyze --batch --auto RUN.ravf               # no window: re
 `--auto` plate-solves (offline, or with an upload to nova.astrometry.net when there is no local
 solver: `--auto` is the request), places the apertures and runs. Key `A` in the viewer places them
 only (solving first only offline): type the target in the star field at the top, click
-**Auto** next to **Set target**, check the boxes, press `a`.
+**Auto ap** next to **Set target**, check the boxes, press `a`.
 
 - **Target:** `--target` (any name the star field takes, or RA Dec), else the star field's entry
   (`<movie>.target.json`), else the recording's `TARGET-STAR` / `TARGET-RA` / `TARGET-DEC` (the
@@ -465,16 +465,23 @@ checks) track together:
   other stars; clouds dim all stars and do not count), it is left out of the tracking. Its
   aperture keeps following the field, plus the target's own slow offset, **interpolated between
   the start and end of the event**. A known event can also be given: `event=(first, last)`;
-- photometry is Naylor's **optimal extraction** by default (checkbox **Optimal**, ticked;
-  `[analysis] photometry = "optimal"`; [Naylor 1998](#references)): each pixel weighted by a circular Gaussian of the frame's
-  seeing (the reference stars' median FWHM) at the tracked position, the same profile for every
-  star so that profile errors cancel in the ratio. Linear in the data, so event depths stay
-  unbiased. It lowers the noise of faint stars whose noise is mostly sky noise and uncorrelated
-  from pixel to pixel; it does nothing against scintillation, which dominates short exposures
-  with small telescopes. Untick **Optimal** (or `photometry = "aperture"`) for a circular
-  aperture with exact sub-pixel weights (radius 1.5 × FWHM unless set): on short exposures
-  dominated by scintillation it can be as good or better (it was on ASTRID 0.17 s and
-  analog-video ADV recordings), so compare both on your data.
+- photometry: by default **auto** (button **phot: auto**, `[analysis] photometry = "auto"`):
+  every star is measured both ways in the same pass, and the run keeps the one whose
+  **reference stars scatter less against each other** (each reference divided by the sum of the
+  others; the target is never looked at, so an event cannot sway the choice). The status line
+  and `event.json` (`photometry.choice`) say which and both scatters. The two methods:
+  - Naylor's **optimal extraction** ([Naylor 1998](#references)): each pixel weighted by a
+    circular Gaussian of the frame's seeing (the reference stars' FWHM, median weighted by
+    SNR²) at the tracked position, the same profile for every star so that profile errors
+    cancel in the ratio. Linear in the data, so event depths stay unbiased. It lowers the noise
+    of faint stars whose noise is mostly sky noise; it does nothing against scintillation;
+  - a **circular aperture** with exact sub-pixel weights (radius 1.5 × FWHM unless set): better
+    for bright stars and short exposures, where scintillation and a non-Gaussian PSF dominate.
+  
+  On the (476) Hedwig DVTI recording (1 s, star G 14.6 blended with the asteroid) auto kept the
+  circle (references 3.9 % vs 4.9 %), with D and R within 1σ of PyOTE on PyMovie's apertures;
+  with optimal the event's recovery depended on which faint references were added. On faint
+  synthetic stars it keeps the optimal extraction. The button cycles auto → circle → optimal.
 
 Written next to the movie:
 

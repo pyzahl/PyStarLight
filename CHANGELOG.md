@@ -7,6 +7,9 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Auto ap / `A` after a run crashed and left no references: placing the target redrew the old
+  result plot before the references were there. A run without references now says so instead
+  of failing in the normalisation.
 - Global mode: the seeing (optimal extraction's profile FWHM, the auto radius) is the stars' FWHM
   median weighted by SNR^2 (`seeing_fwhm`), no longer the plain median: three faint references
   pulled it 0.1-0.2 px narrower and changed a marginal event's result.
@@ -24,11 +27,15 @@ uses [Semantic Versioning](https://semver.org/).
   is not in the field says so at once instead of asking SIMBAD.
 
 ### Added
+- Global mode: `photometry = "auto"` (new default; viewer button **phot: auto / circle /
+  optimal** in place of the Optimal checkbox): both measured in one pass, kept is the one whose
+  references scatter less against each other (`reference_scatter`; the target never counts).
+  Chosen method and both scatters in the status line and `event.json` `photometry.choice`.
 - Analysis: **automatic apertures**. `pystarlight analyze --auto [--target STAR] [--batch] FILE`
   plate-solves, puts the target aperture on the named star (`--target`, the star field, or the
   recording's new `TARGET-STAR` / `TARGET-RA` / `TARGET-DEC`), picks references and runs;
   `--batch` without a window, exit code 1 when nothing was found. In the viewer: type the target
-  in the star field and click **Auto** (or key `A`) to place them.
+  in the star field and click **Auto ap** (or key `A`) to place them.
   References (`autopick.py`, config `[auto]`): not saturated, bright enough, star-shaped, alone in
   their box, inside the frame over the whole drift; the brightest first, then spread over the field.
 - Viewer star field: an **asteroid** as the target (`(476) Hedwig`, `476 Hedwig`, `2003 SB60`):

@@ -16,6 +16,7 @@ from pystarlight.globaltrack import (
     fit_rigid,
     optimal_stats,
     pixel_gaussian,
+    reference_scatter,
     savgol_2d,
 )
 from test_pipeline import write_ser
@@ -320,3 +321,37 @@ def test_global_optimal_tracks_seeing_and_occultation(movie):
     with open_movie(path) as mv:
         with pytest.raises(ValueError):
             analyze_global(mv, apertures(), photometry='psf')
+
+
+def test_auto_photometry_keeps_the_method_with_quieter_references(movie):
+    """'auto' measures both in one pass and keeps the one whose references scatter less against
+    each other: the same columns as a run with that method alone."""
+    path, _ = movie
+    runs = {}
+    for m in ('aperture', 'optimal', 'auto'):
+        with open_movie(path) as mv:
+            runs[m] = analyze_global(mv, apertures(), photometry=m)
+    p = runs['auto'].photometry
+    sc = p['reference_scatter']
+    assert p['requested'] == 'auto' and set(sc) == {'aperture', 'optimal'}
+    assert p['method'] == min(sc, key=sc.get) and p['why'] == 'lower reference scatter'
+    assert p['stars_compared'] == [f'ref{k}' for k in range(1, len(STARS))]
+    best = runs[p['method']]
+    for name in ('target', 'ref1'):
+        np.testing.assert_allclose(runs['auto'][name]['signal'], best[name]['signal'])
+    assert sc[p['method']] == pytest.approx(reference_scatter(best.columns, p['stars_compared']))
+    assert runs['optimal'].photometry == {'method': 'optimal', 'requested': 'optimal',
+                                          'radius_px': runs['optimal'].photometry['radius_px'],
+                                          'reference_scatter': {'optimal': sc['optimal']},
+                                          'stars_compared': p['stars_compared']}
+
+
+def test_reference_scatter_is_the_references_against_each_other():
+    rng = np.random.default_rng(3)
+    clouds = 1 + 0.3 * np.sin(np.arange(200) / 20)              # common: cancels
+    quiet = {f'r{k}': {'signal': 1000 * (k + 1) * clouds * (1 + 0.01 * rng.standard_normal(200))}
+             for k in range(4)}
+    noisy = {n: {'signal': c['signal'] * (1 + 0.05 * rng.standard_normal(200))} for n, c in quiet.items()}
+    q, n = reference_scatter(quiet, list(quiet)), reference_scatter(noisy, list(noisy))
+    assert 0.008 < q < 0.02 and 0.04 < n < 0.07
+    assert reference_scatter(quiet, ['r0']) is None

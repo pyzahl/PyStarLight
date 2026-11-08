@@ -101,6 +101,8 @@ def ensemble(signals: dict, references: Sequence[str], ref_mags: Optional[dict] 
     a linear scale (also for s <= 0, e.g. an occulted star, which has no magnitude)."""
     with_mag = [r for r in references if ref_mags and ref_mags.get(r) is not None]
     used = with_mag or list(references)
+    if not used:
+        raise ValueError('no reference stars to normalise with')
     ens = smooth(combine_references([signals[r] for r in used]), window, method)
     ens = np.where(ens > 0, ens, np.nan)
     m_ens = -2.5 * np.log10(sum(10 ** (-0.4 * ref_mags[r]) for r in with_mag)) if with_mag else 0.0

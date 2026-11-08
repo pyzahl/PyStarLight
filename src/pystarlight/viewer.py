@@ -18,8 +18,8 @@ Keys    left / right   previous / next frame      page up / down  -/+ 25 frames
         u              auto-center the nearest aperture on its fitted peak
         n              rename nearest aperture (text box at the top: Enter applies, Esc cancels)
         1 / 2          show the aperture under the mouse in zoom view 1 / 2 (right side)
-        a              run the analysis from this frame to the end (Optimal box: photometry)
-        A, Auto        automatic apertures: the star typed in the star field as the target (else the
+        a              run the analysis from this frame to the end (phot button: photometry)
+        A, Auto ap     automatic apertures: the star typed in the star field as the target (else the
                        recording's TARGET-STAR), references picked over the field ([auto] in the config)
         e              send <movie>.event.json to PySyzygos' observation report (also Send)
         s / l          save / load apertures (<movie>.apertures.json)
@@ -241,6 +241,7 @@ def load_aperture_stars(path) -> dict:
 
 
 STAR_APERTURE_ROLES = ('target', 'reference', 'check')
+PHOT_LABELS = {'auto': 'phot: auto', 'aperture': 'phot: circle', 'optimal': 'phot: optimal'}
 LIVE_ZOOM_INTERVAL = 0.5        # s between zoom-view updates while analysing
 
 
@@ -376,9 +377,10 @@ class Viewer:
         self._per_frame_box = CheckButtons(self.fig.add_axes([0.665, 0.165, 0.09, 0.05]), ['per frame'],
                                            [self.per_frame])
         self._per_frame_box.on_clicked(self._on_per_frame)
-        self._optimal_box = CheckButtons(self.fig.add_axes([0.765, 0.165, 0.075, 0.05]), ['Optimal'],
-                                         [self.cfg['analysis']['photometry'] == 'optimal'])
-        self._optimal_box.on_clicked(self._on_optimal)
+        # photometry for the next run: auto (the better of the two, by the references) / circle / optimal
+        self._phot_button = Button(self.fig.add_axes([0.765, 0.172, 0.075, 0.036]),
+                                   PHOT_LABELS.get(self.cfg['analysis']['photometry'], 'auto'))
+        self._phot_button.on_clicked(lambda e: self.cycle_photometry())
 
         self.slider = Slider(self.fig.add_axes([0.2, 0.115, 0.6, 0.025]), 'frame', 0, self.n - 1,
                              valinit=0, valstep=1, valfmt='%d')
@@ -428,8 +430,8 @@ class Viewer:
         self._set_target_button = Button(self._set_target_ax, 'Set target')
         self._set_target_button.on_clicked(lambda e: self.target_to_marker())
         # Auto: the star typed there as the target (Enter not needed) and references picked (A)
-        self._auto_ap_ax = self.fig.add_axes([0.685, 0.951, 0.04, 0.032])
-        self._auto_ap_button = Button(self._auto_ap_ax, 'Auto')
+        self._auto_ap_ax = self.fig.add_axes([0.685, 0.951, 0.05, 0.032])
+        self._auto_ap_button = Button(self._auto_ap_ax, 'Auto ap')
         self._auto_ap_button.on_clicked(lambda e: self.auto_from_field())
         self.marker = None            # the star entered: wcs.identify.find_star dict
         self._marker_artists = []
@@ -651,13 +653,19 @@ class Viewer:
         if self.per_frame:
             self.auto_levels()
 
-    def _on_optimal(self, _label):
-        """Photometry for the next run (global mode) and Fit frame: Naylor's optimal extraction
-        or the circular aperture."""
+    def cycle_photometry(self):
+        """Photometry button: the next run's (global mode) photometry, auto -> circle -> optimal.
+        Fit frame uses the optimal extraction only when it is set."""
         a = self.cfg['analysis']
-        a['photometry'] = 'aperture' if a['photometry'] == 'optimal' else 'optimal'
-        self.say('photometry: ' + ('optimal extraction (Naylor), Gaussian weights of the seeing'
-                                   if a['photometry'] == 'optimal' else 'circular aperture'))
+        order = list(PHOT_LABELS)
+        cur = a['photometry'] if a['photometry'] in order else 'auto'
+        a['photometry'] = order[(order.index(cur) + 1) % len(order)]
+        self._phot_button.label.set_text(PHOT_LABELS[a['photometry']])
+        self.say('photometry: ' + {'auto': 'auto: circle and optimal extraction both measured, the one '
+                                           'whose references scatter less is kept',
+                                   'aperture': 'circular aperture',
+                                   'optimal': 'optimal extraction (Naylor), Gaussian weights of the seeing'
+                                   }[a['photometry']])
 
     def show(self, i):
         self.index = i
@@ -1758,7 +1766,6 @@ class Viewer:
         self._background('auto', work, lambda res, err: self._auto_done(res, err, queries, note, index, run))
 
     def _auto_done(self, res, err, queries, note, index, run):
-        from . import autopick
         if err is not None:
             self._auto_ok = False
             self.say(f'auto failed: {err!r}')
@@ -1772,6 +1779,14 @@ class Viewer:
             note = f'; {queries[0]}: not found' + (f' ({why})' if why else '') + note
         if found is not None:
             self.set_marker(found)
+        self._placing = True                        # no result plot redraw half way (update_result)
+        try:
+            self._place_auto(found, queries, note, stars, stamp, drift, run)
+        finally:
+            self._placing = False
+
+    def _place_auto(self, found, queries, note, stars, stamp, drift, run):
+        from . import autopick
         old_target = next((a for a in self.apertures if a.role == 'target'), None)
         use_marker = found is not None or (not queries and self.marker is not None)
         keep = [old_target] if old_target is not None and not use_marker else []
@@ -1879,7 +1894,7 @@ class Viewer:
     def update_result(self):
         """After a run: draw the result plot again with the current target, references and curve
         colours (keys t r c k, Y G W R), and save it again. The CSV files stay as written by Run."""
-        if self._lc is None or self._job is not None:
+        if self._lc is None or self._job is not None or getattr(self, '_placing', False):
             return
         self.show_result()
 
@@ -2060,10 +2075,11 @@ class Viewer:
                        if 'xc' in lc[n]}
         self._lc = lc
         self.update_zooms()
-        self.show_result()
+        if self.show_result() is False:              # it said why (e.g. no references)
+            return
         formats = ", ".join(self.cfg["plot"]["formats"])
         self.say(f'wrote {csv.name}, {self.event_path().name}, {self.path.stem}-summary[-mag], '
-                 f'-mag-hist ({formats}); '
+                 f'-mag-hist ({formats}); {self.photometry_summary(lc)}'
                  f'roles and Y G W R now update the plot; {self.step_summary()}')
         print(self.step_summary())
         if self.cfg.get('output', {}).get('stack_image'):
@@ -2306,7 +2322,11 @@ class Viewer:
         gone = [n for n in [target, *refs] if n not in lc.columns]
         if gone:
             self.say(f'not in the last run: {", ".join(gone)} (Run again to include them)')
-            return
+            return False
+        if not refs:
+            self.say(f'no reference stars: nothing to normalise {target} with; mark some (r over a '
+                     'star, or Auto ap) and run again')
+            return False
         colors = {a.name: plot.APERTURE_COLORS[a.color] for a in self.apertures if a.color in CURVE_COLORS}
         window = self.cfg['analysis']['normalize_window']
         checks = [a.name for a in self.apertures if a.role == 'check' and a.name in lc.columns]
@@ -2427,7 +2447,9 @@ class Viewer:
                            'saturation': getattr(self, '_saturation', None),
                            'magnitudes': 'm = m0 - 2.5 log10(flux), flux = target signal / smoothed '
                                          'ensemble of the references',
-                           'band': self._mag_band},
+                           'band': self._mag_band,
+                           **({'choice': self._lc.photometry} if getattr(self._lc, 'photometry', None)
+                              else {})},
             'step_fit': report,
             'notes': ['times are mid-exposure: the time stamps as recorded, shifted by '
                       'step_fit.time_base.shift_to_mid_exposure_s (from timestamp_reference; the '
@@ -2469,6 +2491,20 @@ class Viewer:
         fit = st.fit_steps(plot.seconds(lc), np.asarray(signals[target], dtype=float) / ens)
         label = f'{band} in mag' if calibrated else '\u0394mag to the references in mag'
         return mags, label, (fit, m0)
+
+    @staticmethod
+    def photometry_summary(lc) -> str:
+        """'photometry auto: circle (references 3.8 % vs optimal 6.7 %); ' after a run."""
+        p = getattr(lc, 'photometry', None) or {}
+        if p.get('requested') != 'auto':
+            return ''
+        sc = p.get('reference_scatter', {})
+        name = {'aperture': 'circle', 'optimal': 'optimal'}
+        other = next((m for m in sc if m != p['method']), None)
+        if p['method'] not in sc or other is None:
+            return f'photometry auto: {name[p["method"]]} ({p.get("why", "")}); '
+        return (f'photometry auto: {name[p["method"]]} (references {sc[p["method"]] * 100:.1f} % vs '
+                f'{name[other]} {sc[other] * 100:.1f} %); ')
 
     def step_summary(self) -> str:
         """'events: D at 04:24:13.012 UTC +- 0.011 s (...); R at ...' of the last result plot."""

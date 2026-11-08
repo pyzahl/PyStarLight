@@ -34,6 +34,7 @@ class LightCurves:
     metadata: dict = field(default_factory=dict)               # the movie's metadata
     mode: str = 'pymovie'                                      # 'pymovie' | 'global'
     apertures: list = field(default_factory=list)              # Aperture objects as analysed
+    photometry: dict = field(default_factory=dict)             # global: method, auto choice, scatters
 
     def __getitem__(self, name: str) -> dict[str, np.ndarray]:
         return self.columns[name]
