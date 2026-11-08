@@ -386,7 +386,7 @@ is saved as `<movie>.astrometry.json`; from the command line:
 residuals from 0.85" (astrometry.net's WCS) to 0.5" (a quarter pixel) and removed a 0.4" offset.
 
 Each frame's UTC timestamp is shown on top; a short key list is on the right. Left-click a star
-to add an aperture (it snaps onto the star), right-click removes one. The **first** aperture
+to add an aperture (it snaps onto the star), right-click (or Delete / Backspace with the mouse over it) removes one. The **first** aperture
 (while there is no target) becomes the **target**, every later one a **reference** (`ref1`,
 `ref2`, ...). With the mouse over an aperture, press a key to change its role:
 
@@ -401,7 +401,7 @@ All keys:
 
 | key / control | action |
 |---|---|
-| click / right-click | add (snaps onto the star; the first is the target, later ones references) / remove aperture |
+| click / right-click, Del | add (snaps onto the star; the first is the target, later ones references) / remove aperture (Delete or Backspace, the Mac's delete key, removes the one under the mouse) |
 | `u` | centre the aperture under the mouse on its fitted peak |
 | `t` `r` `c` `k` | role of the aperture under the mouse (see above; changeable in the config) |
 | `1` / `2` | show the aperture under the mouse in zoom view 1 / 2 (right side, ~4-5×, own contrast). While analysing they update live (~2×/s) with the frame being processed; afterwards they follow the tracked position. Each shows the signal and, in global mode, the peak fit (FWHM, SNR, `+` = fitted centre, circle = photometry aperture) |

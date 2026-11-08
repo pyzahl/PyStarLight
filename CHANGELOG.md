@@ -27,6 +27,8 @@ uses [Semantic Versioning](https://semver.org/).
   is not in the field says so at once instead of asking SIMBAD.
 
 ### Added
+- Viewer: **Delete** or **Backspace** (the Mac's delete key) removes the aperture under the mouse,
+  as the right click does (on macOS the right click does not always arrive).
 - Global mode: `photometry = "auto"` (new default; viewer button **phot: auto / circle /
   optimal** in place of the Optimal checkbox): both measured in one pass, kept is the one whose
   references scatter less against each other (`reference_scatter`; the target never counts).

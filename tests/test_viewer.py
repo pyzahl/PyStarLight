@@ -68,6 +68,11 @@ def test_viewer_workflow(movie):
     assert v.apertures[1].color == 'yellow'
     click(v, 30, 30, button=3)
     assert len(v.apertures) == 2
+    for k in ('delete', 'backspace'):             # the Mac's delete key is backspace (no right click)
+        click(v, 30, 30)
+        assert len(v.apertures) == 3
+        key(v, k, 30, 30)
+        assert len(v.apertures) == 2
     key(v, 't', c0, r0)
     key(v, 'r', c1, r1)
     assert [(x.name, x.role) for x in v.apertures] == [('target', 'target'), ('ref1', 'reference')]

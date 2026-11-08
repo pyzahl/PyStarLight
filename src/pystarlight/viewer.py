@@ -7,7 +7,7 @@
 
 Mouse   left click     add aperture (snaps to the star's brightest pixels; the first is the
                        target, later ones references)
-        right click    remove the nearest aperture
+        right click    remove the nearest aperture (also Delete / Backspace, the Mac's delete key)
 Keys    left / right   previous / next frame      page up / down  -/+ 25 frames
         home / end     first / last frame
         t r c k        give the aperture under the mouse a role (defaults; set in the config):
@@ -69,7 +69,7 @@ MARKER_COLOR = '#ff3d7f'                        # the star entered in the star f
 MOVIE_PATTERNS = '*.ravf *.ser *.adv *.aav *.avi *.mov *.fit *.fits *.fts'
 FITS_SUFFIXES = ('.fit', '.fits', '.fts')
 NAV_KEYS = ('left', 'right', 'pageup', 'pagedown', 'home', 'end', 'n', 'N', 'a', 's', 'l', 'p', 'i', 'u',
-            'e', '1', '2')
+            'e', '1', '2', 'delete', 'backspace')
 
 
 class QuickTextBox(TextBox):
@@ -474,7 +474,7 @@ class Viewer:
         self.show(0)
         keys = ' '.join(f'{r["key"]}:{name}' for name, r in self.roles.items())
         if not self.status.get_text():           # keep a note from loading the apertures
-            self.say(f'click: add aperture, right click: remove, roles {keys}, a: run, s/l: save/load')
+            self.say(f'click: add aperture, right click / Del: remove, roles {keys}, a: run, s/l: save/load')
 
         # plate solution: RA/Dec under the cursor and field orientation
         self.ax.format_coord = self.format_coord
@@ -555,7 +555,7 @@ class Viewer:
                                           TextArea(f'  {name}', textprops=text_props)],
                                 align='baseline', pad=0, sep=0))
         rows.extend(TextArea(line, textprops=text_props) for line in (
-            'u auto-center peak',
+            'u auto-center peak  Del remove',
             'n rename  1 2 zoom view',
             '<- ->  1 frame  PgUp/Dn 25',
             'a run  A auto  s/l save/load',
@@ -1907,12 +1907,16 @@ class Viewer:
         if ev.button == 1:
             self.add(ev.xdata, ev.ydata)
         elif ev.button == 3:
-            a = self.nearest(ev.xdata, ev.ydata)
-            if a:
-                self.apertures.remove(a)
-                self.ap_stars.pop(a.name, None)
-                self.draw_apertures()
-                self.update_zooms()
+            self.remove_nearest(ev.xdata, ev.ydata)
+
+    def remove_nearest(self, x, y):
+        """Right click or Delete / Backspace (macOS has no right click on some setups)."""
+        a = self.nearest(x, y)
+        if a:
+            self.apertures.remove(a)
+            self.ap_stars.pop(a.name, None)
+            self.draw_apertures()
+            self.update_zooms()
 
     def on_key(self, ev):
         k = ev.key
@@ -1935,6 +1939,8 @@ class Viewer:
             self.set_role(ev.xdata, ev.ydata, self.role_keys[k])
         elif k in PYMOVIE_KEYS and ev.inaxes is self.ax:
             self.set_color(ev.xdata, ev.ydata, PYMOVIE_KEYS[k])
+        elif k in ('delete', 'backspace') and ev.inaxes is self.ax:
+            self.remove_nearest(ev.xdata, ev.ydata)
         elif k == 'u' and ev.inaxes is self.ax:
             self.center_nearest_aperture(ev.xdata, ev.ydata)
         elif k == 'n' and ev.inaxes is self.ax:
