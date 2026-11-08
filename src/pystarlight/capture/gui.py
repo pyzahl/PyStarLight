@@ -33,6 +33,7 @@ from .timing import (
     parse_utc,
     pulses_per_frame,
     rate_str,
+    utc_now_ns,
     utc_str,
 )
 
@@ -45,6 +46,10 @@ EXP_BACK_DOWN_US = 1e6
 REANCHOR_LEAD_NS = 20 * 10**9   # set start time: anchor on GPS UTC this long before
 GAIN_STEPS = 10             # gain slider: 0.1 dB per step
 GAMMA_MIN, GAMMA_MAX = 0.1, 4.0
+# per-frame auto levels: move this fraction towards each frame's zscale. On a quiet sensor
+# (IMX265M dark: sigma 2.8 ADU, a ~20 ADU window) zscale wobbles by 10-15 % frame to frame and
+# the image flickers; a jump larger than the window (new scene) is taken at once
+LEVELS_SMOOTH = 0.2
 STACK_FULL = 65535          # the shown stack: mean scaled to 0..this (keeps the fraction)
 SOLVE_RADIUS_DEG = 3.0      # plate solve: search this far around the expected position
 
@@ -435,7 +440,12 @@ class LevelsBox(QtWidgets.QGroupBox):
         """The shown image changed: True if per-frame auto levels were set (changed emitted)."""
         img = self.image()
         if self.auto and self.per_frame and img is not None:
-            self.set_levels(*zscale(img), manual=False)
+            lo, hi = zscale(img)
+            span = self.hi - self.lo
+            if abs(lo - self.lo) < span and abs(hi - self.hi) < span:
+                lo = self.lo + LEVELS_SMOOTH * (lo - self.lo)
+                hi = self.hi + LEVELS_SMOOTH * (hi - self.hi)
+            self.set_levels(lo, hi, manual=False)
             return True
         return False
 
@@ -1218,7 +1228,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.gps_labels = {}
         rows = [("utc", "UTC (GPS)"), ("fix", "Fix"), ("sats", "Satellites"), ("dop", "DOP"),
                 ("pos", "Position"), ("alt", "Altitude"), ("pulse", "Timepulse"),
-                ("clock", "Time base"),
+                ("clock", "Time base"), ("sysclock", "Pi clock"),
                 ("stamp", "Exposure start"), ("pulse_t", "Trigger pulse"),
                 ("lag", "Pulse → frame"), ("rows", "Rolling shutter")]
         if self.c.compass is not None:
@@ -1370,13 +1380,14 @@ class MainWindow(QtWidgets.QMainWindow):
         """Favorites button: ask the PySyzygos server (worker thread) for the next 12 h."""
         url, token = favorites.server_settings(getattr(self.args, "pysyzygos", None))
         past = favorites.past_hours()
+        now = self.now_utc()
         self.fav_button.setEnabled(False)
         self.event_info.setText(f"asking {url or 'PySyzygos'} for the next 12 h"
                                 + (f" (and the last {past:g} h)" if past else "") + " ...")
 
         def work():
             try:
-                self.favorites_ready.emit(favorites.fetch_favorites(url, token, past=past))
+                self.favorites_ready.emit(favorites.fetch_favorites(url, token, past=past, now=now))
             except Exception as e:          # no server, refused token, bad answer
                 self.favorites_ready.emit(f"favorites: {e}")
         threading.Thread(target=work, daemon=True).start()
@@ -1412,7 +1423,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.on_target()
         start = plan["start"].replace(microsecond=0)            # the start field has whole seconds
         end = plan["event"] + timedelta(seconds=plan["trail_s"])
-        now = datetime.now(timezone.utc)
+        now = self.now_utc()
         if end <= now:                          # over (past_hours, tests): the same length, now
             end = now + timedelta(seconds=plan["duration_s"])
         if start <= now:
@@ -1493,8 +1504,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.show_station()
         return True
 
+    def now_ns(self):
+        """UTC now (ns): GPS UTC while the GPS clock is anchored, else the Pi clock."""
+        return utc_now_ns(self.c.gps.clock if self.c.gps is not None else None)
+
+    def now_utc(self):
+        return datetime.fromtimestamp(self.now_ns() / 1e9, timezone.utc)
+
     def set_next_minute(self):
-        t = datetime.now(timezone.utc) + timedelta(seconds=10)
+        t = self.now_utc() + timedelta(seconds=10)
         t = t.replace(second=0, microsecond=0) + timedelta(minutes=1)
         self.start_time.setTime(QtCore.QTime(t.hour, t.minute, 0))
 
@@ -1543,7 +1561,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.frames_spin.value() if self.frames_check.isChecked() else None)
         if self.mode() == "gps" and self.c.gps is not None:
             # every recording: anchor on GPS UTC again (~5 s), 20 s before a set start time
-            begin = time.time_ns() if start_ns is None else start_ns - REANCHOR_LEAD_NS
+            begin = self.now_ns() if start_ns is None else start_ns - REANCHOR_LEAD_NS
             self.pending_rec = {"args": args, "begin_ns": begin, "anchoring": False}
         else:
             rec.arm(*args)
@@ -1557,13 +1575,13 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.mode() != "gps":
             self.pending_rec = None
         elif not p["anchoring"]:
-            if time.time_ns() >= p["begin_ns"]:
+            if self.now_ns() >= p["begin_ns"]:
                 p["anchoring"] = True
                 self.reanchor()
         elif self.timing_ready():
             self.pending_rec = None
             start_ns = p["args"][0]
-            if start_ns is not None and start_ns < time.time_ns():
+            if start_ns is not None and start_ns < self.now_ns():
                 print("GPS anchoring took past the start time: recording starts now")
             self.c.recorder.arm(*p["args"])
 
@@ -1653,6 +1671,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.last_exposure = c.controller.exposure_us
             stamper.lag_ns = self.predicted_lag_ns()
         self.follow_pending_record()
+        if c.sysclock is not None:
+            self.gps_labels["sysclock"].setText(
+                c.sysclock.check(c.gps.clock if c.gps is not None else None,
+                                 busy=rec.state == "recording"))
         if self.wait_fix and c.gps is not None and c.gps.has_fix():
             self.wait_fix = False
             print("GPS fix: arming the recording")
@@ -1801,11 +1823,11 @@ class MainWindow(QtWidgets.QMainWindow):
                         f"; recording starts when the stamps are ready")
             else:
                 text = (f"<b>Armed</b>: anchoring to GPS UTC at {utc_str(p['begin_ns'], 0)} UTC "
-                        f"(in {(p['begin_ns'] - time.time_ns()) / 1e9:.0f} s)")
+                        f"(in {(p['begin_ns'] - self.now_ns()) / 1e9:.0f} s)")
         elif rec.state == "armed":
             self.rec_button.setText("Cancel  (r)")
             self.rec_button.setStyleSheet("background: #ef6c00; color: white; font-weight: bold;")
-            wait = (rec.start_ns - time.time_ns()) / 1e9
+            wait = (rec.start_ns - self.now_ns()) / 1e9
             text = (f"<b>Armed</b>: first frame at {utc_str(rec.start_ns, 0)} UTC "
                     f"(in {wait:.0f} s)")
         else:

@@ -40,6 +40,7 @@ class Recorder(threading.Thread):
         self.header_info = header_info
         self.text = {}                  # observer, telescope ... set by the GUI (override)
         self.tag = ""                   # file name part before the time (e.g. the target)
+        self.now = time.time_ns         # UTC now (ns); the app sets the GPS clock (utc_now_ns)
         w, h, _ = frame_format()
         self.queue = queue.Queue(maxsize=max(4, int(max_queue_bytes // (w * h * 2))))
 
@@ -66,7 +67,7 @@ class Recorder(threading.Thread):
         with self.lock:
             if self.state != "idle":
                 return
-            self.start_ns = start_ns if start_ns is not None else time.time_ns()
+            self.start_ns = start_ns if start_ns is not None else self.now()
             self.stop_ns = (self.start_ns + int(duration_s * 1e9)) if duration_s else None
             self.max_frames = max_frames
             self.state = "armed"
@@ -78,7 +79,7 @@ class Recorder(threading.Thread):
             if self.state == "armed":
                 self.state = "idle"
             elif self.state == "recording":
-                now = time.time_ns()
+                now = self.now()
                 self.stop_ns = now if self.stop_ns is None else min(self.stop_ns, now)
 
     # ---- feeding (grabber thread) ----
@@ -109,7 +110,7 @@ class Recorder(threading.Thread):
                         self.synced = self.frames
                     # queue drained and past the stop time (no more frames, e.g. no triggers)
                     if self.state == "recording" and self.stop_ns is not None and \
-                            time.time_ns() > self.stop_ns + 300_000_000:
+                            self.now() > self.stop_ns + 300_000_000:
                         self._close()
                 continue
             with self.lock:

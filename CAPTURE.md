@@ -216,6 +216,36 @@ image does too.
   the GUI says so.
 - The RAVF header says `TIMESTAMP-SOURCE = GPS trigger pulse, GPS UTC`; the per-frame almanac
   flag comes from NAV-TIMEUTC's "UTC valid".
+- **Leap seconds.** Only GPS UTC that the GPS marks valid is used (NAV-TIMEUTC `validUTC`,
+  TIM-TP "UTC available"): leap seconds known. After a cold start that can take up to 12.5 min
+  (the almanac); until then the clock does not anchor, the GPS box says "UTC not valid yet",
+  and a GPS-mode recording waits.
+- **The app runs on GPS UTC.** Once anchored, everything the app times itself (start now, a set
+  start time, stop, the waits shown, Favorites' "tonight") uses the GPS clock, not the Pi clock;
+  before that, and in free run after 10 minutes without stamped frames, the Pi clock.
+
+**System clock from the GPS.** In the field there is no network, so no NTP: without a battery on
+the Pi 5's J5 the RTC loses the time at power-off and `fake-hwclock` restores the time of the last
+shutdown, hours or days behind. The app sets the system clock from the anchored GPS clock: right
+after anchoring, then every minute, when it is off by more than
+`[camera] system_clock_tolerance_ms` (default 20 ms; `set_system_clock = false` turns it off).
+Not while recording (later). The GPS box's **Pi clock** line shows the result.
+- Accuracy: that of the anchoring, i.e. the pulse-to-frame lag of the sensor's timing profile
+  (IMX178 measured to ~0.1 ms; the IMX265's profile is assumed, so possibly a few ms) and the
+  frame-start jitter (~10 us). Plenty for file times, the mount and other programs; the frame
+  stamps never depend on the system clock.
+- Setting the clock needs root: a small helper that *adds an offset* to the clock (so the delay
+  of sudo does not matter) and copies the time to the RTC. Install it once, root-owned (never
+  allow a file in the clone through sudo: anyone who can edit it could run anything as root):
+  ```bash
+  sudo install -o root -g root -m 755 src/pystarlight/capture/settime_helper.py /usr/local/sbin/pystarlight-settime
+  echo "$USER ALL=(root) NOPASSWD: /usr/local/sbin/pystarlight-settime" | sudo tee /etc/sudoers.d/pystarlight-settime
+  sudo chmod 440 /etc/sudoers.d/pystarlight-settime && sudo visudo -c
+  ```
+  Re-run the `install` line when `settime_helper.py` changes. Without it the GUI shows how far
+  off the Pi clock is and why it was not set.
+- With a network, `systemd-timesyncd` keeps the clock within a few ms anyway, so the app finds
+  nothing to set; the two do not fight.
 
 **Recording start and stop.**
 - In GPS mode, start and stop times refer to the **trigger pulse**. A recording armed for 23:40:00

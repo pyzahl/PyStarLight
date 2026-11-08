@@ -27,6 +27,12 @@ uses [Semantic Versioning](https://semver.org/).
   is not in the field says so at once instead of asking SIMBAD.
 
 ### Added
+- Camera: the app runs on GPS UTC once the GPS clock is anchored (start now, set start time,
+  stop, Favorites), not on the Pi clock, and sets the Pi's system clock from it (no NTP in the
+  field): right after anchoring, then every minute when off by more than 20 ms, not while
+  recording. A root helper adds the offset and sets the RTC (`settime_helper.py`, installed as
+  `/usr/local/sbin/pystarlight-settime`, CAPTURE.md "System clock from the GPS"). GPS box:
+  **Pi clock** line. Config `[camera] set_system_clock`, `system_clock_tolerance_ms`.
 - Viewer: **Delete** or **Backspace** (the Mac's delete key) removes the aperture under the mouse,
   as the right click does (on macOS the right click does not always arrive).
 - Global mode: `photometry = "auto"` (new default; viewer button **phot: auto / circle /

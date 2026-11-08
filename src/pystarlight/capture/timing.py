@@ -202,6 +202,28 @@ def pi_minus_mono_ns():
     return time.clock_gettime_ns(time.CLOCK_REALTIME) - time.monotonic_ns()
 
 
+def utc_now_ns(clock=None):
+    """UTC now (ns): the GPS clock while it is anchored and fresh (GpsClock.stale), else the
+    Pi clock (NTP, the RTC, or whatever it was set to; in the field possibly far off)."""
+    if clock is not None and not clock.stale():
+        t = clock.utc(time.monotonic_ns())
+        if t is not None:
+            return t
+    return time.time_ns()
+
+
+def pi_clock_error_ns(clock):
+    """Pi clock (CLOCK_REALTIME) minus GPS UTC, now (ns); None unless the GPS clock is anchored
+    and fresh."""
+    if clock is None or clock.stale():
+        return None
+    m0 = time.monotonic_ns()
+    real = time.clock_gettime_ns(time.CLOCK_REALTIME)
+    m1 = time.monotonic_ns()
+    gps = clock.utc((m0 + m1) // 2)
+    return None if gps is None else real - gps
+
+
 class GpsClock:
     """UTC from the GPS alone: the Pi's monotonic clock plus an offset that the GPS sets and
     the trigger pulses keep. No NTP.

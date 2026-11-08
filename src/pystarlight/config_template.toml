@@ -178,6 +178,12 @@ gaia_dir = ""
 # The camera's Favorites button: the recording window around the predicted event time.
 record_before_s = 30.0     # start this long before the event ...
 record_after_s = 30.0      # ... and stop this long after it
+# The Pi's system clock from GPS UTC (no NTP in the field): checked once the GPS clock is
+# anchored (valid UTC, leap seconds known), then every minute, and stepped when off by more
+# than the tolerance (not while recording). Needs the root helper (CAPTURE.md, "System clock
+# from the GPS"). The app's own times (stamps, start, stop) are GPS UTC either way.
+set_system_clock = true
+system_clock_tolerance_ms = 20.0
 
 [indi]
 # Mount and focuser through INDI (the camera's Mount panel, View menu / Shift+M). Drivers by

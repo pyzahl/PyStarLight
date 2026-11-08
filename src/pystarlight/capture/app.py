@@ -25,14 +25,14 @@ import os
 import signal
 import socket
 
-from . import gps_ublox, localconfig, ravf_writer, station_header
+from . import gps_ublox, localconfig, ravf_writer, station_header, sysclock
 from .acquisition import Controller, Grabber
 from .cameras import CameraSession, find_cameras, open_camera, pixel_um, select_camera
 from .decode import format_bits
 from .recorder import RECORD_FORMATS, Recorder, file_tag
 from .recorder import main as repair_main
 from .stacker import LiveStacker
-from .timing import parse_rate, rate_str
+from .timing import parse_rate, rate_str, utc_now_ns
 
 
 def rate_arg(text):
@@ -205,6 +205,10 @@ def main(argv=None):
             except Exception as e:
                 print(f"No GPS ({e})")
         s.gps = gps
+        # the Pi clock from GPS UTC (no NTP in the field); [camera] set_system_clock
+        cam_cfg = localconfig.section("camera")
+        s.sysclock = sysclock.SystemClock(float(cam_cfg.get("system_clock_tolerance_ms", 20.0)),
+                                          bool(cam_cfg.get("set_system_clock", True)))
         s.compass = gps_ublox.Compass.find()
         if s.compass is not None:
             print(f"Compass: {s.compass.kind}")
@@ -299,6 +303,8 @@ def main(argv=None):
             args.record_dir, name=file_name,
             fmt=args.record_format, header_info=header_info)
         s.recorder.text.update(observer=args.observer, telescope=args.telescope)
+        if gps is not None:             # start / stop times on GPS UTC once anchored
+            s.recorder.now = lambda: utc_now_ns(gps.clock)
         s.grabber = Grabber(None, camera.success, s.recorder)
         s.grabber.exposure_start = s.exposure_start
 

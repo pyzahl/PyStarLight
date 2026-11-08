@@ -196,6 +196,7 @@ class CameraSession:
         self.acquiring = False
         self.controller = self.grabber = self.recorder = self.stacker = None
         self.gps = self.compass = None
+        self.sysclock = None             # sysclock.SystemClock (Pi clock from GPS UTC)
         self.pixel_um = (getattr(camera, "pixel_um", None)  # um, for the plate-scale hint
                          or pixel_um(camera.get_model_name()))
         self.focal_mm = 0.0                                  # lens / telescope (0: unknown)
