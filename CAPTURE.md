@@ -246,6 +246,18 @@ Not while recording (later). The GPS box's **Pi clock** line shows the result.
   off the Pi clock is and why it was not set.
 - With a network, `systemd-timesyncd` keeps the clock within a few ms anyway, so the app finds
   nothing to set; the two do not fight.
+- Check the helper: `sudo -n /usr/local/sbin/pystarlight-settime 0` prints "system clock stepped
+  by +0.000000 s; RTC set".
+- **Test it offline** (GPS fix, timepulse wired to the camera's trigger input): Wi-Fi off, then
+  put the clock off on purpose, NTP first (else it corrects it when the network is back):
+  ```bash
+  sudo timedatectl set-ntp false
+  sudo date -s "1 hour ago"
+  uv run pystarlight camera --gps-pulse-ms 1     # GPS mode
+  ```
+  The GPS box's **Time base** anchors ("GPS UTC since ..."), then within a minute **Pi clock**
+  says "set from GPS UTC (stepped +1 h 0 min)", as does the terminal; `timedatectl` shows the
+  right system and RTC time. Afterwards `sudo timedatectl set-ntp true` and Wi-Fi on.
 
 **Recording start and stop.**
 - In GPS mode, start and stop times refer to the **trigger pulse**. A recording armed for 23:40:00
