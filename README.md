@@ -98,6 +98,8 @@ PyQt5 (`sudo apt install python3-pyqt5`, `dnf install python3-qt5`, `pacman -S p
 serves only the system Python, not the uv / venv environment; it is what the Raspberry Pi's
 capture setup uses ([CAPTURE.md](CAPTURE.md)).
 
+Highly recommended: Install astrometry package and small mas index data. Configure it.
+
 **macOS**
 
 - Python from [python.org](https://www.python.org/downloads/macos/) includes Tk; nothing else
@@ -109,7 +111,14 @@ capture setup uses ([CAPTURE.md](CAPTURE.md)).
   Adv2 is reinstalled.
 - Qt for the player: nothing to do beforehand, `--extra camera` in step 3 installs PySide6
   (Intel and Apple Silicon). Not Homebrew's `pyqt@5`: it belongs to Homebrew's Python only.
+- Highly recommended: Install brew + astrometry + astrometry data (https://data.astrometry.net/4200/)
+   Brew: $/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   Astrometry: $brew install astrometry-net
+   Astrometry data default path OSX: $mkdir /opt/homebrew/Cellar/astrometry-net/0.97_1/data
+   (see data path set in /opt/homebrew/etc/astrometry.cfg)
+   Astrometry data, go to folder just created and $curl -O "http://astrometry.net[00-47].fits"
 
+ 
 **Windows**
 
 - Python from [python.org](https://www.python.org/downloads/windows/): in the installer, keep
