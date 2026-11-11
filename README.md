@@ -112,12 +112,13 @@ Highly recommended: Install astrometry package and small mas index data. Configu
 - Qt for the player: nothing to do beforehand, `--extra camera` in step 3 installs PySide6
   (Intel and Apple Silicon). Not Homebrew's `pyqt@5`: it belongs to Homebrew's Python only.
 - Highly recommended: Install brew + astrometry + astrometry data (https://data.astrometry.net/4200/)
+  '''
    Brew: $/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
    Astrometry: $brew install astrometry-net
    Astrometry data default path OSX: $mkdir /opt/homebrew/Cellar/astrometry-net/0.97_1/data
    (see data path set in /opt/homebrew/etc/astrometry.cfg)
    Astrometry data, go to folder just created and $curl -O "http://astrometry.net[00-47].fits"
-
+ '''
  
 **Windows**
 
