@@ -6,6 +6,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `./install.sh` / `install.cmd` (`scripts/install.py`): install and update in one command on
+  Linux, macOS and Windows. It runs git pull, checks the system before building (Tk, the
+  Aravis build packages), runs `uv sync --locked` with the extras remembered in
+  `.pystarlight-install.json`, builds Adv2 on Apple Silicon and finally runs the check.
+- `pystarlight doctor` (also `python src/pystarlight/doctor.py`): checks the installation and
+  prints a fix for every missing part.
+
 ### Fixed
 - Auto ap / `A` after a run crashed and left no references: placing the target redrew the old
   result plot before the references were there. A run without references now says so instead

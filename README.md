@@ -153,20 +153,36 @@ Open a new terminal afterwards, so that `uv` is found.
 ```bash
 git clone https://github.com/pyzahl/PyStarLight.git
 cd PyStarLight
-uv sync --extra all --extra camera      # viewer: plots, RAVF + ADV/AAV readers, SIMBAD; player: Qt
+./install.sh                            # Windows: install.cmd   (first time: extras all + camera)
 uv run pystarlight                      # analyze: opens a file dialog, pick a recording
 uv run pystarlight player               # the player, also with a file dialog
 ```
 
-Only the viewer wanted? `uv sync --extra all` is enough; the player then says what is missing.
-Note that each `uv sync` installs exactly the extras it names and removes the others, so keep
-`--extra camera` on later syncs.
+The installer (`scripts/install.py`, run by uv, so it works even when `.venv` is broken):
+1. `git pull --ff-only`. If that fails (offline, local commits), it goes on with the version you have.
+   If the pull changed the installer, it runs the new one.
+2. Checks the system before anything is built: whether the Python for `.venv` has Tk (if not, it
+   switches to uv's own Python, which has Tk), and for `aravis` the build packages (it prints the
+   `apt` / `dnf` / `pacman` line).
+3. `uv sync --locked` with **the extras you chose, remembered** in `.pystarlight-install.json`
+   (git-ignored). This matters because a plain `uv sync` removes every extra it is not given.
+4. Apple Silicon: builds Adv2's native library if it does not load.
+5. `pystarlight doctor`: checks every part and prints a `fix:` line for anything missing.
 
-> **After every update** (`git pull`, in the `PyStarLight` folder) run the same `uv sync` with
-> your extras again, e.g. `uv sync --extra all --extra camera --extra aravis` on the Pi. `uv run`
-> alone installs only the base packages: new dependencies of an extra stay missing, and when the
-> Python version changed (`.python-version`) it rebuilds `.venv` without any extras, so the
-> camera stops with `No module named 'serial'` (or `PySide6`, `gi`) until you sync.
+```bash
+./install.sh all camera aravis          # choose the extras (here: the Pi's), remembered
+./install.sh                            # update later: same extras
+./install.sh --no-pull                  # sync only
+./install.sh --managed-python           # .venv on uv's own Python (remembered; --system-python undoes)
+./install.sh --rebuild                  # delete .venv, build it again
+./install.sh --check                    # only the check (= uv run pystarlight doctor)
+```
+
+> **To update, run `./install.sh`** (Windows: `install.cmd`). A bare `git pull` + `uv run`
+> installs only the base packages: new dependencies of an extra stay missing, and when the Python
+> version changed (`.python-version`) uv rebuilds `.venv` without any extras, so the camera stops
+> with `No module named 'serial'` (or `PySide6`, `gi`). By hand it is `uv sync` with all your
+> extras each time, e.g. `uv sync --extra all --extra camera --extra aravis`.
 
 uv uses Python 3.12 (`.python-version`; it downloads it if needed), whatever else is installed: a
 brand-new Python (3.15 in 2026-11) has no ready-made wheels of scikit-image and friends yet, so they
@@ -187,15 +203,13 @@ pystarlight
 ### 4. Check it
 
 ```bash
-uv run python -c "import tkinter; print('Tk', tkinter.TkVersion)"    # the viewer's window
-uv run python -c "from pystarlight.capture import qt; print(qt.API)"  # the player's Qt
-uv run pystarlight config path                                       # the config file in use
+uv run pystarlight doctor                # Windows too; the installer runs it at the end
 ```
 
-If the first line fails, go back to step 1 (Linux: `python3-tk`; macOS Homebrew: `python-tk`).
-If the second says `No module named 'PyQt5'`, the environment has no Qt: run `uv sync --extra
-all --extra camera` (or, with pip in the venv, `pip install PySide6-Essentials` or
-`pip install PyQt5`). Either binding works; `PYSTARLIGHT_QT=pyqt5` picks PyQt5 when both are there.
+It lists every part (Python, Tk for the viewer, Qt for the player, the movie readers, Aravis,
+ZWO, the local plate solver, the Pi's clock helper, the config). Anything missing that your
+extras need is marked `MISSING` with a `fix:` line, and the exit code is then 1. Optional parts
+are only listed. Either Qt binding works; `PYSTARLIGHT_QT=pyqt5` picks PyQt5 when both are there.
 
 ### Extras
 

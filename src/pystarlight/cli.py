@@ -4,6 +4,7 @@
     pystarlight player FILE     play a recording with its GPS / time stamps, frame status, stack & solve
     pystarlight camera          record on the Raspberry Pi 5 (GPS-timed frames)
     pystarlight config ...      the private config: init, path, show, sites
+    pystarlight doctor          check the installation: what is missing and how to fix it
     pystarlight FILE            = pystarlight analyze FILE
     pystarlight                 = pystarlight analyze (a file dialog)
 
@@ -23,9 +24,10 @@ TOOLS = {
                "pystarlight.capture.player"),
     "camera": ("record on the Raspberry Pi 5: live view, GPS-timed RAVF / SER", "pystarlight.capture.app"),
     "config": ("the private config: init, path, show, sites", "pystarlight.config"),
+    "doctor": ("check the installation: what is missing and how to fix it", "pystarlight.doctor"),
 }
 ALIASES = {"analyse": "analyze", "view": "analyze", "viewer": "analyze", "review": "player",
-           "play": "player", "capture": "camera"}
+           "play": "player", "capture": "camera", "check": "doctor"}
 
 
 def usage() -> str:

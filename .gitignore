@@ -8,6 +8,8 @@ dist/
 # Environments
 .venv/
 venv/
+# install.sh / install.cmd: the extras chosen here
+.pystarlight-install.json
 
 # Tools
 .pytest_cache/

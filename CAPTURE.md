@@ -52,7 +52,7 @@ The app runs in the repo's uv venv, like the rest of PyStarLight:
 
 ```bash
 sudo apt install libgirepository1.0-dev libcairo2-dev gir1.2-aravis-0.8 v4l-utils   # once
-uv sync --extra all --extra camera --extra aravis                                    # once
+./install.sh all camera aravis      # once; later updates: ./install.sh (same extras, + git pull)
 uv run pystarlight-camera                                          # free run, full frame
 uv run pystarlight-camera --trigger gps --gps-rate 10 --exposure 20
 uv run pystarlight-camera --trigger gps --gps-rate 30 --roi 904,672,1280,720 --exposure 5
