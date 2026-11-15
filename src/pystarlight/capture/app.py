@@ -25,7 +25,7 @@ import os
 import signal
 import socket
 
-from . import gps_ublox, localconfig, ravf_writer, station_header, sysclock
+from . import gps_ublox, localconfig, ravf_writer, slipguard, station_header, sysclock
 from .acquisition import Controller, Grabber
 from .cameras import CameraSession, find_cameras, open_camera, pixel_um, select_camera
 from .decode import format_bits
@@ -91,6 +91,9 @@ parser.add_argument("--asi-bandwidth", type=int, default=None, metavar="PCT",
                          "it keeps another program's setting)")
 parser.add_argument("--asi-high-speed", choices=["on", "off"], default=None,
                     help="ZWO ASI: high-speed readout (default: as the camera is set)")
+parser.add_argument("--slip-guard", choices=("auto", "on", "off"), default="off",   # slipguard
+                    help="TEMPORARY: drop frames hit by the VEYE IMX265 word slip and reset the "
+                         "stream (default off; auto: on for the IMX265 only)")
 parser.add_argument("--buffers", type=int, default=16,
                     help="number of stream buffers (default 16)")
 parser.add_argument("--trigger", choices=["off", "gps", "hw", "sw"], default="off",
@@ -315,6 +318,7 @@ def main(argv=None):
             return info
 
         s.grabber.frame_info = frame_info
+        slipguard.install(s, args.slip_guard)      # slipguard (temporary)
 
         s.pixel_um = args.pixel_um or s.pixel_um or pixel_um(camera.get_model_name())
         # the plate-scale hint of the live solve: --focal-mm, else the station's effective focal

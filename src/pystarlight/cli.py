@@ -25,6 +25,9 @@ TOOLS = {
     "camera": ("record on the Raspberry Pi 5: live view, GPS-timed RAVF / SER", "pystarlight.capture.app"),
     "config": ("the private config: init, path, show, sites", "pystarlight.config"),
     "doctor": ("check the installation: what is missing and how to fix it", "pystarlight.doctor"),
+    # TEMPORARY (VEYE IMX265 word slips; remove with slip_repair.py)
+    "slip-repair": ("repair IMX265 recordings hit by the camera's word slip (temporary)",
+                    "pystarlight.slip_repair"),
 }
 ALIASES = {"analyse": "analyze", "view": "analyze", "viewer": "analyze", "review": "player",
            "play": "player", "capture": "camera", "check": "doctor"}

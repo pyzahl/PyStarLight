@@ -11,6 +11,7 @@ import threading
 import time
 
 from .cameras import try_call
+from .slipguard import buffer_rows  # slipguard
 
 
 class Grabber(threading.Thread):
@@ -52,6 +53,11 @@ class Grabber(threading.Thread):
         self.paused = False         # pause(): the stream is about to be replaced
         self.parked = False         # ... and this thread has let go of it
         self.generation = 0         # +1 per new stream (frame IDs and timing restart)
+        # slipguard (temporary, VEYE IMX265 word slips): slipguard.install() sets the factory
+        self.slipguard_factory = None   # () -> SlipGuard for the current stream
+        self.on_slip = None             # called on every slipped frame (rate-limits itself)
+        self.slipped = 0                # frames left out: camera word slip
+        self.slip_events = 0            # aligned -> slipped transitions
 
     def pause(self):
         """Stop using the stream (before it is replaced); returns once this thread is idle."""
@@ -70,6 +76,7 @@ class Grabber(threading.Thread):
         last_ns, last_starts = None, None
         last_stamper, last_pulse = None, None
         last_gen = self.generation
+        guard, guard_key, in_slip = None, None, False    # slipguard
         t0, n = time.monotonic(), 0
         while self.running:
             if self.paused:
@@ -126,6 +133,20 @@ class Grabber(threading.Thread):
             exp_ns = self.exposure_start(frame_ns, pulse)
             self.exp_ns, self.pulse_ns = exp_ns, pulse
             sel_ns = exp_ns if pulse is None else pulse     # what start/stop times refer to
+            if self.slipguard_factory is not None:      # slipguard: a new stream starts aligned
+                if guard_key != (self.generation, starts):
+                    guard_key, guard, in_slip = (self.generation, starts), self.slipguard_factory(), False
+                if guard.check_rows(buffer_rows(buf, guard.height)):
+                    self.slipped += 1
+                    if not in_slip:
+                        self.slip_events += 1
+                    in_slip = True
+                    self.stream.push_buffer(buf)        # not recorded, stacked or shown
+                    if self.on_slip is not None:
+                        self.on_slip()
+                    n += 1
+                    continue
+                in_slip = False
             if self.recorder is not None:
                 if self.recorder.wants(sel_ns):
                     self.recorder.put(buf.get_data(), fid, sel_ns, exp_ns, self.frame_info())

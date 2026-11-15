@@ -1846,7 +1846,9 @@ class MainWindow(QtWidgets.QMainWindow):
             f"exp {c.controller.exposure_us / 1000:.3f} ms  gain {c.controller.gain_db:.1f} dB  "
             f"cam {g.cam_fps:.1f} fps  view {self.disp_fps:.1f} fps  lost {g.dropped}  "
             f"bad {sum(g.bad.values())}  restarts {c.controller.restarts}  "
-            f"frame {self.frame_id}{trig}" + self.cursor_text())
+            + (f"SLIPS {g.slip_events} ({g.slipped} fr)  "      # slipguard (temporary)
+               if g.slipguard_factory is not None else "")
+            + f"frame {self.frame_id}{trig}" + self.cursor_text())
 
     def cursor_text(self):
         """Sensor position and raw value under the mouse."""
