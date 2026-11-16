@@ -340,7 +340,8 @@ def test_parse_rate():
     assert parse_rate("0,5") == parse_rate("2 s") == Fraction(1, 2)
     assert rate_str(parse_rate("1.5")) == "1.5 fps (666.667 ms)"
     assert rate_str(30) == "30 fps"
-    for bad in ("", "fast", "0", "5 ms", "2 min", "120 s"):
+    assert parse_rate("200") == parse_rate("5 ms") == 200
+    for bad in ("", "fast", "0", "1 ms", "2 min", "120 s"):
         with pytest.raises(ValueError):
             parse_rate(bad)
 

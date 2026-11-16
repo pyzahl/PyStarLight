@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 
 GPS_RATES = ["30", "20", "15", "10", "8", "6", "5", "4", "3", "2", "1.5", "1", "0.5"]     # fps
-MIN_PERIOD_US, MAX_PERIOD_US = 10_000, 60_000_000      # entered rates: 100 fps .. 1 per minute
+MIN_PERIOD_US, MAX_PERIOD_US = 2_000, 60_000_000       # entered rates: 500 fps .. 1 per minute
 LAG_EXTRA_NS = 3_000_000    # VEYE: frame start comes frame period + this after the trigger
 # Row-0 exposure start of a VEYE MV-MIPI-IMX178M frame (rolling shutter), measured with the
 # GPS timepulse LED in view (LED lit 0..100 ms after each pulse; frames catching its edges
@@ -53,7 +53,7 @@ def parse_rate(text):
     if rate.denominator != 1:
         rate = Fraction(10**6, round(10**6 / rate))
     if not MIN_PERIOD_US <= 10**6 / rate <= MAX_PERIOD_US:
-        raise ValueError(f"'{text}': the pulse period must be 10 ms .. 60 s")
+        raise ValueError(f"'{text}': the pulse period must be 2 ms .. 60 s")
     return rate
 
 

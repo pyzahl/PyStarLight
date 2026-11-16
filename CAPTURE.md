@@ -135,7 +135,7 @@ uv run pystarlight-camera --repair ~/data/*.ravf                   # finish cras
 
 - `--exposure` is in **milliseconds**.
 - `--gps-rate` takes fps (`10`, `1.5`, `1.5fps`, `12Hz`) or the pulse period (`250ms`, `2s`), from
-  10 ms to 60 s. Rates that aren't whole fps become a period in whole µs (1.5 fps = 666 667 µs).
+  2 ms to 60 s (500 fps; the camera must keep up: in trigger mode its frame period at the ROI). Rates that aren't whole fps become a period in whole µs (1.5 fps = 666 667 µs).
 - `--gps-pulse-ms` sets the timepulse length (default: a quarter of the period, at most 100 ms).
   The trigger uses only the rising edge, so this only matters for a GPS LED in view: a 1 ms flash
   shows as a narrow band, which makes timing checks easy (see the 2026-10-28 measurement).
