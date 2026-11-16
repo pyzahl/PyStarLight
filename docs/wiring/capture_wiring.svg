@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="570" viewBox="0 0 900 570" font-family="DejaVu Sans, Arial, sans-serif" font-size="13">
+  <rect width="900" height="570" fill="#ffffff"/>
+  <text x="20" y="28" font-size="17" font-weight="bold" fill="#222">Capture rig wiring: Raspberry Pi 5, u-blox NEO-M8N GPS, VEYE ADP-MV2 (J3)</text>
+
+  <!-- Raspberry Pi 40-pin header, pins 1-10 -->
+  <rect x="40" y="70" width="160" height="200" rx="6" fill="#e8f3e8" stroke="#2e7d32"/>
+  <text x="48" y="62" font-weight="bold" fill="#2e7d32">Raspberry Pi 5 GPIO header</text>
+  <g fill="#555" font-size="11" text-anchor="end">
+    <text x="106" y="104">3V3  1</text><text x="106" y="134">GPIO2 SDA  3</text><text x="106" y="164">GPIO3 SCL  5</text>
+    <text x="106" y="194">GPIO4  7</text><text x="106" y="224">GND  9</text>
+  </g>
+  <g fill="#bbb"><circle cx="120" cy="100" r="6"/><circle cx="120" cy="130" r="6"/><circle cx="120" cy="160" r="6"/>
+    <circle cx="120" cy="190" r="6"/><circle cx="120" cy="220" r="6"/></g>
+  <rect x="138" y="86" width="24" height="148" rx="3" fill="#333" opacity="0.85"/>
+  <g fill="#e0b000"><circle cx="150" cy="100" r="6"/><circle cx="150" cy="160" r="6"/><circle cx="150" cy="190" r="6"/>
+    <circle cx="150" cy="220" r="6"/></g>
+  <circle cx="150" cy="130" r="6" fill="#777"/>
+  <g font-size="11" fill="#222">
+    <text x="168" y="96">2  5V</text><text x="168" y="126" fill="#888">4  (empty)</text><text x="168" y="156">6  GND</text>
+    <text x="168" y="186">8  TXD</text><text x="168" y="216">10 RXD</text>
+  </g>
+  <text x="40" y="292" font-size="11" fill="#444">1×5 crimp housing on pins 2-10 (outer row),</text>
+  <text x="40" y="306" font-size="11" fill="#444">ribbon cable, only 4 wires fitted</text>
+  <text x="40" y="320" font-size="11" fill="#444">8 = GPIO14 UART0 TXD, 10 = GPIO15 UART0 RXD</text>
+
+  <!-- custom interconnect -->
+  <rect x="320" y="70" width="200" height="220" rx="6" fill="#f4f0fa" stroke="#6a4c93"/>
+  <text x="326" y="62" font-weight="bold" fill="#6a4c93">Custom interconnect</text>
+  <text x="330" y="282" font-size="11" fill="#6a4c93">5 V and GND joined here</text>
+
+  <!-- GPS module -->
+  <rect x="640" y="70" width="230" height="250" rx="6" fill="#eef3fb" stroke="#1565c0"/>
+  <text x="646" y="62" font-weight="bold" fill="#1565c0">NEO-M8N GPS module</text>
+  <g font-size="12" fill="#222">
+    <text x="652" y="104">VCC (5 V in)</text><text x="652" y="164">GND</text><text x="652" y="194">RX (3.3 V)</text>
+    <text x="652" y="224">TX (3.3 V)</text><text x="652" y="254">PPS / timepulse (3.3 V)</text>
+    <text x="652" y="284" fill="#888">SDA, SCL (compass)</text><text x="652" y="300" fill="#888">not connected</text>
+  </g>
+  <text x="646" y="338" font-size="11" fill="#444">Wire colors differ between sellers:</text>
+  <text x="646" y="352" font-size="11" fill="#444">go by the module's label, not by color.</text>
+
+  <!-- camera adapter J3 -->
+  <rect x="300" y="370" width="300" height="145" rx="6" fill="#fdf3e6" stroke="#b26a00"/>
+  <text x="306" y="535" font-weight="bold" fill="#b26a00">VEYE ADP-MV2, J3 Auxiliary Expansion Port 1</text>
+  <text x="306" y="552" font-size="11" fill="#444">(small 2×5 header; pin 1 top right, as printed on the board)</text>
+  <rect x="470" y="396" width="56" height="56" rx="3" fill="#333" opacity="0.85"/>
+  <g fill="#bbb">
+    <circle cx="400" cy="410" r="6"/><circle cx="428" cy="410" r="6"/><circle cx="456" cy="410" r="6"/>
+    <circle cx="400" cy="438" r="6"/><circle cx="428" cy="438" r="6"/><circle cx="456" cy="438" r="6"/>
+  </g>
+  <g fill="#e0b000"><circle cx="484" cy="410" r="6"/><circle cx="512" cy="410" r="6"/><circle cx="512" cy="438" r="6"/></g>
+  <circle cx="484" cy="438" r="6" fill="#777"/>
+  <g font-size="10" fill="#555" text-anchor="middle">
+    <text x="400" y="395">9</text><text x="428" y="395">7</text><text x="456" y="395">5</text>
+    <text x="400" y="460">10</text><text x="428" y="460">8</text><text x="456" y="460">6</text><text x="484" y="466">4</text><text x="540" y="414">1</text><text x="540" y="442">2</text>
+  </g>
+  <g font-size="11" fill="#222">
+        <text x="316" y="484">1 VCC5V · 2 GND · 3 TRIGGER_I · 4 GND (empty)</text>
+    <text x="316" y="502" font-size="10" fill="#666">5, 7, 9: USER IO1, USER IO2, GPIO3; 6, 8, 10: GND</text>
+  </g>
+
+  <text x="620" y="400" font-size="11" fill="#444">PPS → TRIGGER_I (pin 3): the camera's</text>
+  <text x="620" y="414" font-size="11" fill="#444">trigger input; GND (pin 2) is its reference.</text>
+  <text x="620" y="436" font-size="11" fill="#444">VCC5V (pin 1) is the board's 5 V from the</text>
+  <text x="620" y="450" font-size="11" fill="#444">camera cable (J2-29): the same Pi 5 V rail.</text>
+  <text x="620" y="472" font-size="11" fill="#444">Check the trigger input's level for your</text>
+  <text x="620" y="486" font-size="11" fill="#444">board before wiring a 3.3 V timepulse to it.</text>
+  <!-- wires Pi -> interconnect -> GPS -->
+  <g stroke-width="3" fill="none">
+    <path d="M162 100 H640" stroke="#d32f2f"/>
+    <path d="M162 160 H640" stroke="#222"/>
+    <path d="M162 190 H640" stroke="#ef6c00"/>
+    <path d="M162 220 H640" stroke="#2e9d4a"/>
+    <path d="M640 250 H440 V330 H484 V402" stroke="#1565c0"/>
+    <path d="M480 100 V320 H512 V402" stroke="#d32f2f"/>
+    <path d="M500 160 V310 H560 V438 H520" stroke="#222"/>
+  </g>
+  <circle cx="480" cy="100" r="5" fill="#d32f2f"/>
+  <circle cx="500" cy="160" r="5" fill="#222"/>
+  <g font-size="11" fill="#222">
+    <text x="232" y="94">+5 V</text><text x="232" y="154">GND</text>
+    <text x="226" y="184">TXD → GPS RX</text><text x="226" y="214">RXD ← GPS TX</text>
+    <text x="528" y="244">PPS (timepulse)</text>
+  </g>
+
+</svg>
