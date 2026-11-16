@@ -36,12 +36,21 @@ The code is the `src/pystarlight/capture/` package (`uv run pystarlight-camera`)
 
 - Raspberry Pi 5, Raspberry Pi OS (Debian 12), kernel 6.12, `dtoverlay=veye_mvcam` in
   `/boot/firmware/config.txt`.
-- VEYE **MV-MIPI-IMX178M** on cam0: 3088 × 2064, 12-bit mono, rolling shutter.
+- VEYE **MV-MIPI-IMX178M** on cam0: 3088 × 2064, 12-bit mono, rolling shutter, on VEYE's
+  ADP-MV1 adapter board (trigger input, pin assignment and schematics:
+  [ADP-MV1-V2 Adapter Board Data Sheet](https://wiki.veye.cc/index.php/ADP-MV1-V2_Adapter_Board_Data_Sheet)).
 - u-blox **NEO-M8N** GPS module (with compass), NMEA on the GPIO UART **/dev/ttyAMA0, 9600 baud**
   (`dtparam=uart0=on`).
-- The GPS **timepulse (PPS) is wired to the camera's trigger input**. It is not wired to a Pi GPIO,
-  so the Pi's own clock is plain NTP (systemd-timesyncd, about ±1 ms). The timestamps in GPS
-  mode don't depend on it (see below).
+- The GPS **timepulse (PPS) is wired to the camera's trigger input**: the trigger pin on the
+  adapter board's pin header, next to its 5 V and GND pins (GPS GND to that GND).
+  **Note:** the timepulse of the owner's NEO-M8N modules is a **3.3 V** signal. Check the trigger
+  input's levels in the data sheet above for your board, and your GPS module's timepulse level,
+  before wiring them together.
+- The PPS is not wired to a Pi GPIO. The time comes from the **GPS alone**, through the camera's
+  trigger pulses: the app runs on GPS UTC and sets the Pi's system clock from it as well
+  ("System clock from the GPS" under [How it works](#how-it-works)), so it works in the field without a
+  network. NTP (systemd-timesyncd) only helps when there is one; the timestamps in GPS mode never
+  depend on it (see below).
 - The module's compass is not connected to the Pi: nothing answers on I2C buses 0 or 1. The code
   shows a magnetic heading if a QMC5883L (0x0d) or HMC5883L (0x1e) appears on bus 1 (GPIO2/3).
   The heading is uncalibrated: no hard-iron or soft-iron correction, no tilt compensation.
@@ -1015,8 +1024,9 @@ every other pulse once that's exceeded; watch `lost` in the status bar.
   on the UTC grid (a TIM-TP more than 2 s off the clock is ignored, and rates that need it then
   stamp nothing). If the serial line is so busy that bursts run together, anchoring doesn't
   finish; it never produces wrong stamps.
-- Free-run timestamps are only as good as NTP (about 1 ms). For GPS-grade timing, use GPS mode,
-  or wire the PPS to a Pi GPIO as well (`pps-gpio` overlay + chrony).
+- Free-run timestamps are only as good as the Pi clock: set from the GPS (to the anchoring's
+  accuracy, checked every minute) or NTP, plus the crystal's drift in between. For GPS-grade
+  timing, use GPS mode, or wire the PPS to a Pi GPIO as well (`pps-gpio` overlay + chrony).
 
 ## Possible next steps
 
