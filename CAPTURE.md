@@ -40,9 +40,20 @@ The code is the `src/pystarlight/capture/` package (`uv run pystarlight-camera`)
   ADP-MV1 adapter board (trigger input, pin assignment and schematics:
   [ADP-MV1-V2 Adapter Board Data Sheet](https://wiki.veye.cc/index.php/ADP-MV1-V2_Adapter_Board_Data_Sheet)).
 - u-blox **NEO-M8N** GPS module (with compass), NMEA on the GPIO UART **/dev/ttyAMA0, 9600 baud**
-  (`dtparam=uart0=on`).
+  (`dtparam=uart0=on`). Wiring to the Pi's 40-pin GPIO header:
+
+  | GPS module | Pi GPIO header |
+  |---|---|
+  | VCC (+5 V) | pin 2 or 4 (5 V) |
+  | GND | pin 6 (or any GND pin) |
+  | TX | pin 10, GPIO15 (UART0 RXD) |
+  | RX | pin 8, GPIO14 (UART0 TXD) |
+
+  TX and RX cross over: the GPS sends on its TX into the Pi's RX and the other way round. The Pi's
+  GPIO pins are 3.3 V and not 5 V tolerant: a module fed with 5 V must still talk 3.3 V on TX / RX
+  (the usual NEO-M8N boards regulate down to 3.3 V; check yours).
 - The GPS **timepulse (PPS) is wired to the camera's trigger input**: the trigger pin on the
-  adapter board's pin header, next to its 5 V and GND pins (GPS GND to that GND).
+  adapter board's pin header, next to its 5 V and GND pins (J3 pin 3, see [Wiring](#wiring)).
   **Note:** the timepulse of the owner's NEO-M8N modules is a **3.3 V** signal. Check the trigger
   input's levels in the data sheet above for your board, and your GPS module's timepulse level,
   before wiring them together.
@@ -54,6 +65,37 @@ The code is the `src/pystarlight/capture/` package (`uv run pystarlight-camera`)
 - The module's compass is not connected to the Pi: nothing answers on I2C buses 0 or 1. The code
   shows a magnetic heading if a QMC5883L (0x0d) or HMC5883L (0x1e) appears on bus 1 (GPIO2/3).
   The heading is uncalibrated: no hard-iron or soft-iron correction, no tilt compensation.
+
+### Wiring
+
+![Wiring: Pi header pins 2-10 to a custom interconnect, from there to the GPS module and to the camera adapter's J3](docs/wiring/capture_wiring.svg)
+
+The owner's rig, made from ribbon cable and crimped pin-header housings with only the wires that are
+needed fitted:
+
+- **Pi side:** one 1×5 housing on pins 2-10 of the GPIO header (the outer row). Four wires: pin 2
+  (5 V), pin 6 (GND), pin 8 (GPIO14, UART0 TXD) and pin 10 (GPIO15, UART0 RXD); pin 4 stays empty.
+- **Custom interconnect:** joins the Pi's 5 V and GND and passes them on to the GPS module and to
+  the camera adapter. TXD/RXD go through to the GPS, and the GPS timepulse goes on to the camera.
+- **GPS module:** VCC, GND, RX (from the Pi's TXD), TX (to the Pi's RXD) and PPS. The compass's
+  SDA/SCL are not connected. Wire colors differ between sellers, so go by the module's label.
+- **Camera adapter, J3** (VEYE ADP-MV2 as printed on the board, "Auxiliary Expansion Port 1";
+  a smaller pin header than the Pi's): one 2×2 housing on pins 1-4, with wires on pins 1 (VCC5V),
+  2 (GND) and 3 (TRIGGER_I, from the GPS PPS).
+
+  | J3 pin | Name | On the board | Wired to |
+  |---|---|---|---|
+  | 1 | VCC5V | J2-29 | Pi 5 V (interconnect) |
+  | 2 | GND | | Pi GND (interconnect) |
+  | 3 | TRIGGER_I | J2-2 | GPS PPS / timepulse |
+  | 4, 6, 8, 10 | GND | | — |
+  | 5 | USER IO1 | J2-3 | — |
+  | 7 | USER IO2 | J2-4 | — |
+  | 9 | GPIO3 | J2-5 | — |
+
+  J3's VCC5V is the board's own 5 V, which arrives through the camera cable from the Pi. Joining it
+  to the Pi's 5 V therefore connects the same rail. The ground connection is the essential one: it
+  is the reference of the trigger input.
 
 ## Running it
 
