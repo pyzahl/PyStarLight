@@ -972,6 +972,14 @@ Other measurements:
 
 ### Other VEYE models: IMX265M (global shutter)
 
+**Line width.** At its full width of 2064 px the IMX265M now and then delays its byte stream by
+8 bytes. The delays add up until the stream restarts, giving byte-mixed or shifted frames, most
+of the time at low light. With a line width that is a multiple of 64 px they don't happen (tested
+at 2048 × 1544, RAW12, 2026-11-15, as VEYE support suggested). So the camera sends 2048-px lines
+from column 0, and the last 16 columns are not used; the ROI is cropped from those lines in
+software, as on every VEYE. `PYSTARLIGHT_VEYE_WIDTH=<px>` sets another width (a multiple of 8,
+for any VEYE model; `veye_mvcam.line_width`). Older recordings at 2064: `pystarlight slip-repair`.
+
 The timing model is chosen by sensor (`timing.sensor_timing`, `CameraSession.timing`):
 
 | profile | models | status |

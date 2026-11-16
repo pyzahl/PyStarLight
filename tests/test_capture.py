@@ -588,3 +588,13 @@ def test_exposure_and_gain_remembered_per_camera(monkeypatch, tmp_path):
     w, sent = window(gain=5.0)                  # an explicit --gain wins (already set by configure)
     w.restore_camera_settings()
     assert sent == {"exposure": 2e3}
+
+
+def test_veye_line_width_multiple_of_64_on_imx265():
+    from pystarlight.capture.veye_mvcam import line_width
+    assert line_width("MV-MIPI-IMX265M", 2064) == 2048          # slips at 2064, not at 2048
+    assert line_width("MV-MIPI-IMX178M", 3088) == 3088          # never slipped: full width
+    assert line_width("MV-MIPI-IMX178M", 3088, "2048") == 2048  # PYSTARLIGHT_VEYE_WIDTH
+    assert line_width("MV-MIPI-IMX265M", 2064, "") == 2048
+    assert line_width("MV-MIPI-IMX265M", 2064, "5000") == 2064
+    assert line_width("MV-MIPI-IMX265M", 2064, "2050") == 2048

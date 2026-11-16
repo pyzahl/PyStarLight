@@ -384,6 +384,24 @@ def find_cameras():
     return cams
 
 
+# The IMX265M slips its byte stream by 8 bytes now and then (capture/slipguard.py) when its
+# line width is not a multiple of 64 px; at 2048 of its 2064 px it doesn't (2026-11-15, VEYE
+# support's test). Models here get the widest multiple of 64; the others keep the full width.
+LINE_WIDTH_64 = ("IMX265",)
+
+
+def line_width(model, sensor_w, override=None):
+    """Width of the lines the camera sends (from column 0; the ROI is cropped in software).
+    override: PYSTARLIGHT_VEYE_WIDTH, a width in px (multiple of 8), or None / ''."""
+    if override:
+        w = int(override)
+    elif any(m in model.upper() for m in LINE_WIDTH_64):
+        w = sensor_w // 64 * 64
+    else:
+        w = sensor_w
+    return max(8, min(w, sensor_w) // 8 * 8)
+
+
 class Camera:
     kind = "veye"
     success = SUCCESS
@@ -402,9 +420,13 @@ class Camera:
 
         self.sensor_w = self.regs.read(REG_SENSOR_W)
         self.sensor_h = self.regs.read(REG_SENSOR_H)
+        self.line_w = line_width(info.get("model", ""), self.sensor_w,
+                                 os.environ.get("PYSTARLIGHT_VEYE_WIDTH"))
+        if self.line_w != self.sensor_w:
+            print(f"VEYE: camera line width {self.line_w} of {self.sensor_w}, x offset 0")
         reg_fmt = self.regs.read(REG_PIXEL_FORMAT)
         self.pixel_format = next((n for n, f in FORMATS.items() if f[0] == reg_fmt), "GREY")
-        self.region = (0, 0, self.sensor_w, self.sensor_h)
+        self.region = (0, 0, self.line_w, self.sensor_h)
         self.fixed_fps = None       # None: frame rate follows the exposure time
         self.exposure_us = None     # last requested exposure (the read-back may be clipped)
         self.fps_reg = None         # frame-rate register value in force (1/100 fps; None: read it)
@@ -435,7 +457,7 @@ class Camera:
         self.pixel_format = name
 
     def get_sensor_size(self):
-        return self.sensor_w, self.sensor_h
+        return self.line_w, self.sensor_h       # the usable width (line_width)
 
     def is_binning_available(self):
         return False
@@ -443,8 +465,8 @@ class Camera:
     def set_region(self, x, y, w, h):
         # the driver needs x and width on multiples of 8, y and height on multiples of 4
         # shift a region that runs off the sensor back onto it (rows are cropped in software)
-        w, h = min(w, self.sensor_w) // 8 * 8, min(h, self.sensor_h) // 4 * 4
-        x, y = min(x, self.sensor_w - w) // 8 * 8, min(y, self.sensor_h - h) // 4 * 4
+        w, h = min(w, self.line_w) // 8 * 8, min(h, self.sensor_h) // 4 * 4
+        x, y = min(x, self.line_w - w) // 8 * 8, min(y, self.sensor_h - h) // 4 * 4
         self.region = (x, y, w, h)
 
     def get_region(self):
@@ -460,7 +482,7 @@ class Camera:
         """
         _, mbus, _, _, csi2_out = FORMATS[self.pixel_format]
         _, y, _, h = self.region
-        x, w = 0, self.sensor_w
+        x, w = 0, self.line_w
         md = self.media_dev
         _run("media-ctl", "-d", md, "-r")
         _run("media-ctl", "-d", md, "-l", "'csi2':4 -> 'rp1-cfe-csi2_ch0':0 [1]")
@@ -646,7 +668,7 @@ class Camera:
         self._configure_pipeline()
         _, _, bits, fourcc, _ = FORMATS[self.pixel_format]
         x, y, w, h = self.region
-        self.stream = Stream(self.video_dev, self.sensor_w, h, fourcc, bits, n_buffers, x, w)
+        self.stream = Stream(self.video_dev, self.line_w, h, fourcc, bits, n_buffers, x, w)
         self.fps_reg = None         # the camera may have changed it with the format / region
         # max frame rate depends on the ROI and format just applied
         if self.fixed_fps is not None:
