@@ -57,8 +57,8 @@ Bob Anderson. There are two analysis modes:
 
 The methods step by step (alignment, astrometry, G scale, Naylor extraction, step fit), as
 slides with the formulas the code uses: [docs/math](docs/math) (LaTeX source; `make` there
-builds `pystarlight_math.pdf`). The PDF will come with each GitHub release; none is published
-yet.
+builds `pystarlight_math.pdf`). The PDF is attached to each
+[GitHub release](https://github.com/pyzahl/PyStarLight/releases).
 
 Supported recordings: RAVF (ASTRID), SER, ADV/AAV, AVI/MOV, FITS folders. Timestamps come from
 the file or are read from a VTI overlay. MIT licence.
