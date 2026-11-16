@@ -58,6 +58,10 @@ Method slides: `docs/math/` (beamer, `make` -> `pystarlight_math.pdf`, not in gi
 single source (overview, alignment, astrometry, G scale, Naylor, step fit; formulas as in the code: keep in step),
 `preamble.tex` kept equal to PySyzygos' `docs/math/preamble.tex` (same colors and macros), `pystarlight_math.tex`
 (title, references). The owner's private PySyzygos talk (`../PyOccult/slides/`) `\input`s `math_slides.tex` from here.
+README's slides paragraph (after the analysis modes) links docs/math. No GitHub release yet: with the first one,
+attach `pystarlight_math.pdf` as an asset and add its link there
+(`https://github.com/pyzahl/PyStarLight/releases/download/<tag>/pystarlight_math.pdf`, tag in URL and link text);
+with every later release update that link.
 
 `ocr.py`, `wcs/manual.py`, `wcs/astrometry_client.py` are kept close to PyMovie's files and
 excluded from ruff, so upstream fixes diff cleanly. Don't reformat them.
