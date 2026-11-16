@@ -68,7 +68,8 @@ def find_cameras():
     try:
         Aravis = _aravis()
     except (ImportError, ValueError) as e:
-        print(f"Aravis not available ({e}); looking for VEYE cameras only")
+        print(f"Aravis not available ({e}): GigE / USB3 Vision cameras not listed "
+              "(extra 'aravis'; the other camera kinds are)")
     else:
         Aravis.update_device_list()
         for i in range(Aravis.get_n_devices()):
@@ -85,9 +86,19 @@ def find_cameras():
     except Exception as e:                  # not Linux, no /dev/video*
         print(f"V4L2 devices not listed ({e})")
     try:
-        cams += asi_cam.find_cameras()
+        asi = asi_cam.find_cameras()
     except Exception as e:
         print(f"ZWO ASI cameras not listed ({e})")
+    else:
+        cams += asi
+        lib = asi_cam.library()
+        if lib is None:
+            print("ZWO ASI: libASICamera2 not found, no ASI camera listed (CAPTURE.md, "
+                  "\"ZWO ASI cameras\"; or set ZWO_ASI_LIB)")
+        elif not asi:
+            version = lib.ASIGetSDKVersion().decode(errors="replace").replace(", ", ".")
+            print(f"ZWO ASI: SDK {version} loaded, no camera connected (lsusb lists ZWO as "
+                  "03c3:...; else cable / port / power; once plugged in, ZWO's udev rule)")
     return cams
 
 

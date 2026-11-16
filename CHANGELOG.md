@@ -6,7 +6,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-15
+
 ### Added
+- Camera and player: own version numbers (`capture/version.py`, 1.0.0 each) in the window title
+  and `--version`; RAVF `RECORDER-SOFTWARE-VERSION` is the camera's, PyStarLight's added in
+  brackets. The analyze window title shows PyStarLight's version.
 - `./install.sh` / `install.cmd` (`scripts/install.py`): install and update in one command on
   Linux, macOS and Windows. It runs git pull, checks the system before building (Tk, the
   Aravis build packages), runs `uv sync --locked` with the extras remembered in

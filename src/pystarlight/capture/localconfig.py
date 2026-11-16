@@ -138,9 +138,11 @@ def section(name):
 
 
 def software_version():
-    """PyStarLight's version, '' when the package cannot be imported."""
+    """The camera's version (capture/version.py), PyStarLight's added when the package imports:
+    '1.0.0 (PyStarLight 1.0.0)'. RAVF RECORDER-SOFTWARE-VERSION."""
+    from .version import CAMERA_VERSION
     try:
         from pystarlight import __version__
-        return __version__
+        return f"{CAMERA_VERSION} (PyStarLight {__version__})"
     except Exception:
-        return ""
+        return CAMERA_VERSION

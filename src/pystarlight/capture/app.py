@@ -33,6 +33,7 @@ from .recorder import RECORD_FORMATS, Recorder, file_tag
 from .recorder import main as repair_main
 from .stacker import LiveStacker
 from .timing import parse_rate, rate_str, utc_now_ns
+from .version import CAMERA_VERSION
 
 
 def rate_arg(text):
@@ -49,6 +50,7 @@ parser.add_argument("--camera", default=None,
                     help="which camera to open: any part of its ID, vendor, model or serial "
                          "(e.g. Basler, a2A1920, Grasshopper, 2316xxxx, VEYE, IMX178, ASI178). "
                          "Default: first found")
+parser.add_argument("--version", action="version", version=f"PyStarLight camera {CAMERA_VERSION}")
 parser.add_argument("--list", action="store_true", help="list connected cameras and exit")
 parser.add_argument("--video-std", default=None, metavar="STD",
                     help="video device (/dev/videoN, e.g. a USB grabber for an analog camera): "

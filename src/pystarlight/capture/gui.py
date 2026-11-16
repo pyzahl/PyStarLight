@@ -36,6 +36,7 @@ from .timing import (
     utc_now_ns,
     utc_str,
 )
+from .version import CAMERA_VERSION
 
 EXP_STEPS = 1000            # exposure slider resolution (log scale)
 # exposure slider ranges (us): short up to 2 s; typing a longer exposure switches it to 0.5 .. 60 s
@@ -581,8 +582,7 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.args = args
         self.c = ctx                        # camera, controller, grabber, recorder, gps ...
-        self.setWindowTitle(f"{ctx.camera.get_vendor_name()} {ctx.camera.get_model_name()}"
-                            f" - {ctx.width}x{ctx.height} {ctx.pixel_format}")
+        self.set_title(ctx)
         self.lut, self.lut_key = None, None # display lookup table and its (size, scale)
         self.img = None                     # newest decoded frame (full resolution)
         self.frame_id = None
@@ -905,6 +905,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.show_roi(c.region)
         return box
 
+    def set_title(self, c):
+        self.setWindowTitle(f"PyStarLight camera {CAMERA_VERSION} - {c.camera.get_vendor_name()} "
+                            f"{c.camera.get_model_name()} - {c.width}x{c.height} {c.pixel_format}")
+
     def show_roi(self, region):
         for spin, v in zip(self.roi_spins, region):
             self._quiet(spin, int(v))
@@ -960,8 +964,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def after_reconfigure(self):
         """New region and/or pixel format (or the old ones back, if they failed)."""
         c = self.c
-        self.setWindowTitle(f"{c.camera.get_vendor_name()} {c.camera.get_model_name()}"
-                            f" - {c.width}x{c.height} {c.pixel_format}")
+        self.set_title(c)
         self.show_roi(c.region)
         self.show_bits()
         self.roi_pending = None

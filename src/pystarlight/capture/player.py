@@ -39,6 +39,7 @@ from .gui import CollapsibleBox, ImageView, LevelsBox, grid_box, zscale
 from .qt import QShortcut, QtCore, QtGui, QtWidgets, Signal, event_pos, exec_app, fix_cv2_qt_env
 from .ravf_writer import FRAME_HEAD, ravf_to_unix
 from .stacker import LiveStacker
+from .version import PLAYER_VERSION
 
 TICKS_UNIX_EPOCH = 621355968000000000      # .NET ticks at 1970-01-01T00:00:00Z (SER)
 FIX_NAMES = {0: "no fix", 1: "time kept", 2: "time fix", 3: "time + position"}
@@ -585,7 +586,7 @@ class PlayerWindow(QtWidgets.QMainWindow):
         self.mv = open_movie(self.path)
         self.settings.setValue("last_dir", os.path.dirname(os.path.abspath(self.path)))   # the next dialog
         n = len(self.mv)
-        self.setWindowTitle(f"Player - {os.path.basename(self.path)}")
+        self.setWindowTitle(f"PyStarLight player {PLAYER_VERSION} - {os.path.basename(self.path)}")
         self.times, self.info, self.flags, self.report = np.zeros(0), [], {}, None
         self.plot.dt = None
         self.plot.update()
@@ -993,6 +994,7 @@ def main(argv=None):
                                              "stack & plate solve")
     ap.add_argument("file", nargs="?", help="recording (.ravf .ser .adv .aav .avi) or FITS folder "
                                          "(default: a file dialog)")
+    ap.add_argument("--version", action="version", version=f"PyStarLight player {PLAYER_VERSION}")
     ap.add_argument("--focal-mm", type=float, default=None, help="focal length for the scale hint")
     ap.add_argument("--pixel-um", type=float, default=None, help="pixel pitch for the scale hint")
     args = ap.parse_args(argv)
