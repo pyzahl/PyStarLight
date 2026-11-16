@@ -54,8 +54,8 @@ from matplotlib.colors import PowerNorm
 from matplotlib.patches import Rectangle
 from matplotlib.widgets import Button, CheckButtons, RangeSlider, Slider, TextBox
 
+from . import __version__, plot
 from . import config as config_mod
-from . import plot
 from .calibrate import Calibration
 from .movie import open_movie
 from .photometry import PhotometryConfig, brightest_pixel, circular_mask
@@ -332,7 +332,7 @@ class Viewer:
         self._error = None
 
         self.fig = plt.figure(figsize=(12, 7.5))
-        self.fig.canvas.manager.set_window_title(f'PyStarLight - {self.path.name}')
+        self.fig.canvas.manager.set_window_title(f'PyStarLight {__version__} - {self.path.name}')
         self.ax = self.fig.add_axes([0.04, 0.24, 0.80, 0.70])     # right margin: key cheat sheet
         self.info = self.fig.text(0.04, 0.955, '', family='monospace', fontsize=10)
         self.status = self.fig.text(0.04, 0.026, '', fontsize=9, color='0.3')   # own row below the buttons
@@ -2383,7 +2383,6 @@ class Viewer:
         from dataclasses import asdict
         from datetime import datetime, timezone
 
-        from . import __version__
         from . import steps as st
         from .movie import object_name
         from .station import movie_format, station_of
