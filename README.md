@@ -1,34 +1,47 @@
 # PyStarLight <img src="src/pystarlight/pystarlight_logo.svg" alt="" width="96" align="right">
 
 **Occultation light curves from start to finish:** record GPS-timed video at the telescope,
-check it, measure the stars and time the event. You pick the target and the reference stars;
-the rest of the analysis runs on its own, up to the disappearance and reappearance times. The
+check it, measure the stars and time the event. Name the target (a star or the asteroid) and
+the rest can run on its own: plate solve, reference stars, photometry, tracking, up to the
+disappearance and reappearance times with their errors. Or place the apertures by hand. The
 light curve also opens directly in [PyOTE](https://github.com/bob-anderson-ok/py-ote), for the
 classic, more hands-on analysis.
 
 PyStarLight is a Python library with one command on top of it, `pystarlight`, and three
 programs behind it:
 
-- **`pystarlight analyze`, the analysis.** It opens a recording in any common format and
-  plate-solves the field (online or offline). It finds the target by name (Gaia DR3, UCAC4,
-  TYC, SIMBAD), even when the star is too faint to see. You mark target, reference and check
-  stars and press Run. The tracking follows wind-shake, drift and field rotation, with the
-  target interpolated through the event. The output is:
+- **`pystarlight analyze`, the analysis** (PyStarLight 1.0.0). It opens a recording in any
+  common format and plate-solves the field (online or offline). It finds the target by name
+  (Gaia DR3, UCAC4, TYC, SIMBAD) or as the star on an asteroid's path (JPL Horizons, e.g.
+  `(476) Hedwig`), even when the star is too faint to see. **Auto ap** (or `--auto`, also
+  without a window: `--batch`) places target and well-spread, unsaturated reference stars;
+  or you mark target, reference and check stars yourself. Then Run. The tracking follows
+  wind-shake, drift and field rotation, with the target interpolated through the event; the
+  photometry (optimal extraction or circular apertures) is chosen per recording by the
+  reference stars' scatter, and the event times refer to mid-exposure. The output is:
   - a light curve in PyMovie's CSV layout, ready for PyOTE;
   - summary figures in flux and catalogue magnitudes;
   - an **automatic step fit** that gives each disappearance and reappearance time, with a
     1 sigma error;
   - magnitude histograms;
-  - an `event.json` with every detail of the event.
-- **`pystarlight camera`, capture on a Raspberry Pi 5 (experimental).** It records frames
-  GPS-triggered and stamped in UTC (VEYE MIPI and Aravis cameras, u-blox GPS) to RAVF or SER;
-  ZWO ASI cameras and any `/dev/video` device (e.g. an analog grabber) free-run with the
-  computer's time stamps. It has a live stack and plate solve. Every recording carries the station and equipment data and the GPS position.
-  Tonight's events can be loaded from a [PySyzygos](https://github.com/pyzahl/PySyzygos)
-  favorites server: target star, asteroid and the recording window are filled in for you.
-- **`pystarlight player`, a player that knows about time.** Unlike a normal video player it
-  shows each frame's UTC and GPS status, checks the time stamps (dropped, duplicated and
-  irregular frames), and stacks and plate-solves a frame range.
+  - an `event.json` with every detail of the event, which can go straight to PySyzygos'
+    observation report.
+- **`pystarlight camera`, capture on a Raspberry Pi 5 (experimental)** (camera 1.0.0). It
+  records frames GPS-triggered and stamped in UTC (VEYE MIPI and Aravis cameras, u-blox GPS)
+  to RAVF or SER; ZWO ASI cameras and any `/dev/video` device (e.g. an analog grabber)
+  free-run with the computer's time stamps. It has a live stack and plate solve, and a mount
+  panel (INDI: goto, solve & sync, centring). Every recording carries the station and
+  equipment data, the GPS position and (RAVF) the target. Tonight's events can be loaded from a
+  [PySyzygos](https://github.com/pyzahl/PySyzygos) favorites server: target star, asteroid
+  and the recording window are filled in for you.
+- **`pystarlight player`, a player that knows about time** (player 1.0.0). Unlike a normal
+  video player it shows each frame's UTC and GPS status, checks the time stamps (dropped,
+  duplicated and irregular frames), and stacks and plate-solves a frame range.
+
+The camera and the player have version numbers of their own, as they are installed on the Pi
+apart from the analysis. Each window title shows its version, and `pystarlight --version`,
+`pystarlight camera --version` and `pystarlight player --version` print them. Changes: the
+[CHANGELOG](CHANGELOG.md).
 
 The processing is derived from [PyMovie](https://github.com/bob-anderson-ok/pymovie) 4.2.8 by
 Bob Anderson. There are two analysis modes:
@@ -37,7 +50,8 @@ Bob Anderson. There are two analysis modes:
   PyMovie's own code to check this;
 - **global mode** (`analyze_global()`, the viewer's default) is new. It uses peak fits, one
   weighted rigid transform for all stars, interpolates the target through the event, and
-  measures with Naylor's optimal extraction or sub-pixel circular apertures. On a faint star it
+  measures with Naylor's optimal extraction or sub-pixel circular apertures (`auto`: both,
+  the one with the lower reference scatter is kept). On a faint star it
   gives about a quarter of PyMovie's normalised scatter (23.5 % → 6.4 % on a 94 s ASTRID
   recording).
 
@@ -241,9 +255,9 @@ extras shown); `pystarlight --help` lists the tools, `pystarlight <tool> --help`
 
 | command | what | install, start |
 |---|---|---|
-| `pystarlight analyze FILE` | the analysis: mark target / reference / check stars, plate-solve, photometry, event timing, `event.json`, export for PyOTE (see [Getting started](#getting-started)) | `uv sync --extra all`<br>`uv run pystarlight analyze FILE` |
+| `pystarlight analyze FILE` | the analysis: mark target / reference / check stars (or Auto ap, `--auto`), plate-solve, photometry, event timing, `event.json`, export for PyOTE (see [Getting started](#getting-started)) | `uv sync --extra all`<br>`uv run pystarlight analyze FILE` |
 | `pystarlight player FILE` | play a recording with its time: UTC and GPS status per frame, dropped / irregular frames, stack & plate-solve a frame range | `uv sync --extra all --extra camera`<br>`uv run pystarlight player FILE` |
-| `pystarlight camera` | capture on the Raspberry Pi 5: live view, GPS-timed RAVF / SER recording, live stack + plate solve | `uv sync --extra all --extra camera --extra aravis`<br>`uv run pystarlight camera` |
+| `pystarlight camera` | capture on the Raspberry Pi 5: live view, GPS-timed RAVF / SER recording, live stack + plate solve, mount panel (INDI) | `uv sync --extra all --extra camera --extra aravis`<br>`uv run pystarlight camera` |
 | `pystarlight config` | the private config: `init`, `path`, `show`, `sites` | `uv run pystarlight config path` |
 
 `FILE` is any supported recording (`.ravf .ser .adv .aav .avi .mov` or a FITS folder).
