@@ -180,6 +180,30 @@ def pulses_per_frame(rate, period_ns, delay_ns, sensor=IMX178):
     return int(sensor.busy_ns(period_ns, delay_ns) * rate / 1e9) + 1
 
 
+EXPOSURE_MARGIN = 0.03          # of the pulse period, at least 1 ms: the longest exposure stays clear
+EXPOSURE_OVERHEAD_NS = 500_000  # VEYE: frame period minus the longest exposure it holds
+
+
+def max_exposure_us(rate, delay_ns=0, sensor=None, readout_ns=0):
+    """Longest exposure (µs) with which a triggered camera still takes every pulse at `rate`
+    (fps), or None when not even the shortest does (the region reads out too slowly).
+
+    VEYE (sensor: its timing profile): after a trigger the camera is busy for the delay plus
+    busy_periods frame periods (+ busy_extra), and its frame period must hold the exposure, so
+    exposure <= (pulse period - delay - extra - margin) / busy_periods - overhead. Other cameras
+    (sensor None): the exposure must end before the next pulse."""
+    period = 1e9 / float(rate)
+    margin = max(1e6, EXPOSURE_MARGIN * period)
+    if sensor is None:
+        us = (period - delay_ns - margin) / 1000
+        return us if us > 0 else None
+    frame = (period - delay_ns - sensor.busy_extra_ns - margin) / sensor.busy_periods
+    if frame < (readout_ns or 0):
+        return None
+    us = (frame - EXPOSURE_OVERHEAD_NS) / 1000
+    return us if us > 0 else None
+
+
 def exposure_start(frame_ns, pulse_ns, exposure_us, delay_us, is_veye, period_ns=None,
                    sensor=IMX178):
     """Row-0 exposure start (UTC ns): from the trigger pulse when GPS-triggered (exact, no Pi

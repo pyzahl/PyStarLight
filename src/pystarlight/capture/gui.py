@@ -28,6 +28,7 @@ from .timing import (
     GPS_RATES,
     LAG_EXTRA_NS,
     PulseStamper,
+    max_exposure_us,
     onset_delay_us,
     parse_rate,
     parse_utc,
@@ -670,8 +671,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if sizes:
             self.splitter.setSizes([int(v) for v in sizes])
 
-        for key, fn in (("e", lambda: self.step_exposure(0.8)),
-                        ("Shift+E", lambda: self.step_exposure(1.25)),
+        for key, fn in (("e", lambda: self.step_exposure(0.8, user=True)),
+                        ("Shift+E", lambda: self.step_exposure(1.25, user=True)),
                         ("g", lambda: self.gain_spin.setValue(self.target["gain"] - 0.5)),
                         ("Shift+G", lambda: self.gain_spin.setValue(self.target["gain"] + 0.5)),
                         ("d", lambda: self.levels.gamma_spin.setValue(self.levels.gamma - 0.1)),
@@ -753,8 +754,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     w.setEnabled(not fixed)
                     if fixed:
                         w.setToolTip(f"this video device has no {what} control: the camera sets it")
-        self.exp_slider.valueChanged.connect(lambda p: self.set_exposure(self.slider_to_exp(p)))
-        self.exp_spin.valueChanged.connect(lambda ms: self.set_exposure(ms * 1000, typed=True))
+        self.exp_slider.valueChanged.connect(lambda p: self.set_exposure(self.slider_to_exp(p), user=True))
+        self.exp_spin.valueChanged.connect(lambda ms: self.set_exposure(ms * 1000, typed=True, user=True))
         self.gain_slider.valueChanged.connect(
             lambda p: self.set_gain(c.gain_min + p / GAIN_STEPS))
         self.gain_spin.valueChanged.connect(self.set_gain)
@@ -838,8 +839,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self._quiet(self.gain_slider, int(round((db - self.c.gain_min) * GAIN_STEPS)))
         self._quiet(self.gain_spin, db)
 
-    def set_exposure(self, us, typed=False):
-        """typed: from the box or the e / E keys, which may switch the slider's range."""
+    def set_exposure(self, us, typed=False, user=False):
+        """typed: from the box or the e / E keys, which may switch the slider's range. user: set
+        by hand, which overrides "Exposure: longest for the rate" (unticked)."""
+        if user and getattr(self, "expmax_check", None) is not None and self.expmax_check.isChecked() \
+                and self.mode() == "gps":
+            self.expmax_check.blockSignals(True)
+            self.expmax_check.setChecked(False)
+            self.expmax_check.blockSignals(False)
+            self.settings.setValue("exposure_for_rate", False)
         us = float(np.clip(us, self.c.exp_min, self.c.exp_max))
         if typed:
             self.choose_exp_range(us)
@@ -848,8 +856,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.c.controller.request("exposure", us)
         self.remember_camera_settings()
 
-    def step_exposure(self, factor):
-        self.set_exposure(self.target["exposure"] * factor, typed=True)
+    def step_exposure(self, factor, user=False):
+        self.set_exposure(self.target["exposure"] * factor, typed=True, user=user)
+
+    def fit_exposure_to_rate(self):
+        """GPS trigger with "Exposure: longest for the rate" ticked: the longest exposure with
+        which the camera still takes every pulse (timing.max_exposure_us, by the sensor's
+        profile and the region's readout). Nothing when the rate is out of reach."""
+        c = self.c
+        if self.mode() != "gps" or not self.expmax_check.isChecked() or not c.can_trigger:
+            return
+        delay = 0 if self.ytrig_check.isChecked() else c.trigger_delay_ns()   # y-trigger: follows
+        readout = getattr(c.camera, "_readout_period_ns", lambda: None)() if c.is_veye else 0
+        us = max_exposure_us(float(self.gps_rate()), delay, c.timing if c.is_veye else None, readout)
+        if us is None:
+            return
+        us = float(np.clip(us, c.exp_min, c.exp_max))
+        if abs(us - self.target["exposure"]) > 1:
+            self.set_exposure(us, typed=True)
+            print(f"exposure {us / 1000:.3f} ms: the longest for {rate_str(self.gps_rate())}")
 
     def set_gain(self, db):
         db = float(np.clip(db, self.c.gain_min, self.c.gain_max))
@@ -975,6 +1000,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.img = None                         # old size/format; wait for a new frame
         self.levels_pending = True              # new value range: levels from the next frame
         self.last_exposure = None               # new frame period -> new pulse-to-frame lag
+        self.fit_exposure_to_rate()             # a new region reads out faster or slower
 
     # ---- view ----
     def on_view_changed(self):
@@ -1013,6 +1039,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.selected_rate = parse_rate(text)
         self.rate_combo.setEditText(text if any(ch.isalpha() for ch in text) else f"{text} fps")
         self.rate_error = ""
+        self.expmax_check = QtWidgets.QCheckBox("Exposure: longest for the rate")
+        self.expmax_check.setToolTip("GPS trigger: set the exposure to the longest with which the "
+                                     "camera still takes every pulse, whenever the rate (or the "
+                                     "region) changes. Changing the exposure by hand unticks it.")
+        self.expmax_check.setChecked(self.settings.value("exposure_for_rate", True, type=bool))
         self.trig_button = QtWidgets.QPushButton("Software trigger (t)")
         self.trig_button.clicked.connect(self.software_trigger)
         self.trig_info = QtWidgets.QLabel(wordWrap=True)
@@ -1041,12 +1072,15 @@ class MainWindow(QtWidgets.QMainWindow):
         g.addWidget(self.gps_check, 0, 0, 1, 2)
         g.addWidget(QtWidgets.QLabel("GPS frame rate"), 1, 0)
         g.addWidget(self.rate_combo, 1, 1)
-        g.addWidget(QtWidgets.QLabel("Trigger delay"), 2, 0)
-        g.addWidget(self.delay_spin, 2, 1)
-        g.addWidget(self.ytrig_check, 3, 0)
-        g.addWidget(self.ytrig_spin, 3, 1)
-        g.addWidget(self.trig_button, 4, 0, 1, 2)
-        g.addWidget(self.trig_info, 5, 0, 1, 2)
+        g.addWidget(self.expmax_check, 2, 0, 1, 2)
+        g.addWidget(QtWidgets.QLabel("Trigger delay"), 3, 0)
+        g.addWidget(self.delay_spin, 3, 1)
+        g.addWidget(self.ytrig_check, 4, 0)
+        g.addWidget(self.ytrig_spin, 4, 1)
+        g.addWidget(self.trig_button, 5, 0, 1, 2)
+        g.addWidget(self.trig_info, 6, 0, 1, 2)
+        self.expmax_check.setVisible(self.c.can_trigger)
+        self.expmax_check.toggled.connect(self.on_expmax)
         self.gps_check.toggled.connect(lambda _: self.on_trigger_mode())
         self.rate_combo.activated.connect(lambda _: self.on_rate_text())
         self.rate_combo.lineEdit().editingFinished.connect(self.on_rate_text)
@@ -1057,6 +1091,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def mode(self):
         return "gps" if self.gps_check.isChecked() else self.base_mode
+
+    def on_expmax(self, on):
+        self.settings.setValue("exposure_for_rate", on)
+        self.fit_exposure_to_rate()
 
     def gps_rate(self):
         """The selected GPS trigger rate (Fraction, fps)."""
@@ -1078,6 +1116,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.rate_combo.setEditText(f"{text.strip()} fps")
         changed = rate != self.selected_rate
         self.selected_rate = rate
+        self.fit_exposure_to_rate()
         if changed and self.mode() == "gps" and self.c.gps is not None:
             self.reanchor()             # every rate change: 1 Hz, anchor, then the new rate
         else:
@@ -1118,6 +1157,8 @@ class MainWindow(QtWidgets.QMainWindow):
                                      if (c.is_veye or c.is_v4l2) and mode == "free" else None)
         self.trig_button.setVisible(mode == "sw")
         if mode == "gps":
+            if not initial:
+                self.fit_exposure_to_rate()
             if c.gps is not None and c.gps.clock.stale():
                 c.gps.clock.reset()         # anchor (again) on GPS UTC
             c.grabber.stamper = None        # a new one for the current rate

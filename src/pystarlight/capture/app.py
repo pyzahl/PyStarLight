@@ -351,6 +351,9 @@ def main(argv=None):
         from .qt import API, QtCore, QtWidgets, exec_app, fix_cv2_qt_env
         fix_cv2_qt_env()
         s.grabber.stream = s.create_stream()
+        # the trigger mode once more, now that the pipeline exists (as a GPS toggle does it): a
+        # VEYE quit while GPS-triggered then started without frames until GPS was toggled
+        s.apply_trigger("free" if args.trigger == "off" else args.trigger)
         s.grabber.start()                   # before the frames come, as the buffers are few
         s.start_acquisition()
         app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])

@@ -598,3 +598,17 @@ def test_veye_line_width_multiple_of_64_on_imx265():
     assert line_width("MV-MIPI-IMX265M", 2064, "") == 2048
     assert line_width("MV-MIPI-IMX265M", 2064, "5000") == 2064
     assert line_width("MV-MIPI-IMX265M", 2064, "2050") == 2048
+
+
+
+
+def test_longest_exposure_for_a_gps_rate():
+    """Every pulse taken: VEYE busy model (IMX178 2 frame periods, Sony global shutter 1), a
+    3 % / 1 ms margin; None when the region cannot read out fast enough."""
+    from pystarlight.capture.timing import IMX178, SONY_GLOBAL, max_exposure_us
+    assert max_exposure_us(50, 0, SONY_GLOBAL) == pytest.approx(18_000, abs=10)
+    assert max_exposure_us(6, 0, SONY_GLOBAL) == pytest.approx(160_667, abs=10)
+    assert max_exposure_us(10, 0, IMX178) == pytest.approx(46_500, abs=10)
+    assert max_exposure_us(30, 0, IMX178, readout_ns=30e6) is None       # full IMX178 frame
+    assert max_exposure_us(10, 20e6, SONY_GLOBAL) < max_exposure_us(10, 0, SONY_GLOBAL)
+    assert max_exposure_us(2) == pytest.approx(485_000, abs=10)          # other cameras

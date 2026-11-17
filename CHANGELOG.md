@@ -15,6 +15,11 @@ uses [Semantic Versioning](https://semver.org/).
   pulses; held for 30 s: lost, and found again only on the same star pattern. Guiding stops by
   itself if the corrections make it worse. **Lock** is a check box, on and off by hand,
   independent of recording; one CSV row per window next to the recordings. `Mount.pulse` / `can_guide` / `guide_rate`.
+- Camera, Trigger panel: **Exposure: longest for the rate** (on by default): setting the GPS
+  rate (or switching to GPS, or a new region) sets the longest exposure with which the camera
+  still takes every pulse (`timing.max_exposure_us`: the VEYE busy model, IMX178 two frame
+  periods, Sony global shutter one, 3 % / 1 ms margin; other cameras: before the next pulse).
+  Changing the exposure by hand unticks it.
 - Camera: a goto / Center while the star lock runs no longer loses the stars: the Mount panel
   tells the camera window the slew and the field's expected shift (mount positions before /
   after through the plate solution's WCS); the lock waits during the slew, finds its pattern
