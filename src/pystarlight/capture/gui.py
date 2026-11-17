@@ -1659,7 +1659,16 @@ class MainWindow(QtWidgets.QMainWindow):
                   f"stream completed {done}, failed {failed}, underruns {underrun} | "
                   f"bad statuses {c.grabber.bad or 'none'} | lost IDs {c.grabber.dropped}")
             c.grabber.last_ok = now
-            c.controller.request("restart", True)
+            regs = getattr(c.camera, "regs", None)          # VEYE: what the sensor really runs
+            if regs is not None:
+                try:
+                    from .veye_mvcam import REG_TRIGGER_MODE
+                    print(f"STALL: VEYE trigger mode register = {regs.read(REG_TRIGGER_MODE)} (0 = free run)")
+                except Exception as e:
+                    print(f"STALL: trigger register not read ({e})")
+            # free run again from scratch (trigger cleared, stream restarted): a camera left in
+            # trigger mode (e.g. quit while GPS-triggered) gives no frames without pulses
+            c.controller.request("trigger", "free")
 
         dt = now - self.disp_t0
         if dt >= 1.0:

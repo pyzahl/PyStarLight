@@ -363,7 +363,9 @@ def test_jog_moves_the_simulator(simulator):
 
 
 def test_guide_pulses_move_the_simulator(simulator):
-    """The star lock's pulses: north raises Dec, by about guide rate x sidereal x time."""
+    """The star lock's pulses move Dec by about guide rate x sidereal x time, and back. The sign
+    depends on the side of the pier (the simulator flips with the hour), which the lock's
+    calibration measures anyway."""
     m = mt.Mount(simulator).connect()
     m.park(False)
     simulator.wait(lambda: m.can_guide(), 10)
@@ -377,7 +379,7 @@ def test_guide_pulses_move_the_simulator(simulator):
     time.sleep(3.5)
     moved = (m.position()[1] - dec0) * 3600
     expect = (rate[1] if rate and rate[1] else 0.5) * 15.041 * 2.0
-    assert moved == pytest.approx(expect, rel=0.5), (moved, expect, rate)
+    assert abs(moved) == pytest.approx(expect, rel=0.5), (moved, expect, rate)
     m.pulse("S", 2000)
     time.sleep(3.5)
     assert abs(m.position()[1] - dec0) * 3600 < 0.3 * expect
