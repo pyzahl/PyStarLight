@@ -239,7 +239,11 @@ class Mount:
     def guide_rate(self):
         """(west/east, north/south) guide rate in x sidereal, or None when the driver has none."""
         v = self.client.number(self.device, "GUIDE_RATE")
-        return (v.get("GUIDE_RATE_WE"), v.get("GUIDE_RATE_NS")) if v else None
+        if not v:
+            return None
+        if "RATE" in v:                         # one rate for both axes (the AM5 driver)
+            return v["RATE"], v["RATE"]
+        return v.get("GUIDE_RATE_WE"), v.get("GUIDE_RATE_NS")
 
     def pulse(self, direction, ms):
         """Move at the guide rate for ms milliseconds, N / S / W / E (the mount times it)."""

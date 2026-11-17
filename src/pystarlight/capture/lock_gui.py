@@ -160,6 +160,15 @@ class LockDock(QtWidgets.QDockWidget):
         except Exception as e:
             self.lock.event(f"guide pulse failed: {e}")
 
+    def why_no_guiding(self):
+        dock = getattr(self.main, "mount_dock", None)
+        if dock is None or dock.mount is None or dock.client is None or not dock.client.connected:
+            return "guiding needs the Mount panel connected to the mount"
+        if dock.job is not None:
+            return (f"the Mount panel is busy ({dock.job['kind']}: {dock.job['phase']}): guiding waits "
+                    "until it is done (Abort ends it)")
+        return f"{dock.mount.device} takes no guide pulses (no TELESCOPE_TIMED_GUIDE_NS / _WE)"
+
     def can_guide(self):
         m = self.mount()
         try:
@@ -206,7 +215,7 @@ class LockDock(QtWidgets.QDockWidget):
         """Guiding on: calibrates first when needed (the lock corrects only once calibrated)."""
         if on and not self.can_guide():
             self.guide_check.setChecked(False)
-            self.lock.note = "guiding needs the Mount panel connected to a mount that takes guide pulses"
+            self.lock.note = self.why_no_guiding()
             return
         self.lock.guide = on
         if on and self.lock.cal is None and self.lock.state in (gd.LOCKED, gd.HOLD):

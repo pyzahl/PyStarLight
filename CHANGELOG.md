@@ -15,6 +15,11 @@ uses [Semantic Versioning](https://semver.org/).
   pulses; held for 30 s: lost, and found again only on the same star pattern. Guiding stops by
   itself if the corrections make it worse. **Lock** is a check box, on and off by hand,
   independent of recording; one CSV row per window next to the recordings. `Mount.pulse` / `can_guide` / `guide_rate`.
+- Mount panel: Solve & sync / Center waited for ever ("sync: stack") when the camera's automatic
+  solve had solved the new stack first; it now takes that solution. A stack or solve step that
+  takes longer than 10 min ends the job. The star lock says why it cannot guide (the Mount
+  panel busy, not connected, or no guide pulses). `Mount.guide_rate` reads the AM5's single
+  `GUIDE_RATE` element.
 - Star lock: hot pixels (an IMX265 has hundreds, often several per box) are filtered out (3 x 3
   median) when finding and measuring the lock stars; the stars' width is taken from the bright
   candidates only. Before, clusters of hot pixels set the "typical width", the real stars were

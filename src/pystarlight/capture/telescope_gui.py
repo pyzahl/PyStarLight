@@ -17,6 +17,7 @@ from .qt import QtCore, QtWidgets
 
 CENTER_TOLERANCE_DEG = 1 / 60
 CENTER_ROUNDS = 4
+JOB_STEP_TIMEOUT_S = 600        # a stack or plate solve that takes longer: the job gives up
 NO_DRIVER = "(none)"
 JOG_BUTTON_PX = 36
 
@@ -423,14 +424,22 @@ class MountDock(QtWidgets.QDockWidget):
         if job is None or m is None:
             return
         st = main.c.stacker
+        if job["phase"] != job.get("timed_phase"):          # each step gets its own time
+            job["timed_phase"], job["since"] = job["phase"], time.monotonic()
+        elif job["phase"] in ("stack", "solve") and time.monotonic() - job["since"] > JOB_STEP_TIMEOUT_S:
+            self.error, self.job = f"{job['kind']}: gave up waiting for the {job['phase']}", None
+            return
         if job["phase"] == "slew":
             if not m.slewing():
                 job.update(phase="stack", count=main.solve_count, started=time.monotonic())
                 main.on_stack_button()
         elif job["phase"] == "stack":
-            if st.state == "done" and st.path and main.solve_thread is None and main.solved_path != st.path:
-                main.start_solve(st.path)
-                job["phase"] = "solve"
+            if st.state == "done" and st.path:
+                if main.solve_thread is not None or main.solved_path == st.path:
+                    job["phase"] = "solve"          # the camera's automatic solve has it already
+                elif main.solve_thread is None:
+                    main.start_solve(st.path)
+                    job["phase"] = "solve"
             elif st.error:
                 self.error, self.job = f"stack failed: {st.error}", None
         elif job["phase"] == "solve":

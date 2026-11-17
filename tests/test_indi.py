@@ -230,6 +230,16 @@ def test_mount_dock_goto_sync_center(monkeypatch, tmp_path):
         dock.on_solve_sync()
         assert run_until(lambda: dock.job is None and "synced" in dock.error)
         assert run_until(lambda: abs(dock.mount.position()[0] - 310.5) < 0.01)
+        auto = main.on_stack_button                   # the camera's automatic solve gets there first:
+
+        def stack_and_auto_solve():
+            auto()
+            start_solve(main.c.stacker.path)
+        main.on_stack_button = stack_and_auto_solve
+        solves.append((310.45, 45.35))
+        dock.on_solve_sync()                          # (it once waited for ever: "sync: stack")
+        assert run_until(lambda: dock.job is None and "synced" in dock.error, 30), dock.error
+        main.on_stack_button = auto
         solves.extend([(310.0, 45.0), (310.357, 45.28)])   # Center: off once, then on target
         dock.on_center()
         assert run_until(lambda: dock.job is None, 120), dock.error
