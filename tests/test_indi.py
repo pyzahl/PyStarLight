@@ -342,3 +342,24 @@ def test_jog_moves_the_simulator(simulator):
     assert dec1 < dec0 - 0.1
     time.sleep(1.0)
     assert abs(m.position()[1] - dec1) < 0.05     # stopped
+
+
+def test_guide_pulses_move_the_simulator(simulator):
+    """The star lock's pulses: north raises Dec, by about guide rate x sidereal x time."""
+    m = mt.Mount(simulator).connect()
+    m.park(False)
+    simulator.wait(lambda: m.can_guide(), 10)
+    assert m.can_guide()
+    rate = m.guide_rate()
+    m.goto(310.357, 45.28)
+    assert m.wait_slew(120)
+    time.sleep(1.0)
+    dec0 = m.position()[1]
+    m.pulse("N", 2000)
+    time.sleep(3.5)
+    moved = (m.position()[1] - dec0) * 3600
+    expect = (rate[1] if rate and rate[1] else 0.5) * 15.041 * 2.0
+    assert moved == pytest.approx(expect, rel=0.5), (moved, expect, rate)
+    m.pulse("S", 2000)
+    time.sleep(3.5)
+    assert abs(m.position()[1] - dec0) * 3600 < 0.3 * expect

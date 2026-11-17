@@ -29,6 +29,7 @@ from . import gps_ublox, localconfig, ravf_writer, slipguard, station_header, sy
 from .acquisition import Controller, Grabber
 from .cameras import CameraSession, find_cameras, open_camera, pixel_um, select_camera
 from .decode import format_bits
+from .guider import LockThread, Settings, StarLock
 from .recorder import RECORD_FORMATS, Recorder, file_tag
 from .recorder import main as repair_main
 from .stacker import LiveStacker
@@ -340,6 +341,10 @@ def main(argv=None):
         s.stacker = LiveStacker(s.decode_raw, args.record_dir,
                                 file_name, stack_info)
         s.grabber.stacker = s.stacker
+        # star lock (guider.py, the GUI's Star lock panel): config [lock]
+        s.locker = LockThread(StarLock(Settings(**localconfig.section("lock")),
+                                       full_scale=s.decode.max_value), s.decode_raw)
+        s.grabber.locker = s.locker
 
         # the GUI's imports (Qt: ~1 s) before streaming, so they don't starve the grabber
         from .gui import MainWindow
@@ -370,6 +375,8 @@ def main(argv=None):
                 session.recorder.close()    # finishes the file (RAVF index, SER trailer)
             if session.stacker is not None:
                 session.stacker.close()
+            if session.locker is not None:
+                session.locker.close()
             if session.controller is not None and session.controller.is_alive():
                 session.controller.stop()
                 session.controller.join(timeout=2)

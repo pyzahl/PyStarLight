@@ -225,6 +225,27 @@ class Mount:
             if prop is not None and any(prop.values.values()):
                 self.client.set_switch(self.device, name, {k: False for k in prop.values})
 
+    # ---- guide pulses (the star lock) ----
+    GUIDE = {"N": ("TELESCOPE_TIMED_GUIDE_NS", "TIMED_GUIDE_N", "TIMED_GUIDE_S"),
+             "S": ("TELESCOPE_TIMED_GUIDE_NS", "TIMED_GUIDE_S", "TIMED_GUIDE_N"),
+             "W": ("TELESCOPE_TIMED_GUIDE_WE", "TIMED_GUIDE_W", "TIMED_GUIDE_E"),
+             "E": ("TELESCOPE_TIMED_GUIDE_WE", "TIMED_GUIDE_E", "TIMED_GUIDE_W")}
+
+    def can_guide(self):
+        """The driver takes timed guide pulses (INDI's guider interface)."""
+        return all(self.client.get(self.device, n) is not None
+                   for n in ("TELESCOPE_TIMED_GUIDE_NS", "TELESCOPE_TIMED_GUIDE_WE"))
+
+    def guide_rate(self):
+        """(west/east, north/south) guide rate in x sidereal, or None when the driver has none."""
+        v = self.client.number(self.device, "GUIDE_RATE")
+        return (v.get("GUIDE_RATE_WE"), v.get("GUIDE_RATE_NS")) if v else None
+
+    def pulse(self, direction, ms):
+        """Move at the guide rate for ms milliseconds, N / S / W / E (the mount times it)."""
+        name, on, off = self.GUIDE[direction]
+        self.client.set_number(self.device, name, {on: float(ms), off: 0.0})
+
     def set_tracking(self, on):
         if self.client.get(self.device, "TELESCOPE_TRACK_STATE") is not None:
             self.client.set_switch(self.device, "TELESCOPE_TRACK_STATE",

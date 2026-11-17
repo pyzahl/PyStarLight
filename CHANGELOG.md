@@ -6,6 +6,18 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Camera: **star lock** (Mount menu → Star lock panel, Shift+L; `capture/guider.py`,
+  `capture/lock_gui.py`, config `[lock]`). Locks on 2-3 reference stars (never the target),
+  corrects the mount with INDI guide pulses through the Mount panel after a short calibration,
+  and plots the target's flux live (target / lock stars). Corrections only while every check
+  passes (SNR, flux, width, no jumps, the stars moving together); clouds or a lost star: hold, no
+  pulses; held for 30 s: lost, and found again only on the same star pattern. Guiding stops by
+  itself if the corrections make it worse. **Lock** is a check box, on and off by hand,
+  independent of recording; one CSV row per window next to the recordings. `Mount.pulse` / `can_guide` / `guide_rate`.
+- CAPTURE.md: the Pi 5's compute reserve at 50 fps (recording + the lock's work: no frame lost,
+  5 % of a core).
+
 ## [1.0.0] - 2026-11-15
 
 ### Added

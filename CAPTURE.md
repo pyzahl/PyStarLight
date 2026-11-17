@@ -1092,3 +1092,75 @@ every other pulse once that's exceeded; watch `lost` in the status bar.
 - An "LED off" option for the y-trigger: the off edge needs only a short delay, so no pulses are
   skipped. It needs the pulse length (`min(100 ms, period / 4)`, as `set_timepulse` sets it; 100
   ms after a GPS power cycle).
+
+## Star lock and live flux
+
+The camera keeps 2-3 reference stars where they were by small corrections to the mount (INDI
+guide pulses through the [Mount panel](#mount-and-focuser-indi); meant for the ZWO AM5, tested
+against INDI's telescope simulator), and plots the target's flux live as a quick look during the
+event. Residual field rotation is ignored. Code: `capture/guider.py` (the lock, numpy / OpenCV),
+`capture/lock_gui.py` (the dock); settings `[lock]` in the config.
+
+**Use.** Mount menu → **Star lock panel** (Shift+L).
+1. Show the target's marker (star field + plate solve, as for the recording) so the lock knows
+   which star not to use and whose flux to plot. Without a marker the plot shows the lock stars'
+   own flux (transparency).
+2. Tick **Lock** (by hand, independent of recording: it is neither made nor released by a
+   recording): 2-3 stars are chosen on the next frame and boxed on the live view (green locked,
+   orange hold, red lost; the target pink). No lock star found: it unticks itself and says why.
+3. **Guide the mount** (needs the Mount panel connected): calibrates first, about 20 s: the
+   field's own drift, then pulses north and west until the stars move 6 px, each pulse sent back
+   afterwards. Then one correction per 1.5 s window. **Calibrate** again after a meridian flip.
+4. Untick **Lock** to release. Changing the camera region releases it too.
+
+**What it does.**
+- **Lock stars**: bright (SNR >= 16), unsaturated (< 85 % of full scale), star-shaped, no
+  neighbour in the box, 1 px to half a box wide (not a hot pixel, not a noise blob), 30 px from the edges, never within 3 boxes of the target; the brightest,
+  then always the one farthest from those chosen.
+- **Measured** on the frames the grabber offers whenever the lock is free (as the live stacker),
+  so it never holds up capture: centroid, flux, width and SNR in a 25 × 25 box per star.
+- **A frame counts only when certain**: every lock star with SNR >= 8, its flux within 50-200 %
+  and its width within 0.6-1.6 × the values at lock, no jump of more than 5 px since its last
+  good position (up to half a box while a pulse runs), and the stars moved together (each
+  within 1 px of their median shift; rejects hot pixels, cosmic rays, satellites, a wrong star);
+  at least 2 of them.
+- **A window** (1.5 s) gives the error, the median shift of its frames, only when >= 80 % of them
+  are valid. Otherwise **hold**: no pulses, the mount just tracks. Clouds dim all stars at once:
+  hold, never chase noise. **Lost** after 30 s of hold: the boxes are given up, and once a second
+  the whole frame is searched for the same pattern (all lock stars at their separations, fluxes
+  alike); found: locked again. Never another star.
+- **Corrections**: 0.6 × the error plus 0.15 × the summed small errors (< 2 px; takes out a
+  steady drift, capped), in the calibrated directions, dead band 0.3 px, at most 1.5 s per pulse;
+  the next window starts after the pulse and 0.5 s settling. No pulses during a slew or a
+  Center / Solve & sync job.
+- **Guiding stops by itself** when the corrections make the error grow four windows in a row
+  (calibration wrong, mount flipped); the lock keeps measuring and says so.
+- **Frame time stamps are never touched.** Each window is a row of `<name>_<UTC>Z_lock.csv` next
+  to the recordings: time, state, error x / y (px), valid frames, pulses N/S and W/E (ms).
+- **Live flux**: target / the lock stars' summed flux in fixed circular apertures (2 × FWHM; the
+  target's not re-centred, it may vanish), per valid frame, divided by its median: grey points
+  and a 1 s running median, the last 1-15 min. A quick look only: plain aperture sums, no global
+  tracking; the analysis does it properly.
+
+Tests: `tests/test_guider.py` (a synthetic field and a fake mount: calibration, guiding against a
+0.47 px/s drift to within ~0.5 px, clouds, a star gone, lost and found, guiding stopped when it
+diverges, the target's drop in the flux), `tests/test_lock_gui.py` (the dock), and guide pulses
+on INDI's telescope simulator (`tests/test_indi.py`). Not yet tried on the sky with the AM5.
+
+**Compute reserve, measured on the Pi 5 (2026-11-16).** Pi 5 (4 cores, 8 GB), VEYE
+MV-MIPI-IMX265M, region 1024 × 512, 5 ms exposure, GPS-triggered at 50 fps, RAVF to the M.2 NVMe
+SSD (TOSHIBA RD400, 361 MB/s with `dd oflag=direct`; the stream needs 52 MB/s). Camera app with
+Qt's offscreen platform (GUI work included, no screen). The lock load: copy of each frame plus
+centroid, background and flux of 4 stars in 33 × 33 boxes, paced at 50 fps, as a process beside
+the camera (`guide_bench.py`, the lock's per-frame work).
+
+| 60 s recording | frames | steps | lost / timing problems | camera process | whole Pi |
+|---|---|---|---|---|---|
+| alone | 3000 (50.00 fps) | all 20.00 ms | 0 | 49 % of a core | 16 % |
+| with the lock load | 3000 (50.00 fps) | all 20.00 ms | 0 | 50 % of a core | 22 % |
+
+The lock itself: 0.38 ms per frame (copy + lock 0.64 ms), paced at 50 fps median 0.97 ms, 99 %
+under 1.4 ms, max 5 ms, 5 % of one core, 0 of 2750 frames late. As fast as an i7-6700K for
+this. Not covered: the lock inside the camera process (it shares Python's GIL with the camera,
+~1 ms a frame on top of half a core), drawing on a real screen (the live plot redraws a few times
+a second), and real stars.

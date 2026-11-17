@@ -92,6 +92,7 @@ class ImageView(QtWidgets.QWidget):
                                     # / ("hline", row): dragging the dashed line
         self.band = None            # rectangle being dragged (image pixels)
         self.marks = []             # [(x0, y0, x1, y1, QColor)] to draw (image pixels)
+        self.lock_boxes = []        # the same, of the star lock (its stars and the target)
         self.hline = None           # (row, QColor): a dashed line across the image
         self.hspan = 0              # rows above/below it: dotted lines (0: none)
         self.circles = []           # [(x, y, radius, text, QColor)]: stars (image pixels)
@@ -151,7 +152,7 @@ class ImageView(QtWidgets.QWidget):
             p.end()
             return
         p.drawImage(QtCore.QPointF(self.map[0], self.map[1]), self.qimg)
-        rects = list(self.marks)
+        rects = list(self.marks) + list(self.lock_boxes)
         if self.band is not None:
             rects.append((*self.band, QtGui.QColor("#00e5ff")))
         for x0, y0, x1, y1, color in rects:
@@ -2323,6 +2324,16 @@ class MainWindow(QtWidgets.QMainWindow):
         act.setShortcut(QtGui.QKeySequence("Shift+M"))
         menu.addAction(act)
         menu.addAction("INDI &settings…", self.mount_dock.show_settings)
+        self.lock_dock = None
+        if getattr(self.c, "locker", None) is not None:   # star lock (lock_gui.py, guider.py)
+            from .lock_gui import LockDock
+            self.lock_dock = LockDock(self)
+            self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.lock_dock)
+            self.lock_dock.hide()
+            act = self.lock_dock.toggleViewAction()
+            act.setText("Star &lock panel")
+            act.setShortcut(QtGui.QKeySequence("Shift+L"))
+            menu.addAction(act)
         state = self.settings.value("dock_state")
         if state is not None:
             self.restoreState(state)
@@ -2336,6 +2347,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.solve_cancel.set()
         self.settings.setValue("dock_state", self.saveState())
         self.mount_dock.shutdown()
+        if self.lock_dock is not None:
+            self.lock_dock.shutdown()
         self.settings.setValue("splitter", self.splitter.sizes())
         self.frame_timer.stop()
         self.status_timer.stop()
