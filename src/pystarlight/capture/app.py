@@ -233,7 +233,8 @@ def main(argv=None):
                 camera.set_high_speed(args.asi_high_speed == "on")
             print(f"ASI: {camera.describe()}")
 
-        s.controller = Controller(camera, s.apply_trigger, s.reconfigure)
+        s.controller = Controller(camera, s.apply_trigger, s.reconfigure,
+                                  s.recover if s.is_veye else None)
         # files start with the model name; a video device's ("USB Video: USB Video") made safe
         file_name = (file_tag(camera.get_model_name()) if s.is_v4l2
                      else camera.get_model_name().replace(" ", "_"))

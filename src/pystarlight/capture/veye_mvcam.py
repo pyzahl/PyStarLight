@@ -28,6 +28,8 @@ SUCCESS = "success"     # buffer status of a complete frame (compare with Grabbe
 # Camera registers (see mv_tools_rpi/mv_mipi_i2c_new.sh); all values are 32-bit
 # ---------------------------------------------------------------------------
 REG_MODEL = 0x0004
+REG_SYSTEM_REBOOT = 0x001C  # write 1: the camera restarts (as at power-up), ~0.5 s
+REG_UPTIME = 0x0020         # ms since the camera started
 REG_TRIGGER_MODE = 0x0404   # 0 free-running, 1 trigger, 2 high-speed trigger
 REG_TRIGGER_SOURCE = 0x0408 # 0 software, 1 hardware (trigger input pin)
 REG_TRIGGER_SOFTWARE = 0x0414   # write 1: one software trigger
@@ -634,7 +636,38 @@ class Camera:
         self.regs.write(REG_TRIGGER_COUNT, 1)
 
     def clear_triggers(self):
+        """Back to free running. Like a frame-rate change, switching while the sensor may still
+        be busy with a frame (within about one frame period of the last) has hung the firmware
+        (IMX265M after GPS mode, 2026-11-17: no frames in free run until a camera reboot), so
+        wait for it to go idle first when the stream was stopped for this."""
+        stopped = None if self.stream is None else self.stream.stop_time
+        if stopped is not None and not self.stream.streaming:
+            period_s = max(100.0 / max(self.regs.read(REG_FPS), 1), self.exposure_us / 1e6
+                           if getattr(self, "exposure_us", None) else 0.0)
+            idle = 1.2 * min(period_s, MAX_EXPOSURE_GUESS_S) + 0.1 - (time.monotonic() - stopped)
+            if idle > 0:
+                time.sleep(idle)
         self.regs.write(REG_TRIGGER_MODE, 0)
+
+    def reboot(self, timeout=10.0):
+        """Restart the camera (its own reboot command, as the vendor's mv_mipi_i2c.sh -w reboot):
+        clears a firmware hang the way a power cut does. It comes back with its saved settings;
+        the caller sets format, region, exposure, gain and trigger again. True once it answers."""
+        try:
+            self.regs.write(REG_SYSTEM_REBOOT, 1)
+        except OSError:
+            pass                    # it may restart before acknowledging
+        end = time.monotonic() + timeout
+        time.sleep(0.3)
+        while time.monotonic() < end:
+            try:
+                if self.regs.read(REG_UPTIME) < 60_000:
+                    self.fps_reg = None
+                    return True
+            except OSError:
+                pass
+            time.sleep(0.2)
+        return False
 
     def software_trigger(self):
         self.regs.write(REG_TRIGGER_SOFTWARE, 1)

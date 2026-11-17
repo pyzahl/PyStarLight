@@ -173,10 +173,11 @@ class Grabber(threading.Thread):
 class Controller(threading.Thread):
     """Applies camera settings off the GUI thread; only the newest request per key is sent."""
 
-    def __init__(self, camera, apply_trigger, reconfigure):
+    def __init__(self, camera, apply_trigger, reconfigure, recover=None):
         super().__init__(daemon=True)
         self.camera = camera
         self.apply_trigger = apply_trigger  # mode -> configures the camera (not acquiring)
+        self.recover = recover              # () -> camera rebooted and set up again (VEYE hang)
         # reconfigure(region=(x, y, w, h) or None, pixel_format=name or None): rebuilds the stream
         self.reconfigure = reconfigure
         self.reconfigs = 0                  # +1 per rebuilt stream (the GUI follows)
@@ -207,7 +208,11 @@ class Controller(threading.Thread):
                 if "reconfigure" in todo:
                     self.reconfigure(**todo["reconfigure"])
                     self.reconfigs += 1
-                if "trigger" in todo:
+                if "recover" in todo and self.recover is not None:
+                    self.recover()
+                    self.reconfigs += 1             # the GUI follows a new stream
+                    self.restarts += 1
+                if "trigger" in todo and "recover" not in todo:
                     print(f"Trigger mode: {todo['trigger']}")
                     self.camera.stop_acquisition()
                     self.apply_trigger(todo["trigger"])

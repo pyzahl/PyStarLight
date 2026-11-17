@@ -15,6 +15,10 @@ uses [Semantic Versioning](https://semver.org/).
   pulses; held for 30 s: lost, and found again only on the same star pattern. Guiding stops by
   itself if the corrections make it worse. **Lock** is a check box, on and off by hand,
   independent of recording; one CSV row per window next to the recordings. `Mount.pulse` / `can_guide` / `guide_rate`.
+- Camera (VEYE): free run after GPS mode could get no frames at all until a power cut (a
+  firmware hang, IMX265M). Switching to free run now waits for the sensor to go idle, and a
+  repeated free-run stall reboots the camera over I2C (its own reboot command) and sets it up
+  again: format, region, trigger, exposure, gain.
 - Camera, Trigger panel: **Exposure: longest for the rate** (on by default): setting the GPS
   rate (or switching to GPS, or a new region) sets the longest exposure with which the camera
   still takes every pulse (`timing.max_exposure_us`: the VEYE busy model, IMX178 two frame

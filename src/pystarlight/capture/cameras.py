@@ -331,6 +331,34 @@ class CameraSession:
         print(f"Region: {self.width}x{self.height} at ({self.region[0]}, {self.region[1]}), "
               f"{self.pixel_format}")
 
+    def recover(self):
+        """A VEYE camera that sends nothing in free run (a firmware hang that only a camera
+        restart clears): reboot it, then set it up again as it was (format, region, trigger,
+        exposure, gain) on a new stream."""
+        camera, grabber = self.camera, self.grabber
+        if not hasattr(camera, "reboot"):
+            return False
+        with self.stream_lock:
+            grabber.pause()
+            grabber.take()
+            if self.stream is not None:
+                camera.stop_acquisition()
+                camera.close_stream(self.stream)
+            self.stream = grabber.stream = None
+            ok = camera.reboot()
+            print("Camera rebooted (firmware hang)" if ok else "Camera reboot: no answer")
+            camera.set_pixel_format_from_string(self.pixel_format)
+            camera.set_region(*self.region)
+            self.stream = camera.create_stream(self.n_buffers)
+            self.apply_trigger("free")
+            if self.controller is not None:
+                try_call(lambda: camera.set_exposure_time(self.controller.exposure_us))
+                try_call(lambda: camera.set_gain(self.controller.gain_db))
+            camera.start_acquisition()
+            self._refresh()
+            grabber.resume(self.stream)
+        return ok
+
     def decode_raw(self, raw):
         """Raw frame bytes (as the grabber copied them) -> image, current region and format."""
         return self.decode.raw(raw, self.width, self.height)

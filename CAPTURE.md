@@ -1066,6 +1066,14 @@ every other pulse once that's exceeded; watch `lost` in the status bar.
   asked) and crops x in software (`Stream(crop_x, crop_w)`). That costs no speed: the frame rate
   depends only on the row count (3088 × 480 and 640 × 480 both reach 163 fps). Check with frames,
   not register read-back, before going back to a hardware x offset after a firmware update.
+- **VEYE firmware hang in free run** (IMX265M, 2026-11-17): after GPS mode with a long exposure
+  (47.5 ms, frame rate 21 fps), switching back to free run left the sensor without frames
+  (its frame counter, register 0x0464, stood still; trigger mode 0; settings were accepted).
+  Neither stream restarts, new settings, an app restart nor a Pi reboot helped (the camera stays
+  powered); a power cut did, and so does the camera's own reboot command (register 0x001C = 1,
+  `mv_mipi_i2c.sh -w reboot`, ~0.5 s). The app now waits for the sensor to go idle before
+  switching to free run (as for frame-rate changes), and when a free-run stall repeats it reboots
+  the camera and sets it up again by itself ("STALL again: rebooting the camera").
 - **Exposure must be shorter than the pulse period.** At 1.6 s exposure and a 1 Hz PPS, most pulses
   are lost.
 - **No GPS fix means no pulses**, and so no frames in GPS mode. The GUI shows this in red.

@@ -612,3 +612,30 @@ def test_longest_exposure_for_a_gps_rate():
     assert max_exposure_us(30, 0, IMX178, readout_ns=30e6) is None       # full IMX178 frame
     assert max_exposure_us(10, 20e6, SONY_GLOBAL) < max_exposure_us(10, 0, SONY_GLOBAL)
     assert max_exposure_us(2) == pytest.approx(485_000, abs=10)          # other cameras
+
+
+def test_veye_reboot_waits_for_the_camera(monkeypatch):
+    """The camera's own reboot (register 0x001C): it may not acknowledge the write and does not
+    answer for a moment; done once it answers with a fresh uptime."""
+    from types import SimpleNamespace
+
+    from pystarlight.capture import veye_mvcam as v
+    monkeypatch.setattr(v.time, "sleep", lambda s: None)
+    answers = [OSError("nak"), OSError("nak"), 120]
+
+    def read(reg):
+        assert reg == v.REG_UPTIME
+        a = answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+    written = []
+
+    def write(reg, val):
+        written.append((reg, val))
+        raise OSError("restarting")
+    cam = SimpleNamespace(regs=SimpleNamespace(read=read, write=write), fps_reg=2104)
+    cls = next(c for c in vars(v).values() if isinstance(c, type) and hasattr(c, "reboot"))
+    assert cls.reboot(cam, timeout=5) is True
+    assert written == [(v.REG_SYSTEM_REBOOT, 1)] and cam.fps_reg is None

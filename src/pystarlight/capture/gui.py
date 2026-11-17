@@ -1707,9 +1707,17 @@ class MainWindow(QtWidgets.QMainWindow):
                     print(f"STALL: VEYE trigger mode register = {regs.read(REG_TRIGGER_MODE)} (0 = free run)")
                 except Exception as e:
                     print(f"STALL: trigger register not read ({e})")
-            # free run again from scratch (trigger cleared, stream restarted): a camera left in
-            # trigger mode (e.g. quit while GPS-triggered) gives no frames without pulses
-            c.controller.request("trigger", "free")
+            # free run again from scratch (trigger cleared, stream restarted); still nothing at the
+            # next stall: the VEYE firmware hang that only a camera restart clears (seen on an
+            # IMX265M back from GPS mode): reboot the camera and set it up again
+            done = c.stream.get_statistics()[0] if c.stream is not None else 0
+            stuck = getattr(self, "stall_frames", None) == done and c.is_veye
+            self.stall_frames = done
+            if stuck:
+                print("STALL again: rebooting the camera (firmware hang)")
+                c.controller.request("recover", True)
+            else:
+                c.controller.request("trigger", "free")
 
         dt = now - self.disp_t0
         if dt >= 1.0:
