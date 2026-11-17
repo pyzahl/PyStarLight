@@ -2139,7 +2139,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     name = hit["name"] if hit else (s.get("name") or s.get("ra_hms", ""))
                     mag = f"  {hit['mag']:.1f}" if hit and np.isfinite(hit["mag"]) else ""
                     marks.append({"x": s["x"], "y": s["y"], "r": max(4.0, 1.5 * (s.get("fwhm") or 3)),
-                                  "label": f"{i} {name}{mag}", "kind": "star"})
+                                  "label": f"{i} {name}{mag}", "kind": "star",
+                                  "name": name, "ra": s["ra"], "dec": s["dec"]})
                 wcs = WCS(fits.getheader(sol["wcs"]))
                 found = {}
                 for kind, query, tag in (("target", text, "T"), ("verify", check, "V")):

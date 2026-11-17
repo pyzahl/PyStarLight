@@ -298,11 +298,36 @@ class MountDock(QtWidgets.QDockWidget):
 
     # ---- target ----
     def target(self):
+        """The target field as (ra, dec) J2000: RA Dec as typed, or a star's name: one named on
+        the image by the last plate solve, or the target looked up in the stack panel (no
+        network needed for either)."""
+        text = self.target_edit.text()
         try:
-            return mt.parse_radec(self.target_edit.text())
-        except ValueError as e:
-            self.error = str(e)
+            return mt.parse_radec(text)
+        except ValueError:
+            pass
+        found = self.named_star(text)
+        if found is None:
+            self.error = (f"'{text.strip()}' is neither RA Dec nor a star named on the image "
+                          "(or the stack panel's target): type RA Dec, e.g. 00:35:03 +04:02:07")
+        return found
+
+    def named_star(self, text):
+        """(ra, dec) of a star of that name among the plate solve's named stars and the stack
+        panel's target, None if it is not there. Spaces, hyphens and case do not matter."""
+        def key(s):
+            return "".join(ch for ch in str(s).lower() if ch.isalnum())
+        want = key(text)
+        if not want:
             return None
+        main = self.main
+        found = getattr(main, "target_found", None)          # (as typed, catalogue name)
+        if found and main.target_radec and want in (key(found[0]), key(found[1])):
+            return tuple(main.target_radec)
+        for m in getattr(main, "marks", None) or []:
+            if m.get("ra") is not None and key(m.get("name", "")) == want:
+                return m["ra"], m["dec"]
+        return None
 
     def set_target(self, ra, dec):
         self.target_edit.setText(f"{mt.hms(ra).replace('h', ':').replace('m', ':').rstrip('s')} "

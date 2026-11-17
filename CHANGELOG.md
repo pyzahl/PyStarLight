@@ -15,6 +15,9 @@ uses [Semantic Versioning](https://semver.org/).
   pulses; held for 30 s: lost, and found again only on the same star pattern. Guiding stops by
   itself if the corrections make it worse. **Lock** is a check box, on and off by hand,
   independent of recording; one CSV row per window next to the recordings. `Mount.pulse` / `can_guide` / `guide_rate`.
+- Mount panel: the target field takes a star's name as well as RA Dec: a star named on the image
+  by the last plate solve (e.g. `UCAC4 471-000881`), or the stack panel's target; no network
+  needed. Before, a name gave "could not convert string to float" and Goto / Center did nothing.
 - Camera: a status-bar indicator while a plate solve runs ("plate solving 37 s", amber). The
   local solve near the expected position gets 120 s (was 30 s: a Pi busy with the camera needed
   64 s and was stopped just as it solved, then fell back to the slow whole-sky search).

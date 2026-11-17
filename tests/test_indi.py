@@ -197,6 +197,14 @@ def test_mount_dock_goto_sync_center(monkeypatch, tmp_path):
             time.sleep(0.1)
         return False
 
+    main.marks = [{"kind": "star", "name": "UCAC4 471-000881", "ra": 8.7051, "dec": 4.1883}]
+    main.target_found, main.target_radec = ("TYC 1-2-3", "TYC 1-2-3"), (9.1, 4.0)
+    dock.target_edit.setText("ucac4-471-000881")          # a star named on the image: no lookup
+    assert dock.target() == (8.7051, 4.1883)
+    dock.target_edit.setText("TYC 1-2-3")                 # the stack panel's target
+    assert dock.target() == (9.1, 4.0)
+    dock.target_edit.setText("UCAC4 999-000001")
+    assert dock.target() is None and "neither RA Dec" in dock.error
     try:
         dock.on_connect()
         assert run_until(lambda: dock.mount is not None and not dock.busy), dock.error
