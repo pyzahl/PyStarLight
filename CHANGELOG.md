@@ -15,6 +15,9 @@ uses [Semantic Versioning](https://semver.org/).
   pulses; held for 30 s: lost, and found again only on the same star pattern. Guiding stops by
   itself if the corrections make it worse. **Lock** is a check box, on and off by hand,
   independent of recording; one CSV row per window next to the recordings. `Mount.pulse` / `can_guide` / `guide_rate`.
+- Camera: **Crosshair** check box in the Display box (across the whole image through its centre,
+  the middle open; remembered), and once plate-solved **N / E arrows** on the image (upper
+  right), from the solution's WCS as in the analysis viewer.
 - Camera (VEYE): free run after GPS mode could get no frames at all until a power cut (a
   firmware hang, IMX265M). Switching to free run now waits for the sensor to go idle, and a
   repeated free-run stall reboots the camera over I2C (its own reboot command) and sets it up

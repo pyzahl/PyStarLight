@@ -94,6 +94,8 @@ class ImageView(QtWidgets.QWidget):
         self.band = None            # rectangle being dragged (image pixels)
         self.marks = []             # [(x0, y0, x1, y1, QColor)] to draw (image pixels)
         self.lock_boxes = []        # the same, of the star lock (its stars and the target)
+        self.crosshair = False      # full-size crosshair through the image centre, open middle
+        self.compass = None         # [(label, ux, uy)]: north / east as unit vectors on the image
         self.hline = None           # (row, QColor): a dashed line across the image
         self.hspan = 0              # rows above/below it: dotted lines (0: none)
         self.circles = []           # [(x, y, radius, text, QColor)]: stars (image pixels)
@@ -188,6 +190,10 @@ class ImageView(QtWidgets.QWidget):
             if text:
                 p.drawText(QtCore.QPointF(cx + rs + 3, cy - 3), text)
         self.paint_markers(p)
+        if self.crosshair and self.img_size:
+            self.paint_crosshair(p)
+        if self.compass:
+            self.paint_compass(p)
         if self.zoom > 1.0:
             p.setPen(QtCore.Qt.yellow)
             p.drawText(8, 18, f"zoom {self.zoom:.1f}×  (double-click: fit)")
@@ -198,6 +204,38 @@ class ImageView(QtWidgets.QWidget):
             p.setPen(QtCore.Qt.white)
             p.drawText(r, QtCore.Qt.AlignCenter, self.banner)
         p.end()
+
+    CROSS_GAP_PX = 18               # the open middle of the crosshair (screen px)
+
+    def paint_crosshair(self, p):
+        """A crosshair through the image centre, across the whole image, its middle left open
+        (the star there stays visible)."""
+        w, h = self.img_size
+        cx, cy = self.to_screen(w / 2, h / 2)
+        x0, y0 = self.to_screen(0, 0)
+        x1, y1 = self.to_screen(w, h)
+        pen = QtGui.QPen(QtGui.QColor(255, 82, 82, 190), 1)
+        pen.setCosmetic(True)
+        p.setPen(pen)
+        g = self.CROSS_GAP_PX
+        for a, b in (((x0, cy), (cx - g, cy)), ((cx + g, cy), (x1, cy)),
+                     ((cx, y0), (cx, cy - g)), ((cx, cy + g), (cx, y1))):
+            p.drawLine(QtCore.QPointF(*a), QtCore.QPointF(*b))
+
+    def paint_compass(self, p, length=34):
+        """N and E arrows in the upper-right corner (the zoom note is upper left), from the plate
+        solution (as in the analysis)."""
+        ox, oy = self.width() - 58.0, 58.0
+        pen = QtGui.QPen(QtGui.QColor("#ffa726"), 2)
+        pen.setCosmetic(True)
+        p.setPen(pen)
+        for label, ux, uy in self.compass:
+            tip = QtCore.QPointF(ox + ux * length, oy + uy * length)
+            p.drawLine(QtCore.QPointF(ox, oy), tip)
+            for side in (+1, -1):                       # arrow head
+                a = np.arctan2(uy, ux) + np.pi + side * 0.45
+                p.drawLine(tip, QtCore.QPointF(tip.x() + 8 * np.cos(a), tip.y() + 8 * np.sin(a)))
+            p.drawText(QtCore.QPointF(ox + ux * (length + 12) - 4, oy + uy * (length + 12) + 5), label)
 
     def paint_markers(self, p):
         """Four ticks around each star, starting outside its image (the star stays visible),
@@ -638,6 +676,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.levels = LevelsBox(self.shown_image, float(np.clip(self.args.gamma, GAMMA_MIN, GAMMA_MAX)),
                                 full=lambda: (0, self.c.decode.max_value))
         self.levels.changed.connect(self.on_levels)
+        self.cross_check = QtWidgets.QCheckBox("Crosshair")
+        self.cross_check.setToolTip("a crosshair through the image centre, its middle open")
+        self.cross_check.setChecked(self.settings.value("crosshair", False, type=bool))
+        self.view.crosshair = self.cross_check.isChecked()
+        self.cross_check.toggled.connect(self.on_crosshair)
+        self.levels.layout().addWidget(self.cross_check, 3, 0, 1, 3)
         col.addWidget(self.levels)
         col.addWidget(self.make_roi_box())
         col.addWidget(self.make_trigger_box())
@@ -2106,6 +2150,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 c = sol["center"]
                 self.settings.setValue("last_center", [c["ra"], c["dec"]])
                 print(f"solve: done in {time.monotonic() - t0:.1f} s")
+                self.view.compass = self.compass_of(sol)     # N-E arrows on the image
                 self.solution = sol
                 self.solve_count += 1
                 self.solved_path = path
@@ -2405,6 +2450,31 @@ class MainWindow(QtWidgets.QMainWindow):
             print(f"field moved by about {shift[0]:+.0f}, {shift[1]:+.0f} px (slew): markers follow")
         if getattr(self, "lock_dock", None) is not None and self.lock_dock.lock.state != "idle":
             self.lock_dock.thread.ask("moved", shift)
+
+    def on_crosshair(self, on):
+        self.settings.setValue("crosshair", on)
+        self.view.crosshair = on
+        self.view.update()
+
+    @staticmethod
+    def compass_of(sol):
+        """[('N', ux, uy), ('E', ux, uy)]: north and east on the image as unit vectors (screen y
+        down), from the solution's WCS at the field centre; None if it cannot be read."""
+        try:
+            from astropy.io import fits
+            from astropy.wcs import WCS
+            w = WCS(fits.getheader(sol["wcs"]))
+            ra, dec = sol["center"]["ra"], sol["center"]["dec"]
+            (x0,), (y0,) = w.wcs_world2pix([ra], [dec], 0)
+            out = []
+            for label, (r, d) in (("N", (ra, dec + 1 / 60)),
+                                  ("E", (ra + 1 / 60 / np.cos(np.radians(dec)), dec))):
+                (x,), (y,) = w.wcs_world2pix([r], [d], 0)
+                n = float(np.hypot(x - x0, y - y0)) or 1.0
+                out.append((label, float(x - x0) / n, float(y - y0) / n))
+            return out
+        except Exception:
+            return None
 
     def show_solving(self):
         """The status bar's busy indicator while a plate solve runs (with its time so far)."""
