@@ -2156,8 +2156,19 @@ class MainWindow(QtWidgets.QMainWindow):
                     if kind == "target":
                         self.target_radec = (t["ra"], t["dec"])
                         self.target_found = (query, t["name"])
-                    x, y = (float(v) for v in wcs.all_world2pix(t["ra"], t["dec"], 0))
                     mag = f"  {t['band']} {t['mag']:.1f}" if np.isfinite(t["mag"]) else ""
+                    c = sol["center"]
+                    off = float(np.degrees(np.arccos(np.clip(
+                        np.sin(np.radians(c["dec"])) * np.sin(np.radians(t["dec"]))
+                        + np.cos(np.radians(c["dec"])) * np.cos(np.radians(t["dec"]))
+                        * np.cos(np.radians(t["ra"] - c["ra"])), -1, 1))))
+                    if off > 2 * max(sol.get("field_deg") or [1.0]):
+                        # far off the field: the distortion terms of the solution diverge there
+                        # (and took all the markers with them); just say where it is
+                        notes.append(f"{tag} {t['name']}{mag}: {off:.1f} deg from the field centre "
+                                     "(OUTSIDE the stacked field)")
+                        continue
+                    x, y = (float(v) for v in wcs.all_world2pix(t["ra"], t["dec"], 0, quiet=True))
                     marks.append({"x": x, "y": y, "r": 8.0 if kind == "target" else 14.0,
                                   "label": f"{tag} {t['name']}{mag}", "kind": kind})
                     ids = ", ".join(v for k, v in t["ids"].items() if v != t["name"])

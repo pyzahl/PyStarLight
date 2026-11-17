@@ -39,7 +39,8 @@ class LookupError_(RuntimeError):
     """The target could not be found (bad text, not in the catalogue, no network)."""
 
 
-ONLINE_CHECK_S = 2.0        # a connection to the service's host must open this fast
+ONLINE_CHECK_S = 8.0        # a connection to the service's host must open this fast (a Pi on a
+                            # phone link took 5 s for SIMBAD, mostly the name lookup)
 ONLINE_KEEP_S = 60.0        # the answer is kept this long (in the field: offline all night)
 _online = {}                # host -> (checked at, reachable)
 
