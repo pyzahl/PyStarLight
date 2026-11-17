@@ -19,8 +19,9 @@ from . import guider as gd
 from .qt import QtCore, QtGui, QtWidgets
 
 STATE_COLORS = {gd.LOCKED: "#c8e6c9", gd.CALIBRATING: "#bbdefb", gd.HOLD: "#ffe0b2",
-                gd.LOST: "#ffcdd2", gd.IDLE: ""}
-BOX_COLORS = {gd.LOCKED: "#00e676", gd.CALIBRATING: "#40c4ff", gd.HOLD: "#ffab40", gd.LOST: "#ff5252"}
+                gd.LOST: "#ffcdd2", gd.MOVING: "#e1bee7", gd.IDLE: ""}
+BOX_COLORS = {gd.LOCKED: "#00e676", gd.CALIBRATING: "#40c4ff", gd.HOLD: "#ffab40", gd.LOST: "#ff5252",
+              gd.MOVING: "#ce93d8"}
 WINDOWS_S = (60, 120, 300, 900)
 
 

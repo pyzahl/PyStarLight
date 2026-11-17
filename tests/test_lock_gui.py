@@ -130,3 +130,33 @@ def test_guiding_needs_a_mount_that_takes_pulses(qt, tmp_path):
         dock.thread.close()
         main.close()
 
+
+
+def test_mount_panel_tells_the_field_shift_of_a_slew(tmp_path):
+    """MountDock.watch_slew: slew start -> field_moving(), end -> field_moved((dx, dy)) from the
+    positions before and after by the plate solution's WCS (stars move opposite to the mount)."""
+    pytest.importorskip("astropy")
+    from astropy.wcs import WCS
+
+    from pystarlight.capture.telescope_gui import MountDock
+    w = WCS(naxis=2)
+    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    w.wcs.crval, w.wcs.crpix = (8.69, 4.23), (1024, 772)
+    w.wcs.cd = [[-1.78 / 3600, 0], [0, 1.78 / 3600]]          # north up, east left
+    path = tmp_path / "s.wcs.fit"
+    w.to_fits().writeto(path)
+    calls = []
+    main = SimpleNamespace(solution={"wcs": str(path)}, field_moving=lambda: calls.append("moving"),
+                           field_moved=lambda s: calls.append(s))
+    dock = SimpleNamespace(main=main)
+    dock.field_shift = lambda a, b: MountDock.field_shift(dock, a, b)
+    for slewing, ra, dec in ((False, 8.69, 4.23), (True, 8.70, 4.25), (False, 8.69, 4.23 + 89 / 3600)):
+        MountDock.watch_slew(dock, {"slewing": slewing, "ra": ra, "dec": dec})
+    assert calls[0] == "moving"
+    dx, dy = calls[1]
+    assert dx == pytest.approx(0, abs=0.1)
+    assert dy == pytest.approx(-50, abs=0.5)                    # 89" north: the stars 50 px down
+    main.solution = None                                        # no plate solution: no hint
+    for slewing in (True, False):
+        MountDock.watch_slew(dock, {"slewing": slewing, "ra": 8.7, "dec": 4.2})
+    assert calls[-1] is None

@@ -15,6 +15,10 @@ uses [Semantic Versioning](https://semver.org/).
   pulses; held for 30 s: lost, and found again only on the same star pattern. Guiding stops by
   itself if the corrections make it worse. **Lock** is a check box, on and off by hand,
   independent of recording; one CSV row per window next to the recordings. `Mount.pulse` / `can_guide` / `guide_rate`.
+- Camera: a goto / Center while the star lock runs no longer loses the stars: the Mount panel
+  tells the camera window the slew and the field's expected shift (mount positions before /
+  after through the plate solution's WCS); the lock waits during the slew, finds its pattern
+  nearest that shift and re-locks there (holds the new position), the star markers move by it.
 - Mount panel: the target field takes a star's name as well as RA Dec: a star named on the image
   by the last plate solve (e.g. `UCAC4 471-000881`), or the stack panel's target; no network
   needed. Before, a name gave "could not convert string to float" and Goto / Center did nothing.

@@ -21,6 +21,10 @@ only when >= min_valid of the window's frames are valid. Then:
   CALIBRATING  pulses north, then west (each lengthened until the stars move cal_px), the
            response measured, and the same pulses back. Directions with too little motion, or
            north and west not roughly at right angles: guiding is refused.
+  MOVING   a goto / Center slews the mount (moving()): nothing measured, no pulses. After it
+           (moved(hint)): the pattern is searched for at once, the match nearest the expected
+           shift `hint` (px, from the mount positions) first; found, the lock is re-referenced
+           there: the new position is the one held, not pulled back to the old.
 Corrections that make the error grow window after window stop the guiding (the lock keeps
 measuring). Frame time stamps are never touched; pulses go out through a callback
 (pulse(direction, ms): 'N' 'S' 'W' 'E'), so this module knows nothing of INDI.
@@ -39,7 +43,7 @@ import time
 import cv2
 import numpy as np
 
-IDLE, LOCKED, HOLD, LOST, CALIBRATING = "idle", "locked", "hold", "lost", "calibrating"
+IDLE, LOCKED, HOLD, LOST, CALIBRATING, MOVING = "idle", "locked", "hold", "lost", "calibrating", "moving"
 
 
 class Settings:
@@ -227,6 +231,8 @@ class StarLock:
         self.cal_job = None
         self.stars_ok = 0
         self.min_stars = self.s.min_stars
+        self.rebase = False             # after a slew: the pattern found is the new lock position
+        self.hint = None                # expected shift of the field after a slew (px)
         self.note = ""                  # the last event (calibration, guiding stopped, lost,
                                         # found again): stays until the next one
 
@@ -289,6 +295,8 @@ class StarLock:
         if self.state == IDLE:
             return
         self.frames += 1
+        if self.state == MOVING:
+            return
         if self.state == LOST:
             if t - self.last_search >= 1.0:
                 self.last_search = t
@@ -459,12 +467,39 @@ class StarLock:
         self.event(f"calibrated: north {np.hypot(*n) * 1000:.1f} px/s, west {np.hypot(*w) * 1000:.1f} "
                    f"px/s, {np.degrees(np.arccos(cos)):.0f} deg apart")
 
+    def moving(self):
+        """The mount slews on purpose (goto / Center): stop measuring and correcting."""
+        if self.state in (IDLE, MOVING):
+            return
+        self.cal_job = None
+        self.state, self.hold_since = MOVING, None
+        self.message = "the mount slews: waiting"
+
+    def moved(self, t, hint=None):
+        """The slew has ended; hint (dx, dy): the expected shift of the field in px (None: not
+        known). The pattern is searched for on the next frames, and the lock re-referenced."""
+        if self.state != MOVING:
+            return
+        self.rebase = True
+        self.hint = None if hint is None else (float(hint[0]), float(hint[1]))
+        self.state, self.hold_since = LOST, t - self.s.lost_after_s
+        self.last_search = 0.0
+        self.sum_err = np.zeros(2)
+        self.message = "after the slew: looking for the stars" + (
+            f" (expected {hint[0]:+.0f}, {hint[1]:+.0f} px)" if hint is not None else "")
+
     def _search(self, img, t):
         """LOST: the same pattern anywhere in the frame (every lock star at its separation from
-        the first, fluxes within the range)."""
+        the first, fluxes within the range); after a slew the match nearest the hint, and the
+        lock re-referenced there."""
         cands = find_stars(img, self.s.box, limit=100)
         lo, hi = self.s.flux_range
         r0 = self.ref[0]
+        hint = self.hint
+        if hint is not None:                # the match nearest the expected shift first
+            here = self.offset
+            cands = sorted(cands, key=lambda c: np.hypot(c["x"] - r0["x"] - here[0] - hint[0],
+                                                         c["y"] - r0["y"] - here[1] - hint[1]))
         for c in cands:
             if not lo <= c["flux"] / r0["flux"] <= hi:
                 continue
@@ -475,12 +510,25 @@ class StarLock:
                        and lo <= o["flux"] / r["flux"] <= hi for o in cands):
                     hits += 1
             if hits == len(self.ref) and (len(self.ref) > 1 or self.min_stars == 1):
-                self.pos = [(r["x"] + dx, r["y"] + dy) for r in self.ref]
-                self.offset = (dx, dy)
                 self.state, self.hold_since = LOCKED, None
                 self.window, self.window_t0 = [], t
                 self.grown = []
                 self.message = "locked"
+                if self.rebase:                             # a deliberate move: hold it there
+                    moved = (dx - self.offset[0], dy - self.offset[1])
+                    for r in self.ref:
+                        r["x"] += dx
+                        r["y"] += dy
+                    if self.target is not None:
+                        self.target = (self.target[0] + dx, self.target[1] + dy)
+                    self.pos = [(r["x"], r["y"]) for r in self.ref]
+                    self.offset = (0.0, 0.0)
+                    self.rebase, self.hint = False, None
+                    self.event(f"re-locked after the slew: the field moved {moved[0]:+.1f}, "
+                               f"{moved[1]:+.1f} px; holding it there")
+                    return True
+                self.pos = [(r["x"] + dx, r["y"] + dy) for r in self.ref]
+                self.offset = (dx, dy)
                 self.event(f"found again, {dx:+.1f}, {dy:+.1f} px from the lock")
                 return True
         return False
@@ -533,12 +581,16 @@ class LockThread(threading.Thread):
     def run(self):
         while self.running:
             req = self.request
-            if req is not None and req[0] in ("release", "calibrate"):
+            if req is not None and req[0] in ("release", "calibrate", "moving", "moved"):
                 self.request = None
                 if req[0] == "release":
                     self.lock.release(*req[1:])
-                else:
+                elif req[0] == "calibrate":
                     self.lock.calibrate(time.monotonic())
+                elif req[0] == "moving":
+                    self.lock.moving()
+                else:
+                    self.lock.moved(time.monotonic(), *req[1:])
             try:
                 raw, exposure_ns = self.inbox.get(timeout=0.2)
             except queue.Empty:

@@ -2341,6 +2341,22 @@ class MainWindow(QtWidgets.QMainWindow):
                                    else "")
 
     # ---- telescope docks (telescope_gui): hidden until wanted, arrangement remembered ----
+    def field_moving(self):
+        """The Mount panel: a slew starts (goto, Center). The star lock waits."""
+        if getattr(self, "lock_dock", None) is not None and self.lock_dock.lock.state != "idle":
+            self.lock_dock.thread.ask("moving")
+
+    def field_moved(self, shift):
+        """The Mount panel: the slew has ended, the field moved by about `shift` (dx, dy) px
+        (None: not known). The markers move by it (their tracking refines it), the star lock
+        looks for its stars there and holds the new position."""
+        if shift is not None:
+            self.marks_shift = (self.marks_shift[0] + shift[0], self.marks_shift[1] + shift[1])
+            self.marks_frame = None
+            print(f"field moved by about {shift[0]:+.0f}, {shift[1]:+.0f} px (slew): markers follow")
+        if getattr(self, "lock_dock", None) is not None and self.lock_dock.lock.state != "idle":
+            self.lock_dock.thread.ask("moved", shift)
+
     def show_solving(self):
         """The status bar's busy indicator while a plate solve runs (with its time so far)."""
         label = getattr(self, "solve_status", None)

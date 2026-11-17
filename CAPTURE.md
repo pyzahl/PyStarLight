@@ -1134,6 +1134,13 @@ event. Residual field rotation is ignored. Code: `capture/guider.py` (the lock, 
   steady drift, capped), in the calibrated directions, dead band 0.3 px, at most 1.5 s per pulse;
   the next window starts after the pulse and 0.5 s settling. No pulses during a slew or a
   Center / Solve & sync job.
+- **Goto / Center while locked**: the Mount panel sees the slew. Meanwhile the lock waits
+  (purple, no measuring, no pulses); afterwards it gets the field's expected shift in pixels
+  (the mount's positions before and after, through the last plate solution's WCS), searches for
+  its star pattern at once, nearest that shift first, and **holds the new position** (re-locked
+  there, the target with it), instead of pulling back or getting lost. The star markers move by
+  the same shift and their tracking refines it. Without a plate solution there is no hint: the
+  pattern is still searched for over the whole frame.
 - **Guiding stops by itself** when the corrections make the error grow four windows in a row
   (calibration wrong, mount flipped); the lock keeps measuring and says so.
 - **Frame time stamps are never touched.** Each window is a row of `<name>_<UTC>Z_lock.csv` next

@@ -202,3 +202,40 @@ def test_live_flux_shows_the_target_drop():
     after = np.median([r for _, r in list(lock.history)[-40:]])
     assert after / before == pytest.approx(0.4, abs=0.08)
     assert [k for *_, k in lock.boxes()].count("target") == 1
+
+
+def test_a_goto_moves_the_lock_to_the_new_position():
+    """A deliberate slew (goto / Center within the field): the lock waits, finds its stars where
+    the hint says and holds them there, the target with them; no pulling back."""
+    sky = Sky()
+    lock = new_lock(sky, lost_after_s=60)
+    lock.lock(sky.frame(0), 0.0, target=TARGET[:2])
+    lock.cal, lock.guide = np.column_stack([sky.dirs["N"], sky.dirs["W"]]), True
+    t = run(lock, sky, 3, 0.0)
+    lock.moving()
+    t = run(lock, sky, 1, t)
+    assert lock.state == gd.MOVING and lock.frames_valid > 0
+    sky.err += (40.0, -25.0)                           # the slew
+    lock.moved(t, hint=(37.0, -27.0))                  # what the mount positions say
+    n = len(sky.pulses)
+    t = run(lock, sky, 2, t)
+    assert lock.state == gd.LOCKED and "re-locked" in lock.note
+    assert lock.offset == pytest.approx((0, 0), abs=0.5)
+    assert lock.target == pytest.approx((TARGET[0] + 40, TARGET[1] - 25), abs=0.5)
+    run(lock, sky, 6, t)
+    assert np.hypot(*lock.offset) < 0.5 and sum(ms for _, ms in sky.pulses[n:]) < 500   # held there
+
+
+def test_without_a_hint_the_pattern_is_found_anyway():
+    sky = Sky()
+    lock = new_lock(sky, lost_after_s=60)
+    lock.lock(sky.frame(0), 0.0)
+    before = [(r["x"], r["y"]) for r in lock.ref]
+    t = run(lock, sky, 1, 0.0)
+    lock.moving()
+    sky.err += (-30.0, 12.0)
+    lock.moved(t)
+    run(lock, sky, 2, t)
+    assert lock.state == gd.LOCKED and "re-locked" in lock.note
+    after = [(r["x"], r["y"]) for r in lock.ref]
+    assert np.allclose(after, [(x - 30, y + 12) for x, y in before], atol=0.5)

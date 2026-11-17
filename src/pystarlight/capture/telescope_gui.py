@@ -520,6 +520,7 @@ class MountDock(QtWidgets.QDockWidget):
                 if not self.jog_buttons[d].isDown():
                     self.on_jog(d, False)
             st = self.mount.status()
+            self.watch_slew(st)
             what = motion(st)
             if self.job:
                 what += f" · {self.job['kind']}: {self.job['phase']}" + (
@@ -553,6 +554,40 @@ class MountDock(QtWidgets.QDockWidget):
         label = getattr(self.main, "mount_status", None)
         if label is not None:
             label.setText(self.summary() if connected else "")
+
+    # ---- the field moves with a slew: markers and star lock follow (camera window) ----
+    def watch_slew(self, st):
+        """A slew starting: the camera window is told (the lock stops); ending: told the shift of
+        the field it expects, in pixels, from the positions before and after."""
+        slewing = bool(st["slewing"])
+        pos = (st["ra"], st["dec"]) if st["ra"] is not None else None
+        if slewing and not getattr(self, "was_slewing", False):
+            self.slew_from = getattr(self, "still_pos", None)
+            hook = getattr(self.main, "field_moving", None)
+            if hook is not None:
+                hook()
+        elif not slewing and getattr(self, "was_slewing", False):
+            hook = getattr(self.main, "field_moved", None)
+            if hook is not None:
+                hook(self.field_shift(getattr(self, "slew_from", None), pos))
+        if not slewing:
+            self.still_pos = pos
+        self.was_slewing = slewing
+
+    def field_shift(self, before, after):
+        """(dx, dy) px the stars move on the image when the mount goes from `before` to `after`
+        (ra, dec), by the last plate solution's WCS; None when either is not known."""
+        sol = getattr(self.main, "solution", None)
+        if not before or not after or not sol or not sol.get("wcs"):
+            return None
+        try:
+            from astropy.io import fits
+            from astropy.wcs import WCS
+            w = WCS(fits.getheader(sol["wcs"]))
+            (x0, x1), (y0, y1) = w.wcs_world2pix([before[0], after[0]], [before[1], after[1]], 0)
+            return float(x0 - x1), float(y0 - y1)
+        except Exception:
+            return None
 
     def summary(self):
         """One line for the camera window's status bar ('' when not connected)."""
