@@ -26,7 +26,8 @@ from .solve import load_wcs, orientation, solve_astrometry_net
 
 # astrometry.net shrinks frames wider than this before finding stars (faster, same solution)
 DOWNSAMPLE_ABOVE_PX = 2000
-NEAR_TIMEOUT_S = 30           # local solve near the expected position: then the whole sky
+NEAR_TIMEOUT_S = 120          # local solve near the expected position, then the whole sky (a Pi
+                              # busy with the camera needs 20-70 s near the right position)
 
 
 def scale_hint(header) -> Optional[float]:

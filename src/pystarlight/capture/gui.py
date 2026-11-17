@@ -1696,6 +1696,7 @@ class MainWindow(QtWidgets.QMainWindow):
                               f"peak {peak}/{c.decode.max_value}")
         self.update_frame_info(mode)
         self.update_stack_box()
+        self.show_solving()
 
         # ---- trigger ----
         busy = rec.state != "idle" or self.pending_rec is not None or self.wait_fix
@@ -2058,6 +2059,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.solve_cancel = cancel
         self.solve_log = "plate solving..."
+        self.solve_started = time.monotonic()
         self.solve_thread = threading.Thread(target=work, daemon=True)
         self.solve_thread.start()
 
@@ -2318,8 +2320,24 @@ class MainWindow(QtWidgets.QMainWindow):
                                    else "")
 
     # ---- telescope docks (telescope_gui): hidden until wanted, arrangement remembered ----
+    def show_solving(self):
+        """The status bar's busy indicator while a plate solve runs (with its time so far)."""
+        label = getattr(self, "solve_status", None)
+        if label is None:
+            return
+        busy = self.solve_thread is not None
+        text = f"plate solving {time.monotonic() - getattr(self, 'solve_started', time.monotonic()):.0f} s" \
+            if busy else ""
+        if text != label.text():
+            label.setText(text)
+            label.setStyleSheet("background: #ffb300; color: black; padding: 0 6px; border-radius: 3px;"
+                                if busy else "")
+
     def make_telescope_docks(self):
         from .telescope_gui import MountDock
+        self.solve_status = QtWidgets.QLabel()         # "plate solving 37 s": busy indicator
+        self.solve_status.setToolTip("a plate solve is running (Stack & plate solve: Cancel solve)")
+        self.statusBar().addPermanentWidget(self.solve_status)
         self.mount_status = QtWidgets.QLabel()
         self.mount_status.setToolTip("the mount (INDI); click to show the Mount panel")
         self.mount_status.mousePressEvent = lambda e: self.show_dock(self.mount_dock)
