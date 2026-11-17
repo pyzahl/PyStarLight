@@ -1118,7 +1118,8 @@ event. Residual field rotation is ignored. Code: `capture/guider.py` (the lock, 
   neighbour in the box, 1 px to half a box wide (not a hot pixel, not a noise blob), 30 px from the edges, never within 3 boxes of the target; the brightest,
   then always the one farthest from those chosen.
 - **Measured** on the frames the grabber offers whenever the lock is free (as the live stacker),
-  so it never holds up capture: centroid, flux, width and SNR in a 25 × 25 box per star.
+  so it never holds up capture: centroid, flux, width and SNR in a 25 × 25 box per star, after a
+  3 × 3 median that takes out hot pixels (the saturation check uses the raw peak).
 - **A frame counts only when certain**: every lock star with SNR >= 8, its flux within 50-200 %
   and its width within 0.6-1.6 × the values at lock, no jump of more than 5 px since its last
   good position (up to half a box while a pulse runs), and the stars moved together (each

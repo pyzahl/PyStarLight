@@ -15,6 +15,10 @@ uses [Semantic Versioning](https://semver.org/).
   pulses; held for 30 s: lost, and found again only on the same star pattern. Guiding stops by
   itself if the corrections make it worse. **Lock** is a check box, on and off by hand,
   independent of recording; one CSV row per window next to the recordings. `Mount.pulse` / `can_guide` / `guide_rate`.
+- Star lock: hot pixels (an IMX265 has hundreds, often several per box) are filtered out (3 x 3
+  median) when finding and measuring the lock stars; the stars' width is taken from the bright
+  candidates only. Before, clusters of hot pixels set the "typical width", the real stars were
+  refused as too narrow, and hot-pixel clusters were locked on (hold at once).
 - Camera plate solve: the hint is where the mount points when the Mount panel is connected (it
   was the field remembered from the last night, so Solve & sync searched the wrong part of the
   sky until the CPU limit). Hot pixels are removed from the stack before solving (with the mount

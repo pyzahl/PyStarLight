@@ -86,7 +86,7 @@ def test_hot_pixels_are_no_lock_stars():
     for x, y in rng.integers(40, 200, (12, 2)):
         img[y, x] = 9000
     lock = gd.StarLock(gd.Settings(), full_scale=65535, log=lambda m: None)
-    assert not lock.lock(img, 0.0) and "not star-shaped" in lock.message and lock.state == gd.IDLE
+    assert not lock.lock(img, 0.0) and "no lock star" in lock.message and lock.state == gd.IDLE
 
 
 def test_a_noisy_dark_frame_has_no_lock_stars():
@@ -95,6 +95,20 @@ def test_a_noisy_dark_frame_has_no_lock_stars():
     img = (128 + rng.gamma(1.2, 80, (H, W))).astype(np.float32)
     lock = gd.StarLock(gd.Settings(), full_scale=65535, log=lambda m: None)
     assert not lock.lock(img, 0.0) and lock.state == gd.IDLE
+
+
+def test_many_hot_pixels_do_not_hide_the_stars():
+    """IMX265 at 20 ms: hundreds of hot pixels, often several per box (they once made the stars
+    look 'too narrow' and clusters of hot pixels were locked on)."""
+    sky = Sky()
+    img = sky.frame(0)
+    rng = np.random.default_rng(5)
+    for x, y in rng.integers(0, (W, H), (600, 2)):
+        img[y, x] += rng.uniform(100, 2000)
+    lock = new_lock(sky)
+    assert lock.lock(img, 0.0, target=TARGET[:2])
+    stars = {(round(x), round(y)) for x, y, _ in STARS}
+    assert all((round(r["x"]), round(r["y"])) in stars for r in lock.ref), lock.ref
 
 
 def test_error_follows_the_drift_without_guiding():

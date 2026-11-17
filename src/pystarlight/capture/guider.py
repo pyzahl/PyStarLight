@@ -92,7 +92,8 @@ def measure(img, x, y, r, ap=None):
     xi, yi = int(round(x)), int(round(y))
     if xi - r < 0 or yi - r < 0 or xi + r >= w or yi + r >= h:
         return None
-    s = img[yi - r:yi + r + 1, xi - r:xi + r + 1].astype(np.float32)
+    raw = img[yi - r:yi + r + 1, xi - r:xi + r + 1].astype(np.float32)
+    s = cv2.medianBlur(raw, 3)          # hot pixels out (a sensor can have hundreds); stars stay
     edge = np.concatenate([s[0], s[-1], s[1:-1, 0], s[1:-1, -1]])
     sky = float(np.median(edge))
     noise = 1.4826 * float(np.median(np.abs(edge - sky))) or 1.0
@@ -108,7 +109,7 @@ def measure(img, x, y, r, ap=None):
     var = float((wgt.sum(1) * (ax - cy) ** 2).sum() + (wgt.sum(0) * (ax - cx) ** 2).sum()) / (2 * tot)
     fwhm = 2.3548 * np.sqrt(max(var, 0.01))
     out = {"x": xi + cx, "y": yi + cy, "fwhm": float(fwhm), "snr": float(d.max() / noise),
-           "peak": float(s.max()), "sky": sky, "noise": noise}
+           "peak": float(raw.max()), "sky": sky, "noise": noise}     # peak raw: saturation
     out["flux"] = aperture(d, cx, cy, ap if ap else max(3.0, 2.0 * fwhm))
     return out
 
@@ -134,8 +135,8 @@ def target_flux(img, x, y, r, ap):
 
 def find_stars(img, r, nsigma=6.0, limit=200):
     """Star candidates of a whole frame: local maxima of the high-passed image above nsigma x
-    the noise, measured (brightest first)."""
-    f = img.astype(np.float32)
+    the noise, measured (brightest first). Hot pixels are filtered out first (3 x 3 median)."""
+    f = cv2.medianBlur(np.ascontiguousarray(img, dtype=np.float32), 3)
     hp = f - cv2.GaussianBlur(f, (0, 0), 8)
     sample = hp[::4, ::4]
     med = float(np.median(sample))
@@ -157,7 +158,8 @@ def pick(stars, shape, s, full_scale, target=None):
     the edges and from the target; the brightest, then always the one farthest from those chosen
     (among the brighter half). Returns (chosen, notes)."""
     h, w = shape
-    fw = np.median([m["fwhm"] for m in stars]) if stars else 0
+    bright = [m["fwhm"] for m in stars if m["snr"] >= 2 * s.min_snr and s.min_fwhm <= m["fwhm"] <= s.box / 2]
+    fw = np.median(bright[:20]) if bright else 0    # the stars' width (not that of noise / hot pixels)
     good, notes = [], collections.Counter()
     for m in stars:
         if full_scale and m["peak"] >= s.max_peak * full_scale:
