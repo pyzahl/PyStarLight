@@ -286,7 +286,10 @@ def solve_local(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0,
                 log(line.strip())
 
     t0 = time.monotonic()
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    # a session of its own: cancel / timeout end solve-field and the astrometry-engine it starts
+    # (which otherwise keeps a core busy until its CPU limit)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            start_new_session=True)
     th = threading.Thread(target=reader, args=(proc,), daemon=True)
     th.start()
     try:
@@ -298,18 +301,39 @@ def solve_local(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0,
             if time.monotonic() - t0 > timeout + 30:
                 raise TimeoutError('local astrometry.net did not finish in time')
     finally:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+        _end_group(proc)
         th.join(2)
     if not os.path.exists(dest):
         raise RuntimeError('local astrometry.net could not solve the image'
                            + (f' ({tail[-1]})' if tail else ''))
     log(f'Wrote WCS solution to {dest} ({time.monotonic() - t0:.1f} s)')
     return dest
+
+
+def _end_group(proc):
+    """Terminate (then kill) a process and everything it started in its session."""
+    import signal
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (OSError, AttributeError):
+        pgid = None
+    for sig, wait in ((signal.SIGTERM, 5), (signal.SIGKILL, 2)):
+        try:
+            if pgid is not None:
+                os.killpg(pgid, sig)
+            elif proc.poll() is None:
+                proc.send_signal(sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            return
+        try:
+            proc.wait(wait)
+            if pgid is None:
+                return
+            os.killpg(pgid, 0)          # anything left in the group?
+        except subprocess.TimeoutExpired:
+            continue
+        except (ProcessLookupError, OSError):
+            return
 
 
 def load_wcs(path: str):

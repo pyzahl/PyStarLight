@@ -15,6 +15,11 @@ uses [Semantic Versioning](https://semver.org/).
   pulses; held for 30 s: lost, and found again only on the same star pattern. Guiding stops by
   itself if the corrections make it worse. **Lock** is a check box, on and off by hand,
   independent of recording; one CSV row per window next to the recordings. `Mount.pulse` / `can_guide` / `guide_rate`.
+- Offline in the field: SIMBAD and the VO catalogues (GAVO / ESA) are checked first (a TCP
+  connection within 2 s, kept for a minute); offline they are skipped at once instead of each
+  lookup waiting 20 s (the camera's solve "did not complete" for minutes after solving).
+  Cancelling a local plate solve (or its timeout) now also ends the astrometry-engine it started
+  (it kept a core busy until its CPU limit; three at once loaded the Pi to 7.8).
 - Mount panel: Solve & sync / Center waited for ever ("sync: stack") when the camera's automatic
   solve had solved the new stack first; it now takes that solution. A stack or solve step that
   takes longer than 10 min ends the job. The star lock says why it cannot guide (the Mount

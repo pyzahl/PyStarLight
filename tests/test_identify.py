@@ -172,7 +172,9 @@ def test_simbad_lookup_gives_up(monkeypatch):
     import threading
     import time
 
+    import pystarlight.wcs.catnames as cn
     import pystarlight.wcs.identify as ident
+    monkeypatch.setattr(cn, 'online', lambda url: True)        # reachable, but never answers
     never = threading.Event()
     monkeypatch.setattr(ident, '_simbad_query', lambda *a: never.wait(30))
     t0 = time.monotonic()
@@ -182,3 +184,8 @@ def test_simbad_lookup_gives_up(monkeypatch):
     never.set()
     monkeypatch.setattr(ident, '_simbad_query', lambda *a: {'main_id': 'HD 1'})
     assert ident.simbad_lookup(310.0, 45.0)['main_id'] == 'HD 1'
+    monkeypatch.setattr(cn, 'online', lambda url: False)       # offline in the field: at once
+    t0 = time.monotonic()
+    with pytest.raises(ConnectionError):
+        ident.simbad_lookup(310.0, 45.0)
+    assert time.monotonic() - t0 < 0.1

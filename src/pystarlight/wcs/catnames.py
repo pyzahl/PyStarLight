@@ -39,6 +39,31 @@ class LookupError_(RuntimeError):
     """The target could not be found (bad text, not in the catalogue, no network)."""
 
 
+ONLINE_CHECK_S = 2.0        # a connection to the service's host must open this fast
+ONLINE_KEEP_S = 60.0        # the answer is kept this long (in the field: offline all night)
+_online = {}                # host -> (checked at, reachable)
+
+
+def online(url: str) -> bool:
+    """Whether the host of `url` can be reached at all (a TCP connection within ONLINE_CHECK_S;
+    kept ONLINE_KEEP_S). Offline, every catalogue or SIMBAD query would wait for its timeout."""
+    import socket
+    import time
+    u = urllib.parse.urlsplit(url if '//' in url else f'https://{url}')
+    host, port = u.hostname, u.port or (80 if u.scheme == 'http' else 443)
+    now = time.monotonic()
+    seen = _online.get(host)
+    if seen is not None and now - seen[0] < ONLINE_KEEP_S:
+        return seen[1]
+    try:
+        socket.create_connection((host, port), timeout=ONLINE_CHECK_S).close()
+        ok = True
+    except OSError:
+        ok = False
+    _online[host] = (now, ok)
+    return ok
+
+
 def decimal_year(when=None) -> float:
     """ISO time string, datetime or None (now) -> decimal year."""
     if when is None:
@@ -52,6 +77,8 @@ def decimal_year(when=None) -> float:
 
 def tap_query(adql: str, service: str = TAP_SERVICES[0], timeout: float = TAP_TIMEOUT_S) -> list[dict]:
     """Synchronous ADQL query -> rows as dicts of strings."""
+    if not online(service):
+        raise LookupError_(f'no network: {urllib.parse.urlsplit(service).hostname} not reachable')
     data = urllib.parse.urlencode({'REQUEST': 'doQuery', 'LANG': 'ADQL', 'FORMAT': 'csv',
                                    'QUERY': adql}).encode()
     for attempt in range(3):

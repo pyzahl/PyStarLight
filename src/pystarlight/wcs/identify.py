@@ -29,6 +29,16 @@ SIMBAD_RETRY_S = 300.0      # after a failed query SIMBAD is skipped this long (
 _simbad_down_until = 0.0
 
 
+SIMBAD_URL = 'https://simbad.cds.unistra.fr/simbad/'
+
+
+def _require_simbad():
+    """ConnectionError at once when SIMBAD's host cannot be reached (no waiting per star)."""
+    from .catnames import online
+    if not online(SIMBAD_URL):
+        raise ConnectionError('no network: SIMBAD not reachable')
+
+
 def radec_text(ra: float, dec: float) -> str:
     """'hh:mm:ss.s +dd:mm:ss.s', or '' without a position."""
     if not (math.isfinite(ra) and math.isfinite(dec)):
@@ -119,6 +129,7 @@ def simbad_lookup(ra: float, dec: float, radius_arcsec: float = 10.0,
                   timeout: float = SIMBAD_TIMEOUT_S) -> Optional[dict]:
     """Nearest SIMBAD object with a V magnitude (else nearest at all) within the radius.
     Gives up after `timeout` s (TimeoutError): astroquery's network calls have no time limit."""
+    _require_simbad()
     box = {}
 
     def work():
@@ -226,6 +237,7 @@ def name_star(s: FieldStar, wcs, annotations: list, use_simbad: bool = True,
 def simbad_object(name: str, timeout: float = SIMBAD_TIMEOUT_S) -> Optional[dict]:
     """SIMBAD's object of that name: {'name', 'ra', 'dec', 'vmag', 'ids'} or None; gives up
     after `timeout` s (TimeoutError)."""
+    _require_simbad()
     box = {}
 
     def work():
