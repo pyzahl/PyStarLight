@@ -15,6 +15,11 @@ uses [Semantic Versioning](https://semver.org/).
   pulses; held for 30 s: lost, and found again only on the same star pattern. Guiding stops by
   itself if the corrections make it worse. **Lock** is a check box, on and off by hand,
   independent of recording; one CSV row per window next to the recordings. `Mount.pulse` / `can_guide` / `guide_rate`.
+- Camera plate solve: the hint is where the mount points when the Mount panel is connected (it
+  was the field remembered from the last night, so Solve & sync searched the wrong part of the
+  sky until the CPU limit). Hot pixels are removed from the stack before solving (with the mount
+  tracking they stack in; 624 on an IMX265 stack). A local solve near the hint gives up after
+  30 s and then solves the whole sky (a stale hint: 65 s instead of 187 s; a good one: 2 s).
 - CAPTURE.md: the Pi 5's compute reserve at 50 fps (recording + the lock's work: no frame lost,
   5 % of a core).
 

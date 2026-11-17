@@ -2070,8 +2070,17 @@ class MainWindow(QtWidgets.QMainWindow):
         return text
 
     def solve_hint(self):
-        """Where the field probably is: the last solution's centre (this run or the last one),
-        else the target's position (from the markers). None: search the whole sky."""
+        """Where the field probably is: where the mount points (Mount panel connected), else the
+        last solution's centre (this run or the last one), else the target's position (from the
+        markers). None: search the whole sky."""
+        dock = getattr(self, "mount_dock", None)
+        if dock is not None and dock.mount is not None and dock.client is not None and dock.client.connected:
+            try:
+                pos = dock.mount.position()
+                if pos is not None:
+                    return pos
+            except Exception:
+                pass
         if self.solution is not None:
             c = self.solution["center"]
             return c["ra"], c["dec"]

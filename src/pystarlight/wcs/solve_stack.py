@@ -26,6 +26,7 @@ from .solve import load_wcs, orientation, solve_astrometry_net
 
 # astrometry.net shrinks frames wider than this before finding stars (faster, same solution)
 DOWNSAMPLE_ABOVE_PX = 2000
+NEAR_TIMEOUT_S = 30           # local solve near the expected position: then the whole sky
 
 
 def scale_hint(header) -> Optional[float]:
@@ -96,14 +97,24 @@ def solve_stack(image: np.ndarray, header: dict, n_stars: int = 5, workdir: str 
     img = np.array(image, dtype=np.float32)
     if not np.isfinite(img).all():
         img[~np.isfinite(img)] = np.nanmedian(img)
+    # hot pixels: with the mount tracking they sit still and stack in; solve-field's downsampling
+    # makes each one a faint 'star' that spoils the patterns it matches
+    from ..stacking import remove_hot_pixels
+    img = remove_hot_pixels(img)
     shape = img.shape
     scale = scale_arcsec or scale_hint(header)
     log(f'plate-scale hint {scale:.2f}"/px' if scale else 'no plate-scale hint (blind solve)')
     dest = dest or str(Path(workdir) / 'stack.wcs.fit')
 
+    from .solve import uses_local_solver
+    local = uses_local_solver(cfg['astrometry'])
+
     def solve(near):
+        # near the expected position a local solve takes seconds when the field is there, but
+        # minutes to give up when it is not (a stale hint): give up early, then the whole sky
         return solve_astrometry_net(
             img, workdir=str(Path(workdir) / '.wcs-work'), log=log, cancel=cancel,
+            timeout=NEAR_TIMEOUT_S if (near is not None and local) else None,
             scale_arcsec=scale, scale_err_pct=float(cfg['astrometry']['scale_err_pct']),
             center=near, radius_deg=radius_deg, dest=dest, return_job=True,
             downsample=2 if shape[1] > DOWNSAMPLE_ABOVE_PX else None)
