@@ -839,6 +839,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().addWidget(self.status, 1)
         self.make_view_menu()
         self.make_telescope_docks()
+        if self.settings.value("night", False, type=bool):     # once the docks exist
+            self.night_action.setChecked(True)
         view_w = int(ctx.width * self.args.scale)
         self.resize(view_w + panel_w + 20, max(int(ctx.height * self.args.scale) + 40, 600))
         self.splitter.setSizes([view_w, panel_w])
@@ -2747,8 +2749,6 @@ class MainWindow(QtWidgets.QMainWindow):
         full.setShortcut(QtGui.QKeySequence("F11"))
         full.toggled.connect(lambda on: self.showFullScreen() if on else self.showNormal())
         self.full_action = full
-        if self.settings.value("night", False, type=bool):
-            self.night_action.setChecked(True)
 
     def set_night(self, on):
         """Night mode on / off: the app's style sheet (the GUI) and the buttons on the image; the
@@ -2756,6 +2756,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings.setValue("night", on)
         QtWidgets.QApplication.instance().setStyleSheet(NIGHT_QSS if on else "")
         self.rec_overlay.set_night(on)
+        dock = getattr(self, "mount_dock", None)
+        if dock is not None:
+            dock.set_night(on)
         self.redraw = True
         self.view.update()
 

@@ -373,14 +373,29 @@ class MountDock(QtWidgets.QDockWidget):
         return box == QtWidgets.QMessageBox.Yes
 
     TINTS = {True: "#c8e6c9", False: "#ffcdd2"}      # tracking: light green, not: light red
+    # night mode (the camera's View menu): dark tints with a border, (background, border)
+    NIGHT_TINTS = {True: ("#0c2a0c", "#2e6b2e"), False: ("#2a0606", "#7a0000"), None: (None, "#4a0000")}
+    night = False
+
+    def set_night(self, on):
+        """Night mode on / off: the jog area's tint again in the matching colours."""
+        self.night = on
+        self.set_tint(self.tracking_shown)
 
     def set_tint(self, tracking):
-        """The jog area's background: green tracking, red not tracking, plain not connected."""
+        """The jog area's background: green tracking, red not tracking, plain not connected (night
+        mode: dark green / dark red with a border, a dim red outline)."""
         self.tracking_shown = tracking
-        color = self.TINTS.get(tracking)
-        self.jog_frame.setStyleSheet(
-            f"QFrame#jog {{ background: {color}; border-radius: 6px; }}" if color else
-            "QFrame#jog { border: 1px solid palette(mid); border-radius: 6px; }")
+        if self.night:
+            bg, border = self.NIGHT_TINTS[tracking]
+            self.jog_frame.setStyleSheet(
+                f"QFrame#jog {{ {f'background: {bg};' if bg else ''} border: 1px solid {border}; "
+                f"border-radius: 6px; }}")
+        else:
+            color = self.TINTS.get(tracking)
+            self.jog_frame.setStyleSheet(
+                f"QFrame#jog {{ background: {color}; border-radius: 6px; }}" if color else
+                "QFrame#jog { border: 1px solid palette(mid); border-radius: 6px; }")
         self.jog_frame.setToolTip({True: "tracking", False: "not tracking"}.get(tracking, "not connected"))
 
     def on_home(self):

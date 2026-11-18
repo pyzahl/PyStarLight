@@ -17,7 +17,8 @@ uses [Semantic Versioning](https://semver.org/).
   independent of recording; one CSV row per window next to the recordings. `Mount.pulse` / `can_guide` / `guide_rate`.
 - Camera: **Night mode (red)** (View menu, F9, remembered): the GUI dark with dim red text and
   lines (a Qt style sheet), the image and its annotations unchanged; **Full screen** (F11) hides
-  the window manager's title bar. The buttons on the image are outlined and see-through.
+  the window manager's title bar. The buttons on the image are outlined and see-through; the
+  Mount panel's jog area is dark green / dark red with a border at night.
 - Camera 1.2.0: **Photo** (Stack & plate solve box): one frame at its own exposure (remembered;
   the live exposure comes back after it), saved as `<name>_<UTC>Z_photo.fits` next to the
   recordings with the exposure start (DATE-OBS), exposure, camera and site, and once the field is
