@@ -15,6 +15,9 @@ uses [Semantic Versioning](https://semver.org/).
   pulses; held for 30 s: lost, and found again only on the same star pattern. Guiding stops by
   itself if the corrections make it worse. **Lock** is a check box, on and off by hand,
   independent of recording; one CSV row per window next to the recordings. `Mount.pulse` / `can_guide` / `guide_rate`.
+- Camera: **Night mode (red)** (View menu, F9, remembered): the GUI dark with dim red text and
+  lines (a Qt style sheet), the image and its annotations unchanged; **Full screen** (F11) hides
+  the window manager's title bar. The buttons on the image are outlined and see-through.
 - Camera 1.2.0: **Photo** (Stack & plate solve box): one frame at its own exposure (remembered;
   the live exposure comes back after it), saved as `<name>_<UTC>Z_photo.fits` next to the
   recordings with the exposure start (DATE-OBS), exposure, camera and site, and once the field is

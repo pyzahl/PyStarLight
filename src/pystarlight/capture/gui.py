@@ -66,19 +66,63 @@ def player_command(path):
     return [str(venv), *module] if venv.exists() else None
 
 
+NIGHT_RED = "#c40000"           # night mode: the one colour (dark adaptation)
+NIGHT_DIM = "#7a0000"
+
+
+# Night mode for dark-adapted eyes: the whole app dark, text and lines in dim red (Qt style sheet,
+# switched at run time). The window manager draws the title bar: Full screen (F11) hides it.
+NIGHT_QSS = f"""
+* {{ color: {NIGHT_RED}; }}
+QWidget {{ background: #0a0000; selection-background-color: #3a0000; selection-color: #ff2020; }}
+QMainWindow, QDialog, QDockWidget, QScrollArea, QScrollArea > QWidget > QWidget {{ background: #0a0000; }}
+QGroupBox {{ border: 1px solid #3a0000; border-radius: 4px; margin-top: 14px; }}
+QGroupBox::title {{ subcontrol-origin: margin; left: 6px; padding: 0 3px; color: {NIGHT_RED}; }}
+QDockWidget::title {{ background: #1a0000; padding: 3px; }}
+QPushButton, QToolButton {{ background: #140000; border: 1px solid #5a0000; border-radius: 4px;
+                           padding: 3px 8px; }}
+QPushButton:hover, QToolButton:hover {{ background: #260000; }}
+QPushButton:pressed, QPushButton:checked {{ background: #3a0000; }}
+QPushButton:disabled, QLabel:disabled, QCheckBox:disabled {{ color: #4a0000; }}
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit {{
+    background: #120000; border: 1px solid #4a0000; border-radius: 3px; }}
+QComboBox QAbstractItemView {{ background: #120000; border: 1px solid #4a0000; }}
+QCheckBox::indicator, QRadioButton::indicator {{ width: 13px; height: 13px; border: 1px solid #7a0000;
+                                                background: #120000; }}
+QCheckBox::indicator:checked, QRadioButton::indicator:checked {{ background: #9a0000; }}
+QSlider::groove:horizontal {{ height: 4px; background: #3a0000; }}
+QSlider::handle:horizontal {{ width: 12px; margin: -6px 0; background: #8a0000; border-radius: 6px; }}
+QScrollBar {{ background: #0a0000; }}
+QScrollBar::handle {{ background: #3a0000; border-radius: 4px; }}
+QMenuBar, QMenu, QStatusBar, QToolTip {{ background: #0a0000; border: 1px solid #3a0000; }}
+QMenu::item:selected, QMenuBar::item:selected {{ background: #3a0000; }}
+QSplitter::handle {{ background: #1a0000; }}
+QAbstractScrollArea::corner, QSizeGrip, QMainWindow::separator {{ background: #0a0000; border: none; }}
+"""
+
+
+def night_color(color, night):
+    """A colour as shown: in night mode a red of the same brightness (dimmed), else itself."""
+    c = QtGui.QColor(color)
+    if not night:
+        return c
+    v = max(c.red(), c.green(), c.blue())
+    return QtGui.QColor(int(50 + 0.6 * v), 0, 0, c.alpha())
+
+
 class RecordOverlay(QtWidgets.QFrame):
-    """The Record / Stop button and the time (HH:MM:SS UTC), floating in a corner of the image so
-    they never scroll away; the side panel's Record button stays as it was (same action)."""
+    """The Record / Stop and Photo buttons and the time (HH:MM:SS UTC), floating in a corner of
+    the image so they never scroll away (the side panel's buttons stay; same actions). Outlined
+    and see-through, so they do not glare; filled a little only while active."""
 
     MARGIN = 10
 
     def __init__(self, parent, on_click, on_photo=None):
         super().__init__(parent)
         self.setObjectName("rec_overlay")
-        self.setStyleSheet("QFrame#rec_overlay { background: rgba(0, 0, 0, 150); border-radius: 8px; }"
-                           "QLabel { color: white; }")
+        self.night = False
         lay = QtWidgets.QHBoxLayout(self)
-        lay.setContentsMargins(10, 6, 6, 6)
+        lay.setContentsMargins(8, 4, 4, 4)
         lay.setSpacing(10)
         self.clock = QtWidgets.QLabel("--:--:--")
         font = QtGui.QFont("monospace")
@@ -100,26 +144,40 @@ class RecordOverlay(QtWidgets.QFrame):
             self.photo.clicked.connect(on_photo)
             lay.addWidget(self.photo)
         lay.addWidget(self.button)
-        self.style_key = None
-        self.photo_key = None
+        self.keys = {}
+        self.set_night(False)
 
-    def show_photo(self, text, style, tip):
-        if self.photo is None or (text, style) == self.photo_key:
+    def set_night(self, on):
+        self.night = on
+        self.keys = {}                              # restyle everything on the next update
+        clock = NIGHT_DIM if on else "rgba(255, 255, 255, 200)"
+        self.setStyleSheet("QFrame#rec_overlay { background: rgba(0, 0, 0, 60); border-radius: 8px; }"
+                           f"QLabel {{ color: {clock}; background: transparent; }}")
+
+    def _style(self, widget, text, color, active, tip=None):
+        """Outlined: the colour as text and border on a faint fill (stronger while active)."""
+        key = (text, color, active, self.night)
+        if self.keys.get(widget) == key:
             return
-        self.photo_key = (text, style)
-        self.photo.setText(text)
-        self.photo.setToolTip(tip)
-        self.photo.setStyleSheet(f"QPushButton {{ font-size: 15px; font-weight: bold; "
-                                 f"border-radius: 6px; padding: 4px 12px; {style} }}")
+        self.keys[widget] = key
+        c = night_color(color, self.night)
+        fill = f"rgba({c.red()}, {c.green()}, {c.blue()}, {70 if active else 15})"
+        widget.setText(text)
+        if tip:
+            widget.setToolTip(tip)
+        widget.setStyleSheet(f"QPushButton {{ font-size: 15px; font-weight: bold; border-radius: 6px; "
+                             f"padding: 4px 12px; color: {c.name()}; background: {fill}; "
+                             f"border: 2px solid {c.name()}; }}"
+                             f"QPushButton:hover {{ background: rgba({c.red()}, {c.green()}, "
+                             f"{c.blue()}, 90); }}")
 
-    def show_state(self, text, style, clock, source):
+    def show_photo(self, text, color, active, tip):
+        if self.photo is not None:
+            self._style(self.photo, text, color, active, tip)
+
+    def show_state(self, text, color, active, clock, source):
         """Button text / colour and the clock; only what changed is redrawn."""
-        key = (text, style)
-        if key != self.style_key:
-            self.style_key = key
-            self.button.setText(text)
-            self.button.setStyleSheet(f"QPushButton {{ font-size: 15px; font-weight: bold; "
-                                      f"border-radius: 6px; padding: 4px 12px; {style} }}")
+        self._style(self.button, text, color, active)
         if clock != self.clock.text():
             self.clock.setText(clock)
             self.clock.setToolTip(f"UTC from the {source}")
@@ -779,6 +837,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self.splitter)
         self.status = QtWidgets.QLabel()
         self.statusBar().addWidget(self.status, 1)
+        self.make_view_menu()
         self.make_telescope_docks()
         view_w = int(ctx.width * self.args.scale)
         self.resize(view_w + panel_w + 20, max(int(ctx.height * self.args.scale) + 40, 600))
@@ -1983,7 +2042,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if rec.state == "recording":
             self.rec_button.setText("■  Stop recording  (r)")
             self.rec_button.setStyleSheet("background: #c62828; color: white; font-weight: bold;")
-            overlay = ("■  STOP", "background: #c62828; color: white;")
+            overlay = ("■  STOP", "#ff5252", True)
             secs = (rec.last_ns - rec.first_ns) / 1e9 if rec.first_ns else 0.0
             text = (f"<b>Recording</b> {rec.frames} frames, {secs:.1f} s"
                     + (f" <b style='color:#d33'>DROPPED {rec.dropped}</b>" if rec.dropped else "")
@@ -1993,14 +2052,14 @@ class MainWindow(QtWidgets.QMainWindow):
         elif self.wait_fix:
             self.rec_button.setText("Cancel  (r)")
             self.rec_button.setStyleSheet("background: #ef6c00; color: white; font-weight: bold;")
-            overlay = ("Cancel (fix)", "background: #ef6c00; color: white;")
+            overlay = ("Cancel (fix)", "#ffa726", True)
             gps = c.gps
             text = ("<b>Waiting for a GPS fix</b> before arming: the recording's position is the "
                     f"GPS fix at its start ({gps.sats_used if gps else 0} satellites used)")
         elif self.pending_rec is not None:
             self.rec_button.setText("Cancel  (r)")
             self.rec_button.setStyleSheet("background: #ef6c00; color: white; font-weight: bold;")
-            overlay = ("Cancel (armed)", "background: #ef6c00; color: white;")
+            overlay = ("Cancel (armed)", "#ffa726", True)
             p = self.pending_rec
             if p["anchoring"]:
                 text = (f"<b>Anchoring to GPS UTC</b> (1 Hz), then {rate_str(self.selected_rate)}"
@@ -2011,14 +2070,14 @@ class MainWindow(QtWidgets.QMainWindow):
         elif rec.state == "armed":
             self.rec_button.setText("Cancel  (r)")
             self.rec_button.setStyleSheet("background: #ef6c00; color: white; font-weight: bold;")
-            overlay = ("Cancel (armed)", "background: #ef6c00; color: white;")
+            overlay = ("Cancel (armed)", "#ffa726", True)
             wait = (rec.start_ns - self.now_ns()) / 1e9
             text = (f"<b>Armed</b>: first frame at {utc_str(rec.start_ns, 0)} UTC "
                     f"(in {wait:.0f} s)")
         else:
             self.rec_button.setText("●  Record  (r)")
             self.rec_button.setStyleSheet("font-weight: bold;")
-            overlay = ("●  REC", "background: #eeeeee; color: #c62828;")
+            overlay = ("●  REC", "#ff5252", False)
             if rec.last_path:
                 self.last_saved = (f"Saved {rec.last_frames} frames: "
                                    f"{os.path.basename(rec.last_path)}"
@@ -2029,11 +2088,11 @@ class MainWindow(QtWidgets.QMainWindow):
         source = ("GPS clock" if gps is not None and gps.clock.anchored else "Pi clock")
         ms = self.photo_spin.value()
         if self.photo is not None:
-            self.rec_overlay.show_photo("Cancel photo", "background: #ef6c00; color: white;",
+            self.rec_overlay.show_photo("Cancel photo", "#ffa726", True,
                                         "waiting for the photo frame")
         else:
             exp = f"{ms / 1000:g} s" if ms >= 1000 else f"{ms:g} ms"
-            self.rec_overlay.show_photo(f"PHOTO {exp}", "background: #eeeeee; color: #1565c0;",
+            self.rec_overlay.show_photo(f"PHOTO {exp}", "#64b5f6", False,
                                         "one frame at the photo exposure, saved as FITS (exposure: "
                                         "Stack & plate solve, Photo)")
         self.rec_overlay.show_state(*overlay, utc_str(self.now_ns(), 0), source)
@@ -2675,6 +2734,30 @@ class MainWindow(QtWidgets.QMainWindow):
             label.setText(text)
             label.setStyleSheet("background: #ffb300; color: black; padding: 0 6px; border-radius: 3px;"
                                 if busy else "")
+
+    def make_view_menu(self):
+        """View: Night mode (red, F9; remembered) and Full screen (F11, hides the title bar)."""
+        menu = self.menuBar().addMenu("&View")
+        self.night_action = menu.addAction("&Night mode (red)")
+        self.night_action.setCheckable(True)
+        self.night_action.setShortcut(QtGui.QKeySequence("F9"))
+        self.night_action.toggled.connect(self.set_night)
+        full = menu.addAction("&Full screen")
+        full.setCheckable(True)
+        full.setShortcut(QtGui.QKeySequence("F11"))
+        full.toggled.connect(lambda on: self.showFullScreen() if on else self.showNormal())
+        self.full_action = full
+        if self.settings.value("night", False, type=bool):
+            self.night_action.setChecked(True)
+
+    def set_night(self, on):
+        """Night mode on / off: the app's style sheet (the GUI) and the buttons on the image; the
+        image and its annotations keep their colours."""
+        self.settings.setValue("night", on)
+        QtWidgets.QApplication.instance().setStyleSheet(NIGHT_QSS if on else "")
+        self.rec_overlay.set_night(on)
+        self.redraw = True
+        self.view.update()
 
     def make_telescope_docks(self):
         from .telescope_gui import MountDock
