@@ -21,7 +21,7 @@ uses [Semantic Versioning](https://semver.org/).
   plate-solved the WCS moved onto the photo (region and tracked drift), the centre (RA / DEC,
   OBJCTRA / OBJCTDEC), the target (OBJECT, TRGRA / TRGDEC) and the named stars (STARn: name ra
   dec x y). Not while recording; in GPS mode only up to the longest exposure the rate allows
-  (`capture/photo.py`).
+  (`capture/photo.py`). Also a **PHOTO** button next to REC on the image.
 - Camera: a **Record / Stop** button and the UTC time (HH:MM:SS, GPS clock once anchored) on the
   image, top right, so they never scroll away with the side panel; the Recording box's button
   stays (same action, same colours).

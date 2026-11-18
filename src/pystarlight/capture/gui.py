@@ -72,7 +72,7 @@ class RecordOverlay(QtWidgets.QFrame):
 
     MARGIN = 10
 
-    def __init__(self, parent, on_click):
+    def __init__(self, parent, on_click, on_photo=None):
         super().__init__(parent)
         self.setObjectName("rec_overlay")
         self.setStyleSheet("QFrame#rec_overlay { background: rgba(0, 0, 0, 150); border-radius: 8px; }"
@@ -92,8 +92,25 @@ class RecordOverlay(QtWidgets.QFrame):
         self.button.setFocusPolicy(QtCore.Qt.NoFocus)        # the keys stay with the window
         self.button.clicked.connect(on_click)
         lay.addWidget(self.clock)
+        self.photo = None
+        if on_photo is not None:                    # a single photo (Stack & plate solve: its exposure)
+            self.photo = QtWidgets.QPushButton()
+            self.photo.setMinimumSize(110, 40)
+            self.photo.setFocusPolicy(QtCore.Qt.NoFocus)
+            self.photo.clicked.connect(on_photo)
+            lay.addWidget(self.photo)
         lay.addWidget(self.button)
         self.style_key = None
+        self.photo_key = None
+
+    def show_photo(self, text, style, tip):
+        if self.photo is None or (text, style) == self.photo_key:
+            return
+        self.photo_key = (text, style)
+        self.photo.setText(text)
+        self.photo.setToolTip(tip)
+        self.photo.setStyleSheet(f"QPushButton {{ font-size: 15px; font-weight: bold; "
+                                 f"border-radius: 6px; padding: 4px 12px; {style} }}")
 
     def show_state(self, text, style, clock, source):
         """Button text / colour and the clock; only what changed is redrawn."""
@@ -721,7 +738,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings = QtCore.QSettings("PyStarLight", "camera")  # layout, target, observer, telescope
         self.restore_camera_settings()
         self.view = ImageView()
-        self.rec_overlay = RecordOverlay(self.view, self.on_record_button)
+        self.rec_overlay = RecordOverlay(self.view, self.on_record_button, self.on_photo)
         self.view.changed.connect(self.on_view_changed)
         self.view.selected.connect(self.on_roi_selected)
         self.view.hline_moved.connect(self.on_hline_moved)
@@ -2010,6 +2027,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.rec_info.setText(text)
         gps = c.gps
         source = ("GPS clock" if gps is not None and gps.clock.anchored else "Pi clock")
+        ms = self.photo_spin.value()
+        if self.photo is not None:
+            self.rec_overlay.show_photo("Cancel photo", "background: #ef6c00; color: white;",
+                                        "waiting for the photo frame")
+        else:
+            exp = f"{ms / 1000:g} s" if ms >= 1000 else f"{ms:g} ms"
+            self.rec_overlay.show_photo(f"PHOTO {exp}", "background: #eeeeee; color: #1565c0;",
+                                        "one frame at the photo exposure, saved as FITS (exposure: "
+                                        "Stack & plate solve, Photo)")
         self.rec_overlay.show_state(*overlay, utc_str(self.now_ns(), 0), source)
 
         # ---- status bar ----
