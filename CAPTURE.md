@@ -151,10 +151,11 @@ uv run pystarlight-camera --repair ~/data/*.ravf                   # finish cras
 |---|---|
 | image | fit to the window; **mouse wheel** zooms around the cursor (up to 64×, pixels as blocks past 1:1), **left drag** pans, **double-click** fits again |
 | **Camera** | exposure and gain as last used with this camera model (kept in the GUI's settings; `--exposure` / `--gain` override), exposure (log slider + ms box; the slider spans up to 2 s, typing more than 2 s in the box switches it to 0.5 .. 60 s, typing less than 1 s back; `--max-exposure` caps it, default 60 s or the camera's limit), gain, resolution, peak value; measured frame number, rate, interval (mean ± jitter, min..max over ~200 frames), exposure read back from the camera and, in free run, its frame period; **Depth** 12 / 10 / 8 bit |
-| **Display** | as in the player and `pystarlight analyze`: **Black** / **White** point (slider + box, raw values), **Auto** (zscale of the shown image, key `a`), **Full** (0 to the largest raw value: the start setting, and after a depth change unless on Auto), **per frame** (auto levels recomputed on every frame), display **gamma** (keys `d/D`), **Crosshair** (red, across the whole image through its centre, the middle left open; remembered). After a plate solve, **N / E arrows** (orange, upper right) show north and east on the image, as in `pystarlight analyze`. Display only; the recording is untouched |
+| **Display** | as in the player and `pystarlight analyze`: **Black** / **White** point (slider + box, raw values), **Auto** (zscale of the shown image, key `a`), **Full** (0 to the largest raw value: the start setting, and after a depth change unless on Auto), **per frame** (auto levels recomputed on every frame), display **gamma** (keys `d/D`), **Crosshair** (red, across the whole image through its centre, the middle left open; remembered). After a plate solve, **N / E arrows** (orange, lower right) show north and east on the image, as in `pystarlight analyze`. Display only; the recording is untouched |
 | **Sensor region (ROI)** | x / y / w / h boxes, **Select** (then drag a rectangle on the image; shown in yellow until applied), **Apply**, **Full sensor**; current region |
 | **Trigger** | **GPS trigger** checkbox (off = free run, or the `--trigger hw/sw` mode), **GPS frame rate**: pick 30 / 20 / 15 / 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1.5 / 1 / 0.5 fps or type fps or a period (`250 ms`) and press Enter, **Exposure: longest for the rate** (on by default, remembered: whenever the rate, GPS mode or the region changes, the exposure becomes the longest with which the camera still takes every pulse, by the sensor's busy model with a 3 % / 1 ms margin, e.g. IMX265 at 50 fps 18 ms, at 6 fps 161 ms; changing the exposure by hand unticks it), **Trigger delay** (ms), **y-trigger row** (VEYE, GPS mode; see below), warnings (exposure longer than the pulse period, rate too high for the camera, pulses skipped because of the delay, no fix, anchoring to GPS UTC, frames or TIM-TP pulses off the grid), missed pulses |
 | **GPS** | UTC, fix, satellites (used / tracked / in view), DOP, position, altitude, timepulse rate, **time base** (GPS UTC since when, the Pi clock's rate error in ppm, the GPS message burst's lag after the second; or what anchoring waits for), exposure start of the newest frame (marked GPS UTC or Pi clock), its trigger pulse, pulse → frame delay, rolling-shutter line time, heading if a compass is found |
+| **On the image** | top right (in full screen the black band above the image), always in view: the time **HH:MM:SS** UTC (the GPS clock once anchored, else the Pi clock; tooltip says which) and a large **REC / STOP / Cancel** button, the same as the Recording box's button (and key `r`), in the same colours |
 | **Recording** | folder, format (RAVF / SER), **Station & equipment …** (dialog, below; its summary line turns red while required data are missing), **Asteroid** with **Favorites** (tonight's events from PySyzygos, see below), start **Now** or **At UTC** (with "next min"), stop after N s and/or N frames; Record button (orange = anchoring / armed / Cancel, red = recording / Stop), frame count, elapsed time, countdown, last file saved |
 | status bar | exposure, gain, camera and display fps, lost frames, bad buffers, restarts, frame ID, trigger count / lost, sensor position and raw value under the mouse |
 
@@ -391,6 +392,19 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
   **Target**, **Verify** and the recording window (event - 30 s to event + 30 s by default,
   `[camera] record_before_s` / `record_after_s` in the config). Setting up the
   link: [PySyzygos favorites server link](#pysyzygos-favorites-server-link) below.
+
+### Photo
+
+**Photo** (in the same panel) takes one frame at its own exposure (the box next to it,
+remembered) and saves it as `<name>_<UTC>Z_photo.fits` next to the recordings; the live
+exposure comes back right after. The frame kept is the first whose exposure started after the
+camera took the photo exposure. Header: DATE-OBS (UTC exposure start), EXPTIME, camera, depth,
+gain, pixel size, focal length, region, site. Once the field is plate-solved also the solution's
+WCS, moved onto the photo (the region now against the stack's, plus the drift the markers have
+followed since), the image centre (RA / DEC, OBJCTRA / OBJCTDEC), the target (OBJECT,
+TRGRA / TRGDEC) and the named stars (`STARn = 'name ra dec x y'`, positions on the photo). Not
+while recording; in GPS mode only up to the longest exposure the rate allows (free run for a
+longer photo). Pressed again while it waits: cancelled.
 
 ## PySyzygos favorites server link
 

@@ -19,7 +19,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import favorites, localconfig, station_header
+from . import favorites, localconfig, photo, station_header
 from .cameras import VEYE_MIN_ROI
 from .decode import format_bits, format_for_bits
 from .qt import QShortcut, QtCore, QtGui, QtWidgets, Signal, Slot, event_pos
@@ -66,6 +66,55 @@ def player_command(path):
     return [str(venv), *module] if venv.exists() else None
 
 
+class RecordOverlay(QtWidgets.QFrame):
+    """The Record / Stop button and the time (HH:MM:SS UTC), floating in a corner of the image so
+    they never scroll away; the side panel's Record button stays as it was (same action)."""
+
+    MARGIN = 10
+
+    def __init__(self, parent, on_click):
+        super().__init__(parent)
+        self.setObjectName("rec_overlay")
+        self.setStyleSheet("QFrame#rec_overlay { background: rgba(0, 0, 0, 150); border-radius: 8px; }"
+                           "QLabel { color: white; }")
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(10, 6, 6, 6)
+        lay.setSpacing(10)
+        self.clock = QtWidgets.QLabel("--:--:--")
+        font = QtGui.QFont("monospace")
+        font.setStyleHint(QtGui.QFont.Monospace)
+        font.setPointSize(15)
+        font.setBold(True)
+        self.clock.setFont(font)
+        self.clock.setToolTip("UTC: the GPS clock once anchored, else the Pi clock")
+        self.button = QtWidgets.QPushButton()
+        self.button.setMinimumSize(120, 40)
+        self.button.setFocusPolicy(QtCore.Qt.NoFocus)        # the keys stay with the window
+        self.button.clicked.connect(on_click)
+        lay.addWidget(self.clock)
+        lay.addWidget(self.button)
+        self.style_key = None
+
+    def show_state(self, text, style, clock, source):
+        """Button text / colour and the clock; only what changed is redrawn."""
+        key = (text, style)
+        if key != self.style_key:
+            self.style_key = key
+            self.button.setText(text)
+            self.button.setStyleSheet(f"QPushButton {{ font-size: 15px; font-weight: bold; "
+                                      f"border-radius: 6px; padding: 4px 12px; {style} }}")
+        if clock != self.clock.text():
+            self.clock.setText(clock)
+            self.clock.setToolTip(f"UTC from the {source}")
+        self.adjustSize()
+        self.place()
+
+    def place(self):
+        """Top right of the image view (in full screen the black band above the image)."""
+        p = self.parentWidget()
+        self.move(p.width() - self.width() - self.MARGIN, self.MARGIN)
+
+
 class ImageView(QtWidgets.QWidget):
     """Shows the newest frame: fit to the window; mouse wheel zooms around the cursor, left
     drag pans, double-click fits again. In select mode a left drag draws a rectangle
@@ -106,6 +155,11 @@ class ImageView(QtWidgets.QWidget):
     def reset_view(self):
         self.zoom, self.center = 1.0, None
         self.changed.emit()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        for child in self.findChildren(RecordOverlay):
+            child.place()
 
     def _fit(self):
         w, h = self.img_size
@@ -223,9 +277,9 @@ class ImageView(QtWidgets.QWidget):
             p.drawLine(QtCore.QPointF(*a), QtCore.QPointF(*b))
 
     def paint_compass(self, p, length=34):
-        """N and E arrows in the upper-right corner (the zoom note is upper left), from the plate
-        solution (as in the analysis)."""
-        ox, oy = self.width() - 58.0, 58.0
+        """N and E arrows in the lower-right corner (top right: the Record button, top left: the
+        zoom note, bottom left: the banner), from the plate solution (as in the analysis)."""
+        ox, oy = self.width() - 58.0, self.height() - 58.0
         pen = QtGui.QPen(QtGui.QColor("#ffa726"), 2)
         pen.setCosmetic(True)
         p.setPen(pen)
@@ -667,6 +721,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings = QtCore.QSettings("PyStarLight", "camera")  # layout, target, observer, telescope
         self.restore_camera_settings()
         self.view = ImageView()
+        self.rec_overlay = RecordOverlay(self.view, self.on_record_button)
         self.view.changed.connect(self.on_view_changed)
         self.view.selected.connect(self.on_roi_selected)
         self.view.hline_moved.connect(self.on_hline_moved)
@@ -1683,7 +1738,7 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             item = c.grabber.take()
             if item is not None:
-                buf, self.frame_id, _ = item
+                buf, self.frame_id, frame_exp_ns = item
                 try:
                     if c.recorder.state == "recording":
                         if c.recorder.latest is not None:     # already unpacked by the recorder
@@ -1693,6 +1748,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 finally:
                     c.stream.push_buffer(buf)
                 self.redraw = new_frame = True
+                if self.photo is not None:
+                    self.check_photo(frame_exp_ns)
         finally:
             c.stream_lock.release()
         if new_frame and self.img is not None and not self.stack_show.isChecked():
@@ -1909,6 +1966,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if rec.state == "recording":
             self.rec_button.setText("■  Stop recording  (r)")
             self.rec_button.setStyleSheet("background: #c62828; color: white; font-weight: bold;")
+            overlay = ("■  STOP", "background: #c62828; color: white;")
             secs = (rec.last_ns - rec.first_ns) / 1e9 if rec.first_ns else 0.0
             text = (f"<b>Recording</b> {rec.frames} frames, {secs:.1f} s"
                     + (f" <b style='color:#d33'>DROPPED {rec.dropped}</b>" if rec.dropped else "")
@@ -1918,12 +1976,14 @@ class MainWindow(QtWidgets.QMainWindow):
         elif self.wait_fix:
             self.rec_button.setText("Cancel  (r)")
             self.rec_button.setStyleSheet("background: #ef6c00; color: white; font-weight: bold;")
+            overlay = ("Cancel (fix)", "background: #ef6c00; color: white;")
             gps = c.gps
             text = ("<b>Waiting for a GPS fix</b> before arming: the recording's position is the "
                     f"GPS fix at its start ({gps.sats_used if gps else 0} satellites used)")
         elif self.pending_rec is not None:
             self.rec_button.setText("Cancel  (r)")
             self.rec_button.setStyleSheet("background: #ef6c00; color: white; font-weight: bold;")
+            overlay = ("Cancel (armed)", "background: #ef6c00; color: white;")
             p = self.pending_rec
             if p["anchoring"]:
                 text = (f"<b>Anchoring to GPS UTC</b> (1 Hz), then {rate_str(self.selected_rate)}"
@@ -1934,18 +1994,23 @@ class MainWindow(QtWidgets.QMainWindow):
         elif rec.state == "armed":
             self.rec_button.setText("Cancel  (r)")
             self.rec_button.setStyleSheet("background: #ef6c00; color: white; font-weight: bold;")
+            overlay = ("Cancel (armed)", "background: #ef6c00; color: white;")
             wait = (rec.start_ns - self.now_ns()) / 1e9
             text = (f"<b>Armed</b>: first frame at {utc_str(rec.start_ns, 0)} UTC "
                     f"(in {wait:.0f} s)")
         else:
             self.rec_button.setText("●  Record  (r)")
             self.rec_button.setStyleSheet("font-weight: bold;")
+            overlay = ("●  REC", "background: #eeeeee; color: #c62828;")
             if rec.last_path:
                 self.last_saved = (f"Saved {rec.last_frames} frames: "
                                    f"{os.path.basename(rec.last_path)}"
                                    + (f" ({rec.last_dropped} dropped!)" if rec.last_dropped else ""))
             text = self.last_saved
         self.rec_info.setText(text)
+        gps = c.gps
+        source = ("GPS clock" if gps is not None and gps.clock.anchored else "Pi clock")
+        self.rec_overlay.show_state(*overlay, utc_str(self.now_ns(), 0), source)
 
         # ---- status bar ----
         g = c.grabber
@@ -2080,9 +2145,100 @@ class MainWindow(QtWidgets.QMainWindow):
         self.live_button.clicked.connect(self.continue_live)
         self.live_button.setVisible(False)
         g.addWidget(self.live_button, 8, 0, 1, 3)
-        g.addWidget(self.stack_info, 9, 0, 1, 3)
+        self.photo = None                   # a photo being taken: its exposure, the old one
+        self.photo_msg = ""
+        self.photo_spin = QtWidgets.QDoubleSpinBox(decimals=3, suffix=" ms", keyboardTracking=False)
+        self.photo_spin.setRange(self.c.exp_min / 1000, self.c.exp_max / 1000)
+        self.photo_spin.setValue(self.settings.value("photo_exposure_ms", 1000.0, type=float))
+        self.photo_spin.setToolTip("exposure of a single photo (the live exposure comes back after it)")
+        self.photo_spin.valueChanged.connect(lambda ms: self.settings.setValue("photo_exposure_ms", ms))
+        self.photo_button = QtWidgets.QPushButton("Photo")
+        self.photo_button.setToolTip("one frame at the photo exposure, saved as FITS next to the "
+                                     "recordings, with the plate solution's WCS, centre, target "
+                                     "and named stars when the field is solved")
+        self.photo_button.clicked.connect(self.on_photo)
+        g.addWidget(QtWidgets.QLabel("Photo"), 9, 0)
+        g.addWidget(self.photo_spin, 9, 1)
+        g.addWidget(self.photo_button, 9, 2)
+        g.addWidget(self.stack_info, 10, 0, 1, 3)
         self.on_focal(self.c.focal_mm)
         return box
+
+    # ---- single photo ----
+    def on_photo(self):
+        """Photo button: the photo exposure, the first frame fully exposed with it is kept, the
+        live exposure back; pressed again while waiting: cancelled."""
+        c = self.c
+        if self.photo is not None:
+            self.end_photo("photo cancelled")
+            return
+        if c.recorder.state != "idle" or self.pending_rec is not None:
+            self.photo_msg = "no photo while recording (it would change the recording's exposure)"
+            return
+        us = self.photo_spin.value() * 1000
+        if self.mode() == "gps":
+            longest = max_exposure_us(float(self.gps_rate()), c.trigger_delay_ns(),
+                                      c.timing if c.is_veye else None)
+            if longest is not None and us > longest:
+                self.photo_msg = (f"{us / 1000:.0f} ms is longer than GPS mode at "
+                                  f"{rate_str(self.gps_rate())} allows ({longest / 1000:.0f} ms): "
+                                  "free run for a long photo")
+                return
+        self.photo = {"us": us, "old": self.target["exposure"], "applied": None,
+                      "since": time.monotonic()}
+        self.photo_msg = f"photo: {us / 1000:g} ms ..."
+        self.photo_button.setText("Cancel photo")
+        self.set_exposure(us)
+
+    def check_photo(self, exp_ns):
+        """A new frame while a photo is wanted: the first one whose exposure started after the
+        camera took the photo exposure is the photo."""
+        p, c = self.photo, self.c
+        if p["applied"] is None:
+            if not c.controller.busy and abs(c.controller.exposure_us - p["us"]) <= max(5, 0.02 * p["us"]):
+                p["applied"] = self.now_ns()
+            return
+        if exp_ns is None or exp_ns < p["applied"] + 50_000_000 or self.img is None:
+            return
+        img, exposure_s = self.img.copy(), c.controller.exposure_us / 1e6
+        self.end_photo("")
+        threading.Thread(target=self.save_photo, args=(img, exp_ns, exposure_s), daemon=True).start()
+
+    def end_photo(self, msg):
+        p, self.photo = self.photo, None
+        if p is not None:
+            self.set_exposure(p["old"])
+        self.photo_button.setText("Photo")
+        if msg:
+            self.photo_msg = msg
+
+    def save_photo(self, img, exp_ns, exposure_s):
+        """FITS with the camera's header values and, once solved, the WCS moved onto this frame."""
+        c = self.c
+        try:
+            info = dict(c.stacker.header_info())
+            info.update(width=img.shape[1], height=img.shape[0])
+            rx, ry = c.region[:2]
+            wcs, stars = [], []
+            if self.solution is not None and self.solution.get("wcs"):
+                dx, dy = self.marks_shift
+                shift = (self.marks_roi[0] - rx + dx, self.marks_roi[1] - ry + dy)
+                wcs = photo.wcs_cards(self.solution["wcs"], shift)
+                for m in self.marks:
+                    if m.get("ra") is not None:
+                        stars.append((m.get("name") or "?", m["ra"], m["dec"],
+                                      m["x"] - rx + dx, m["y"] - ry + dy))
+            name = self.target_name()
+            target = ((name, *self.target_radec) if self.target_radec else (name, None, None)) \
+                if name else None
+            cards = photo.header(info, exp_ns, exposure_s, wcs, stars, target, CAMERA_VERSION)
+            path = photo.save(c.stacker.out_dir, c.stacker.name, img, cards, exp_ns)
+            self.photo_msg = (f"photo saved: {os.path.basename(path)}"
+                              + (" (with WCS)" if wcs else " (no plate solution: no WCS)"))
+            print(self.photo_msg)
+        except Exception as e:
+            self.photo_msg = f"photo not saved: {e}"
+            print(self.photo_msg)
 
     def on_focal(self, mm):
         c = self.c
@@ -2403,6 +2559,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.solve_button.setEnabled(bool(st.path) or self.solve_thread is not None)
         for w in (self.stack_frames, self.stack_align, self.focal_spin):
             w.setEnabled(st.state != "stacking")
+        p = self.photo
+        if p is not None and time.monotonic() - p["since"] > 4 * p["us"] / 1e6 + 10:
+            self.end_photo("photo: no frame came at that exposure")
+        if self.photo_msg:
+            text += ("\n" if text else "") + self.photo_msg
         if self.solve_log:
             text += "\n" + self.solve_log
         sol = self.solution

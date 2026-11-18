@@ -26,7 +26,7 @@ programs behind it:
   - magnitude histograms;
   - an `event.json` with every detail of the event, which can go straight to PySyzygos'
     observation report.
-- **`pystarlight camera`, capture on a Raspberry Pi 5 (experimental)** (camera 1.1.0). It
+- **`pystarlight camera`, capture on a Raspberry Pi 5 (experimental)** (camera 1.2.0). It
   records frames GPS-triggered and stamped in UTC (VEYE MIPI and Aravis cameras, u-blox GPS)
   to RAVF or SER; ZWO ASI cameras and any `/dev/video` device (e.g. an analog grabber)
   free-run with the computer's time stamps. It has a live stack and plate solve, a mount

@@ -639,3 +639,37 @@ def test_veye_reboot_waits_for_the_camera(monkeypatch):
     cls = next(c for c in vars(v).values() if isinstance(c, type) and hasattr(c, "reboot"))
     assert cls.reboot(cam, timeout=5) is True
     assert written == [(v.REG_SYSTEM_REBOOT, 1)] and cam.fps_reg is None
+
+
+def test_photo_fits_with_the_plate_solution(tmp_path):
+    """capture/photo.py: header cards (time, exposure, camera, target, named stars) and the
+    solution's WCS moved onto the photo (another region and tracked drift); astropy reads it."""
+    pytest.importorskip("astropy")
+    from astropy.io import fits
+    from astropy.wcs import WCS
+
+    from pystarlight.capture import photo
+    w = WCS(naxis=2)
+    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    w.wcs.crval, w.wcs.crpix = (8.69, 4.23), (1024.5, 772.5)
+    w.wcs.cd = [[0, 1.78 / 3600], [1.78 / 3600, 0]]
+    stack_wcs = tmp_path / "stack.wcs.fit"
+    w.to_fits().writeto(stack_wcs)
+    shift = (-100.0 + 3.0, -50.0 - 2.0)          # photo region 100, 50 px further, drift +3, -2 px
+    cards = photo.wcs_cards(str(stack_wcs), shift)
+    info = {"instrument": "VEYE MV-MIPI-IMX265M", "depth": 12, "gain_db": 24.0, "roi_x": 100,
+            "roi_y": 50, "pixel_um": 3.45, "focal_mm": 400.0, "width": 800, "height": 600}
+    ns = 1_794_888_000_123_000_000
+    hdr_cards = photo.header(info, ns, 1.0, cards, [("UCAC4 471-000881", 8.70, 4.19, 120.0, 340.5)],
+                             ("TYC 1-2-3", 8.75, 4.2), "1.1.0")
+    img = np.arange(600 * 800, dtype=np.uint16).reshape(600, 800)
+    path = photo.save(str(tmp_path), "cam", img, hdr_cards, ns)
+    assert path.endswith("_photo.fits")
+    with fits.open(path) as f:
+        h, data = f[0].header, f[0].data
+    assert data.shape == (600, 800) and data[1, 2] == 802
+    assert h["DATE-OBS"].startswith("2026-11-17T") and h["EXPTIME"] == 1.0 and h["OBJECT"] == "TYC 1-2-3"
+    assert h["STAR1"].startswith("UCAC4 471-000881 8.700000 +4.190000 120.0 340.5")
+    sky = WCS(h).all_pix2world([[1023.5 - 97, 771.5 - 52]], 0)[0]      # the stack's reference pixel
+    assert sky == pytest.approx((8.69, 4.23), abs=1e-6)
+    assert h["RA"] == pytest.approx(WCS(h).all_pix2world([[399.5, 299.5]], 0)[0][0], abs=1e-6)
