@@ -32,7 +32,10 @@ uses [Semantic Versioning](https://semver.org/).
 - `scripts/netswitch.py`: home WiFi or the Pi's own hotspot by a toggle switch on GPIO26 / pin 37
   (LED on GPIO20 / pin 38), or by hand; installs itself as a systemd service. `hotspot` refuses at
   once when a system `dnsmasq` service blocks the hotspot's own (it would fail after 30 s with
-  "Address already in use") and names the fix. CAPTURE.md "Remote screen in the field": VNC
+  "Address already in use") and names the fix. `cert`: one VNC certificate naming the host, the
+  hotspot address and the Pi's addresses, so viewers connect without a name warning on either
+  network. `home` brings up the known home WiFi by name (in range; highest priority, then the one
+  used last): `nmcli device connect wlan0` started the hotspot again a second after taking it down. CAPTURE.md "Remote screen in the field": VNC
   (wayvnc, Remmina), autologin under SDDM, a fixed screen size without a display.
 - Camera: Focuser window: a number typed into Go to stays until it is used (the half-second
   refresh put the focuser's position back between pressing and releasing Go to); Enter goes

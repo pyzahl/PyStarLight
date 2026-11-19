@@ -11,10 +11,17 @@ switch on a GPIO pin (no display needed), or by hand.
     sudo python3 scripts/netswitch.py hotspot | home             by hand (the switch wins again
                                                                  when it is flipped)
     python3 scripts/netswitch.py pin                             the switch as read now
+    sudo python3 scripts/netswitch.py cert [--ip A.B.C.D]        VNC certificate for both networks
     python3 scripts/netswitch.py status
 
 With the hotspot up, join its network (default PyStarLight) and point a VNC viewer (Remmina,
 TigerVNC, bVNC) at 10.42.0.1. No switch wired: the pin reads open (pull-up), home WiFi.
+
+wayvnc's own certificate names only the host (raspberrypi, raspberrypi.local): a viewer
+connecting by address warns. `cert` makes one for every way in: the host names, the hotspot
+address and the Pi's addresses now (plus --ip, e.g. a reserved home address), installs it for
+wayvnc (the old one kept as .bak), restarts wayvnc, and leaves the public certificate in
+~/wayvnc-cert.pem for the viewers (their "CA certificate"; copy it again after each `cert`).
 
 NEW CODE (not part of the package). Standard library, NetworkManager's nmcli, and libgpiod's
 Python module for the switch (python3-libgpiod, v1 on Raspberry Pi OS 12, v2 later; the header's
@@ -46,6 +53,21 @@ def nmcli(*args, run=subprocess.run):
     if r.returncode != 0:
         raise RuntimeError((r.stderr or r.stdout).strip() or f"nmcli {' '.join(args)} failed")
     return r.stdout
+
+
+def fields(line):
+    """nmcli -t columns: split at ':' but not at an escaped one ('\\:')."""
+    out, cur, esc = [], "", False
+    for ch in line:
+        if esc:
+            cur, esc = cur + ch, False
+        elif ch == "\\":
+            esc = True
+        elif ch == ":":
+            out, cur = out + [cur], ""
+        else:
+            cur += ch
+    return out + [cur]
 
 
 def active(run=subprocess.run):
@@ -82,6 +104,25 @@ def dns_blocker(run=subprocess.run):
     return ""
 
 
+def home_networks(run=subprocess.run):
+    """The saved WiFi networks to come home to: [(profile, ssid)], highest autoconnect priority
+    first, then the one used last; not the hotspot, only those that may connect by themselves."""
+    rows = []
+    for line in nmcli("-t", "-f", "NAME,TYPE,AUTOCONNECT,AUTOCONNECT-PRIORITY,TIMESTAMP", "connection",
+                      "show", run=run).splitlines():
+        f = fields(line)
+        if len(f) == 5 and f[1] == "802-11-wireless" and f[2] == "yes" and f[0] != PROFILE:
+            ssid = nmcli("-g", "802-11-wireless.ssid", "connection", "show", f[0], run=run).strip()
+            rows.append((-int(f[3] or 0), -int(f[4] or 0), f[0], ssid))
+    return [(name, ssid) for _, _, name, ssid in sorted(rows)]
+
+
+def in_range(run=subprocess.run):
+    """SSIDs the WiFi sees now (a fresh scan)."""
+    return {fields(line)[0] for line in nmcli("-t", "-f", "SSID", "device", "wifi", "list", "--rescan", "yes",
+                                               run=run).splitlines() if line}
+
+
 def set_mode(mode, run=subprocess.run, log=print):
     """'hotspot': bring the hotspot up; 'home': take it down, NetworkManager joins the known WiFi."""
     up = PROFILE in active(run)
@@ -94,10 +135,21 @@ def set_mode(mode, run=subprocess.run, log=print):
     elif mode == "home" and up:
         log("home WiFi: hotspot down")
         nmcli("connection", "down", PROFILE, run=run)
-        try:                                        # don't wait for the next automatic scan
-            nmcli("device", "connect", "wlan0", run=run)
-        except RuntimeError as e:
-            log(f"no known WiFi joined yet ({e}); NetworkManager keeps trying")
+        # a known network by name: 'nmcli device connect wlan0' took the hotspot again (it is
+        # always "available"); none in range: NetworkManager's own autoconnect, never the hotspot
+        try:
+            seen = in_range(run)
+        except RuntimeError:
+            seen = set()
+        for name, ssid in home_networks(run):
+            if ssid in seen:
+                try:
+                    nmcli("connection", "up", name, run=run)
+                    log(f"home WiFi: {name}")
+                    return
+                except RuntimeError as e:
+                    log(f"{name}: {e}")
+        log("no known WiFi in range yet; NetworkManager keeps looking")
 
 
 def header_chip():
@@ -195,6 +247,53 @@ def watch(pin=SWITCH_PIN, led_pin=LED_PIN):
             pass
 
 
+WAYVNC_DIR = "/etc/wayvnc"
+
+
+def cert_names(host, addresses):
+    """subjectAltName entries: the host, host.local, localhost, the hotspot address and the others."""
+    ips = []
+    for a in [HOTSPOT_ADDRESS, *addresses]:
+        if a and ":" not in a and a not in ips:               # IPv4 only: what viewers are given
+            ips.append(a)
+    return [f"DNS:{host}", f"DNS:{host}.local", "DNS:localhost"] + [f"IP:{a}" for a in ips]
+
+
+def cert_command(host, names, key, crt, days=3650):
+    """openssl: a self-signed certificate (its own CA, as wayvnc's) on an EC P-384 key."""
+    return ["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:secp384r1",
+            "-nodes", "-days", str(days), "-subj", f"/CN={host}", "-keyout", key, "-out", crt,
+            "-addext", "subjectAltName=" + ",".join(names),
+            "-addext", "basicConstraints=critical,CA:TRUE"]
+
+
+def make_cert(extra_ips=()):
+    import socket
+    import tempfile
+    host = socket.gethostname()
+    here = subprocess.run(["hostname", "-I"], capture_output=True, text=True).stdout.split()
+    names = cert_names(host, [*here, *extra_ips])
+    with tempfile.TemporaryDirectory() as tmp:
+        key, crt = os.path.join(tmp, "tls_key.pem"), os.path.join(tmp, "tls_cert.pem")
+        subprocess.run(cert_command(host, names, key, crt), check=True, capture_output=True)
+        for name, src in (("tls_key.pem", key), ("tls_cert.pem", crt)):
+            dst = os.path.join(WAYVNC_DIR, name)
+            if os.path.exists(dst):
+                shutil.copy2(dst, dst + ".bak")
+            shutil.copyfile(src, dst)
+            shutil.chown(dst, "root", "vnc")
+            os.chmod(dst, 0o640)
+        user = os.environ.get("SUDO_USER") or "root"
+        public = os.path.join(os.path.expanduser(f"~{user}"), "wayvnc-cert.pem")
+        shutil.copyfile(crt, public)
+        shutil.chown(public, user, user)
+        os.chmod(public, 0o644)
+    subprocess.run(["systemctl", "restart", "wayvnc"], check=False)
+    print("VNC certificate for " + ", ".join(n.split(":", 1)[1] for n in names))
+    print(f"wayvnc restarted (VNC sessions reconnect). For the viewers: {public}\n"
+          f"  (Remmina / TigerVNC: 'CA certificate'; the old ones are in {WAYVNC_DIR}/*.bak)")
+
+
 def unit(script, python=sys.executable):
     return f"""[Unit]
 Description=PyStarLight network switch (GPIO{SWITCH_PIN}: home WiFi / hotspot)
@@ -241,6 +340,8 @@ def main(argv=None):
     w.add_argument("--led", type=int, default=LED_PIN, help="-1: no LED")
     for name in ("hotspot", "home", "install", "status", "pin"):
         sub.add_parser(name)
+    c = sub.add_parser("cert", help="a VNC certificate for the host names, the hotspot and the addresses")
+    c.add_argument("--ip", action="append", default=[], help="another address to name (repeatable)")
     a = ap.parse_args(argv)
     if a.cmd == "setup":
         setup(a.ssid, a.password, a.band)
@@ -253,6 +354,8 @@ def main(argv=None):
             raise SystemExit(f"{a.cmd}: {e}") from None
     elif a.cmd == "install":
         install()
+    elif a.cmd == "cert":
+        make_cert(a.ip)
     elif a.cmd == "pin":
         closed = Pins(SWITCH_PIN, None).closed()
         print(f"GPIO{SWITCH_PIN}: " + ("closed (hotspot)" if closed else "open (home WiFi)"))

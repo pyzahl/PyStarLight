@@ -368,6 +368,13 @@ runs too), so it is as quick.
   does not need that service (NetworkManager uses `dnsmasq-base`): `sudo systemctl disable --now
   dnsmasq`. `netswitch.py hotspot` checks for it and says so instead of trying.
 
+  **One VNC certificate for both networks:** wayvnc's own names only `raspberrypi` /
+  `raspberrypi.local`, so a viewer given an address warns. `sudo python3 scripts/netswitch.py
+  cert` makes one naming the host, 10.42.0.1 and the Pi's current addresses (`--ip` for more, e.g.
+  the home address reserved in the router), installs it (old as `.bak`), restarts wayvnc and
+  leaves `~/wayvnc-cert.pem`: give that to the viewers as their CA certificate (again after each
+  `cert`).
+
   On the hotspot, join **PyStarLight** and connect the VNC viewer to **10.42.0.1** (no internet
   through it; the Pi is off the home network meanwhile). `setup --band a`: 5 GHz, faster, if the
   tablet has it. The pins are read with libgpiod (the header is `gpiochip15`, `pinctrl-rp1`, on
