@@ -279,7 +279,7 @@ def test_camera_window_docks_hidden_toggled_remembered(monkeypatch, tmp_path):
             setattr(w, name, getattr(gui.MainWindow, name).__get__(w))
         w.make_telescope_docks()
         w.mount_dock.timer.stop()
-        w.focuser_dock.timer.stop()
+        w.focuser_window.timer.stop()
         return w
 
     w = window()

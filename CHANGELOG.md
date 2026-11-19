@@ -7,6 +7,19 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Camera 1.4.0: the Focuser is a **window of its own** (menu INDI Telescope Controls, Shift+F;
+  closed when done, place and size remembered; `capture/focuser_gui.py`) instead of a panel, and
+  has a **focus curve** (`capture/focus.py`): a star (Centre star: the brightest unsaturated one
+  near the centre; or Pick star and click one) measured on the live frames, its half-flux
+  diameter (HFD, still meaningful when the star is a ring far from focus; FWHM shown too)
+  against the focuser position, each position once the focuser has stood still for 1 s; HFD²
+  fitted as a parabola, **Go to best** goes to its lowest point. Only the star's own connected
+  light counts (a neighbour's wing stays out); SATURATED warns. Closing the window stops it.
+  The plot is dim red in night mode.
+- Camera: the mount connects before the focuser (a focuser driver that cannot connect no longer
+  holds it up); the Focuser window says why a focuser is missing, and names `indi_asi_focuser`
+  when a ZWO EAF is on USB with another driver picked. A focuser's state shows Alert only from
+  the property it is moved by (the EAF keeps an unused one in Alert).
 - Camera 1.3.0: **Focuser panel** (menu INDI Telescope Controls, Shift+F; `capture/focuser.py`) on the Mount
   panel's INDI connection, the focuser driver from INDI settings (e.g. `indi_asi_focuser` for a
   ZWO EAF, package `indi-asi`): position (and temperature), steps in / out (the step picked, or

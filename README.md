@@ -26,11 +26,11 @@ programs behind it:
   - magnitude histograms;
   - an `event.json` with every detail of the event, which can go straight to PySyzygos'
     observation report.
-- **`pystarlight camera`, capture on a Raspberry Pi 5 (experimental)** (camera 1.3.0). It
+- **`pystarlight camera`, capture on a Raspberry Pi 5 (experimental)** (camera 1.4.0). It
   records frames GPS-triggered and stamped in UTC (VEYE MIPI and Aravis cameras, u-blox GPS)
   to RAVF or SER; ZWO ASI cameras and any `/dev/video` device (e.g. an analog grabber)
   free-run with the computer's time stamps. It has a live stack and plate solve, a mount
-  panel (INDI: goto, solve & sync, centring), a focuser panel (e.g. ZWO EAF) and a star lock that holds reference stars by
+  panel (INDI: goto, solve & sync, centring), a focuser window (e.g. ZWO EAF) with a live focus curve and a star lock that holds reference stars by
   guide pulses and plots the target's flux live. Every recording carries the station and
   equipment data, the GPS position and (RAVF) the target. Tonight's events can be loaded from a
   [PySyzygos](https://github.com/pyzahl/PySyzygos) favorites server: target star, asteroid
@@ -258,7 +258,7 @@ extras shown); `pystarlight --help` lists the tools, `pystarlight <tool> --help`
 |---|---|---|
 | `pystarlight analyze FILE` | the analysis: mark target / reference / check stars (or Auto ap, `--auto`), plate-solve, photometry, event timing, `event.json`, export for PyOTE (see [Getting started](#getting-started)) | `uv sync --extra all`<br>`uv run pystarlight analyze FILE` |
 | `pystarlight player FILE` | play a recording with its time: UTC and GPS status per frame, dropped / irregular frames, stack & plate-solve a frame range | `uv sync --extra all --extra camera`<br>`uv run pystarlight player FILE` |
-| `pystarlight camera` | capture on the Raspberry Pi 5: live view, GPS-timed RAVF / SER recording, live stack + plate solve, mount and focuser panels (INDI) | `uv sync --extra all --extra camera --extra aravis`<br>`uv run pystarlight camera` |
+| `pystarlight camera` | capture on the Raspberry Pi 5: live view, GPS-timed RAVF / SER recording, live stack + plate solve, mount panel and focuser window with focus curve (INDI) | `uv sync --extra all --extra camera --extra aravis`<br>`uv run pystarlight camera` |
 | `pystarlight config` | the private config: `init`, `path`, `show`, `sites` | `uv run pystarlight config path` |
 
 `FILE` is any supported recording (`.ravf .ser .adv .aav .avi .mov` or a FITS folder).

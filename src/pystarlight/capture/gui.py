@@ -218,6 +218,8 @@ class ImageView(QtWidgets.QWidget):
         self.band = None            # rectangle being dragged (image pixels)
         self.marks = []             # [(x0, y0, x1, y1, QColor)] to draw (image pixels)
         self.lock_boxes = []        # the same, of the star lock (its stars and the target)
+        self.focus_boxes = []       # the same, of the Focuser window's star
+        self.pick_callback = None   # set: the next click on the image goes to it as (x, y)
         self.crosshair = False      # full-size crosshair through the image centre, open middle
         self.compass = None         # [(label, ux, uy)]: north / east as unit vectors on the image
         self.hline = None           # (row, QColor): a dashed line across the image
@@ -284,7 +286,7 @@ class ImageView(QtWidgets.QWidget):
             p.end()
             return
         p.drawImage(QtCore.QPointF(self.map[0], self.map[1]), self.qimg)
-        rects = list(self.marks) + list(self.lock_boxes)
+        rects = list(self.marks) + list(self.lock_boxes) + list(self.focus_boxes)
         if self.band is not None:
             rects.append((*self.band, QtGui.QColor("#00e5ff")))
         for x0, y0, x1, y1, color in rects:
@@ -407,6 +409,11 @@ class ImageView(QtWidgets.QWidget):
     def mousePressEvent(self, e):
         if self.map is None or e.button() != QtCore.Qt.LeftButton:
             return
+        if self.pick_callback is not None:            # one click: a star picked
+            callback, self.pick_callback = self.pick_callback, None
+            self.unsetCursor()
+            callback(*self.to_image(event_pos(e)))
+            return
         if self._near_hline(event_pos(e)):
             self.drag = ("hline", self.hline[0])
         elif self.select_mode:
@@ -421,7 +428,8 @@ class ImageView(QtWidgets.QWidget):
         self.cursor_img = self.to_image(event_pos(e))
         if self.drag is None:
             near = self._near_hline(event_pos(e))
-            self.setCursor(QtCore.Qt.SizeVerCursor if near else QtCore.Qt.ArrowCursor)
+            self.setCursor(QtCore.Qt.CrossCursor if self.pick_callback is not None else
+                           QtCore.Qt.SizeVerCursor if near else QtCore.Qt.ArrowCursor)
             return
         if self.drag[0] == "hline":
             self.drag = ("hline", int(min(max(self.cursor_img[1], 0), self.img_size[1] - 1)))
@@ -2759,11 +2767,15 @@ class MainWindow(QtWidgets.QMainWindow):
         dock = getattr(self, "mount_dock", None)
         if dock is not None:
             dock.set_night(on)
+        window = getattr(self, "focuser_window", None)
+        if window is not None:
+            window.set_night(on)
         self.redraw = True
         self.view.update()
 
     def make_telescope_docks(self):
-        from .telescope_gui import FocuserDock, MountDock
+        from .focuser_gui import FocuserWindow
+        from .telescope_gui import MountDock
         self.solve_status = QtWidgets.QLabel()         # "plate solving 37 s": busy indicator
         self.solve_status.setToolTip("a plate solve is running (Stack & plate solve: Cancel solve)")
         self.statusBar().addPermanentWidget(self.solve_status)
@@ -2779,13 +2791,10 @@ class MainWindow(QtWidgets.QMainWindow):
         act.setText("Mount &panel")
         act.setShortcut(QtGui.QKeySequence("Shift+M"))
         menu.addAction(act)
-        self.focuser_dock = FocuserDock(self)         # on the Mount panel's INDI connection
-        self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.focuser_dock)
-        self.focuser_dock.hide()
-        act = self.focuser_dock.toggleViewAction()
-        act.setText("&Focuser panel")
+        self.focuser_window = FocuserWindow(self)     # a window of its own, on the same connection
+        act = menu.addAction("&Focuser window")
         act.setShortcut(QtGui.QKeySequence("Shift+F"))
-        menu.addAction(act)
+        self.focuser_window.bind_action(act)
         menu.addAction("INDI &settings…", self.mount_dock.show_settings)
         self.lock_dock = None
         if getattr(self.c, "locker", None) is not None:   # star lock (lock_gui.py, guider.py)
@@ -2809,7 +2818,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.solve_cancel is not None:
             self.solve_cancel.set()
         self.settings.setValue("dock_state", self.saveState())
-        self.focuser_dock.shutdown()
+        self.focuser_window.shutdown()
+        self.focuser_window.close()
         self.mount_dock.shutdown()
         if self.lock_dock is not None:
             self.lock_dock.shutdown()

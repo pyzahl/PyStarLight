@@ -88,7 +88,9 @@ class Focuser:
         return any(self.client.state(self.device, n) == "Busy" for n in (ABS, REL, TIMER))
 
     def alert(self):
-        return any(self.client.state(self.device, n) == "Alert" for n in (ABS, REL, TIMER))
+        """The property it is moved by is in Alert (the EAF keeps an unused one in Alert)."""
+        main = next((n for n in (ABS, REL, TIMER) if self._has(n)), None)
+        return main is not None and self.client.state(self.device, main) == "Alert"
 
     def _direction(self, outward):
         if self._has("FOCUS_MOTION"):

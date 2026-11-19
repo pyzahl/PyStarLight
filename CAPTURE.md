@@ -859,23 +859,42 @@ and the program runs `indiserver` with them.
 The INDI client (`capture/indi.py`) and the mount (`capture/mount.py`) use only the standard
 library (the Pi's system Python).
 
-**Focuser panel** (menu **INDI Telescope Controls**, Focuser panel, or Shift+F; a dock like the Mount panel) runs on
-the same INDI connection: pick the **Focuser driver** in INDI settings (ZWO EAF:
-`indi_asi_focuser`, `sudo apt install indi-asi`; Connect works from either panel, and a focuser
-alone, without a mount driver, connects too).
+**Focuser window** (menu **INDI Telescope Controls**, Focuser window, or Shift+F) is a window of
+its own, closed when done (place and size remembered). It runs on the Mount panel's INDI
+connection: pick the **Focuser driver** in INDI settings (ZWO EAF: **ASI EAF**,
+`indi_asi_focuser`, `sudo apt install indi-asi`; Connect works from either, and a focuser alone,
+without a mount driver, connects too; the mount connects first). When the focuser does not come,
+the window says why, and names `indi_asi_focuser` when a ZWO EAF is on USB with another driver
+picked.
 
 - **Position** in steps, of the focuser's maximum, and its temperature when it has a probe; idle /
   moving / stopped (alert).
-- **Step** (1 .. 10000 or typed; remembered per focuser): **◀ In** / **Out ▶** move one step,
-  **◀◀ In** / **Out ▶▶** ten; **Go to** a position; **Abort**.
+- **Step** (1 .. 10000 or typed; remembered per focuser): **◀ in** / **out ▶** move one step,
+  **◀◀** / **▶▶** ten; **Go to** a position (the box follows the focuser); **Abort**.
 - **Mark focus** remembers the position (per focuser), **Back to mark** returns to it (e.g. after
   a filter or a flip).
 - Absolute focusers (the EAF, most steppers) get absolute targets, kept within 0 .. maximum.
   Relative-only ones get the direction, then the steps, and show the steps moved since connect;
   timer (DC) focusers take the step as milliseconds.
 
-Tested against INDI's focuser simulator (`capture/focuser.py`, standard library only); not yet on
-the EAF.
+**Focus curve** (`capture/focus.py`): **Centre star** measures the brightest unsaturated star near
+the image centre, **Pick star** the one you click next on the image (a yellow box; red when lost),
+on the live frames, followed as it drifts. Its size is the **half-flux diameter** (HFD: twice the
+flux-weighted mean distance from its centre), which stays meaningful far from focus, where a
+star becomes a ring and a FWHM fit fails; near focus HFD and FWHM go together (both shown, with
+the peak; **SATURATED** asks for a fainter star). Only the star's own connected light counts, so
+a neighbour's wing in the 61 px box stays out. Each focuser position collects the frames taken
+once the focuser has stood still for 1 s; the plot shows each position's median HFD (bar: its
+spread). HFD grows linearly with the distance from focus on both sides, so HFD² is a parabola in
+the position: it is fitted, and **Go to best** goes to its lowest point (needs positions on both
+sides). Use: step out of focus on one side, then through focus to the other in equal steps, then
+Go to best; for a focuser with backlash, finish the move in the same direction as the curve.
+Clear curve starts again; closing the window stops the measuring. Night mode draws the plot in
+dim red.
+
+Tested against INDI's focuser simulator (moves, mark, the curve with a simulated star) and on
+synthetic frames; the EAF connects through `indi_asi_focuser` (INDI 1.9.9, position, maximum
+and temperature read); the curve not yet on the sky.
 
 The mount: tested against INDI 1.9.9's telescope simulator (goto, sync,
 tracking off after a slew, the Center loop); not yet on the AM5. Next: pre-pointing a favorite
