@@ -7,9 +7,36 @@ and timer (FOCUS_TIMER: DC motors, run for ms). An absolute focuser is moved by 
 the steps (the driver takes the direction set when the steps arrive); its position is counted
 here from the steps sent ("moved" since connect).
 """
+import glob
+import os
+
 from .indi import FOCUSER, TELESCOPE
 
 ABS, REL, TIMER = "ABS_FOCUS_POSITION", "REL_FOCUS_POSITION", "FOCUS_TIMER"
+# focusers known by their USB id -> (name, INDI driver): a hint when another driver is picked
+USB_FOCUSERS = {("03c3", "1f10"): ("ZWO EAF", "indi_asi_focuser")}
+
+
+def usb_focusers(root="/sys/bus/usb/devices"):
+    """[(name, driver)] of the known focusers plugged in (Linux sysfs; [] elsewhere)."""
+    found = []
+    for dev in sorted(glob.glob(os.path.join(root, "*"))):
+        try:
+            with open(os.path.join(dev, "idVendor")) as v, open(os.path.join(dev, "idProduct")) as p:
+                key = (v.read().strip().lower(), p.read().strip().lower())
+        except OSError:
+            continue
+        if key in USB_FOCUSERS and USB_FOCUSERS[key] not in found:
+            found.append(USB_FOCUSERS[key])
+    return found
+
+
+def usb_hint(driver, root="/sys/bus/usb/devices"):
+    """'' or a hint naming the driver for a known focuser on USB when `driver` is another one."""
+    for name, want in usb_focusers(root):
+        if driver != want:
+            return f"A {name} is on USB: pick its driver {want} (INDI settings), then Connect again."
+    return ""
 
 
 def find(client, timeout=5.0):

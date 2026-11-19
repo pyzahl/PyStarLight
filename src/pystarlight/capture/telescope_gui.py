@@ -269,12 +269,7 @@ class MountDock(QtWidgets.QDockWidget):
                 fdev = fc.find(client, 10.0 if focus_drv else 1.0)
                 if mdev is None and fdev is None:
                     raise RuntimeError("no mount or focuser among the INDI devices")
-                self.error = ""
-                if fdev is not None:
-                    try:
-                        self.focuser = fc.Focuser(client, fdev).connect()
-                    except RuntimeError as e:
-                        self.focus_error = str(e)
+                self.error = self.focus_error = ""
                 if mdev is not None:
                     m = mt.Mount(client, mdev)
                     used = m.set_link(link, link_port)
@@ -286,6 +281,15 @@ class MountDock(QtWidgets.QDockWidget):
                         m.set_site(*site)
                     m.set_time()
                     self.mount = m
+                if fdev is not None:                 # after the mount: a failing focuser can't hold it up
+                    try:
+                        self.focuser = fc.Focuser(client, fdev).connect(timeout=10.0)
+                    except RuntimeError as e:
+                        self.focus_error = str(e)
+                if self.focuser is None:
+                    why = self.focus_error or (f"no focuser from {focus_drv}." if focus_drv
+                                               else "no focuser driver picked.")
+                    self.focus_error = f"{why} {fc.usb_hint(focus_drv)}".strip()
             except Exception as e:
                 self.error = str(e)
                 self.disconnect_indi()

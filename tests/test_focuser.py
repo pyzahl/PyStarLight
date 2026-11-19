@@ -148,3 +148,15 @@ def test_find_prefers_a_focuser_that_is_not_a_mount():
         def interfaces(self, d):
             return indi.TELESCOPE | indi.FOCUSER if d == "Mount+Focus" else indi.FOCUSER
     assert fc.find(C()) == "EAF"
+
+
+def test_usb_hint_names_the_driver(tmp_path):
+    dev = tmp_path / "3-1"
+    dev.mkdir()
+    (dev / "idVendor").write_text("03c3\n")
+    (dev / "idProduct").write_text("1f10\n")
+    (tmp_path / "usb3").mkdir()                     # a hub: no ids
+    assert fc.usb_focusers(str(tmp_path)) == [("ZWO EAF", "indi_asi_focuser")]
+    assert "indi_asi_focuser" in fc.usb_hint("indi_ieaf_focus", str(tmp_path))
+    assert fc.usb_hint("indi_asi_focuser", str(tmp_path)) == ""
+    assert fc.usb_hint("", str(tmp_path / "none")) == ""
