@@ -357,7 +357,11 @@ def main(argv=None):
     elif a.cmd == "cert":
         make_cert(a.ip)
     elif a.cmd == "pin":
-        closed = Pins(SWITCH_PIN, None).closed()
+        try:
+            closed = Pins(SWITCH_PIN, None).closed()
+        except OSError:                      # the service holds the line: the Pi's pinctrl reads it
+            out = subprocess.run(["pinctrl", "get", str(SWITCH_PIN)], capture_output=True, text=True).stdout
+            closed = "| lo" in out
         print(f"GPIO{SWITCH_PIN}: " + ("closed (hotspot)" if closed else "open (home WiFi)"))
     else:
         status()
