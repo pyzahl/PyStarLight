@@ -145,11 +145,19 @@ def test_focuser_window_on_the_simulator(monkeypatch, tmp_path):
         win.mark_button.click()
         win.poll()
         assert win.mark_label.text() == f"{int(start - 450)}"
-        win.goto_spin.setValue(int(start + 2000))
+        win.goto_spin.setValue(int(start + 2000))           # typed: the half-second refreshes keep it
+        for _ in range(3):
+            win.poll()
+        assert win.goto_spin.value() == int(start + 2000)
         win.goto_button.click()
         assert run_until(lambda: pos() == start + 2000)
+        assert run_until(lambda: win.goto_spin.value() == int(start + 2000) and not win.goto_typed)
+        win.goto_spin.setValue(int(start + 100))            # Enter in the box goes there too
+        win.goto_spin.lineEdit().returnPressed.emit()
+        assert run_until(lambda: pos() == start + 100)
         win.back_button.click()
         assert run_until(lambda: pos() == start - 450)
+        assert run_until(lambda: win.goto_spin.value() == int(start - 450))   # follows again
         assert main.settings.value("focuser/Focuser Simulator/step") == "50"
 
         win.center_button.click()                           # the focus curve

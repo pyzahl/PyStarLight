@@ -155,9 +155,12 @@ class FocuserWindow(QtWidgets.QWidget):
         g.addWidget(self.step_combo, r, 1)
         self.goto_spin = QtWidgets.QSpinBox()
         self.goto_spin.setRange(0, 10000000)
-        self.goto_spin.setToolTip("an absolute position (steps)")
+        self.goto_spin.setToolTip("an absolute position (steps); Enter or Go to goes there")
+        self.goto_typed = False          # a number typed in: kept until used (not overwritten)
+        self.goto_spin.valueChanged.connect(self.on_goto_typed)
+        self.goto_spin.lineEdit().returnPressed.connect(self.on_goto_button)
         self.goto_button = QtWidgets.QPushButton("Go to")
-        self.goto_button.clicked.connect(lambda: self.on_goto(self.goto_spin.value()))
+        self.goto_button.clicked.connect(self.on_goto_button)
         g.addWidget(self.goto_spin, r, 2, 1, 2)
         g.addWidget(self.goto_button, r, 4)
         r += 1
@@ -296,8 +299,24 @@ class FocuserWindow(QtWidgets.QWidget):
         self.run(fc.Focuser.move_by, factor * self.step())
 
     def on_goto(self, position):
+        self.goto_typed = False                     # a move: the box follows the focuser again
         if position is not None:
             self.run(fc.Focuser.move_to, position)
+
+    def on_goto_typed(self, value):
+        if not getattr(self, "showing_position", False):
+            self.goto_typed = True
+
+    def on_goto_button(self):
+        self.on_goto(self.goto_spin.value())
+
+    def show_position(self, pos):
+        """The focuser's position into the Go to box (not over a number typed in and not used)."""
+        if self.goto_typed or self.goto_spin.value() == int(pos):
+            return
+        self.showing_position = True
+        self.goto_spin.setValue(int(pos))
+        self.showing_position = False
 
     def mark(self):
         v = self.main.settings.value(self.key("mark"), None) if self.device_shown else None
@@ -410,10 +429,10 @@ class FocuserWindow(QtWidgets.QWidget):
             if step:
                 self.step_combo.setCurrentText(str(step))
             if st["position"] is not None:
-                self.goto_spin.setValue(int(st["position"]))
+                self.show_position(st["position"])
         absolute = st is not None and st["kind"] == "absolute"
-        if absolute and st["position"] is not None and not st["moving"] and not self.goto_spin.hasFocus():
-            self.goto_spin.setValue(int(st["position"]))           # follows, unless being typed in
+        if absolute and st["position"] is not None and not st["moving"]:
+            self.show_position(st["position"])                     # follows, unless a number is typed in
         for b in self.move_buttons + [self.abort_button]:
             b.setEnabled(st is not None)
         for b in (self.goto_button, self.goto_spin, self.mark_button):
@@ -446,7 +465,11 @@ class FocuserWindow(QtWidgets.QWidget):
             hint = fc.lost_hint(msg) if st["alert"] or "error" in msg.lower() else ""
             if hint:
                 msg = f"{msg}\n{hint}"
-        self.goto_spin.setMaximum(int(st["max"]) if st and st["max"] else 10000000)
+        top = int(st["max"]) if st and st["max"] else 10000000
+        if self.goto_spin.maximum() != top:
+            self.showing_position = True
+            self.goto_spin.setMaximum(top)
+            self.showing_position = False
 
         has_meter = self.meter is not None
         for b in (self.center_button, self.pick_button, self.stop_button):
