@@ -74,7 +74,7 @@ class MountDock(QtWidgets.QDockWidget):
         g.setSpacing(4)
         r = 0
         self.connect_button = QtWidgets.QPushButton("Connect")
-        self.connect_button.setToolTip("drivers, USB / Wi-Fi, server: menu Mount, INDI settings")
+        self.connect_button.setToolTip("drivers, USB / Wi-Fi, server: menu INDI Telescope Controls, INDI settings")
         self.connect_button.clicked.connect(self.on_connect)
         self.state_label = QtWidgets.QLabel("not connected")
         self.state_label.setWordWrap(True)
@@ -186,10 +186,10 @@ class MountDock(QtWidgets.QDockWidget):
         self.timer.start()
         self.poll()
 
-    # ---- INDI settings (a window of their own, menu Mount) ----
+    # ---- INDI settings (a window of their own, menu INDI Telescope Controls) ----
     def make_settings_dialog(self):
         d = self.settings_dialog = QtWidgets.QDialog(self.main)
-        d.setWindowTitle("Mount: INDI settings")
+        d.setWindowTitle("INDI settings")
         form = QtWidgets.QFormLayout(d)
         self.mount_combo = driver_combo(self.drivers.get("Telescopes", []), self.cfg.get("mount_driver"))
         self.focus_combo = driver_combo(self.drivers.get("Focusers", []), self.cfg.get("focuser_driver"))
@@ -636,7 +636,7 @@ FOCUS_STEPS = (1, 10, 100, 1000, 10000)
 
 
 class FocuserDock(QtWidgets.QDockWidget):
-    """The focuser on the Mount panel's INDI connection (its driver: Mount → INDI settings):
+    """The focuser on the Mount panel's INDI connection (its driver: INDI Telescope Controls → INDI settings):
     position (and temperature), steps in / out (the step picked, or ten of them), go to a
     position, abort, and a focus mark to come back to (remembered per focuser)."""
 

@@ -198,7 +198,7 @@ mount_connection = "usb"   # "usb" (serial), "wifi" (TCP) or "" (the driver's de
 mount_port = ""            # serial port, e.g. "/dev/ttyACM0"; "": the listed port named ZWO, else the only one
 
 [lock]
-# Star lock (camera: Mount menu / Shift+L, CAPTURE.md "Star lock and live flux"): 2-3 reference
+# Star lock (camera: menu INDI Telescope Controls / Shift+L, CAPTURE.md "Star lock and live flux"): 2-3 reference
 # stars held by guide pulses through the Mount panel, the target's flux live. Any key left out
 # keeps the default shown here.
 stars = 3                  # lock stars wanted (never the target)

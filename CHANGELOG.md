@@ -7,13 +7,13 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- Camera 1.3.0: **Focuser panel** (Mount menu, Shift+F; `capture/focuser.py`) on the Mount
+- Camera 1.3.0: **Focuser panel** (menu INDI Telescope Controls, Shift+F; `capture/focuser.py`) on the Mount
   panel's INDI connection, the focuser driver from INDI settings (e.g. `indi_asi_focuser` for a
   ZWO EAF, package `indi-asi`): position (and temperature), steps in / out (the step picked, or
   ten of them; remembered per focuser), go to a position, abort, and a focus mark to return to.
   Relative-only focusers show the steps moved since connect, timer focusers take ms. A focuser
   alone, without a mount driver, connects too.
-- Camera: **star lock** (Mount menu → Star lock panel, Shift+L; `capture/guider.py`,
+- Camera: **star lock** (menu INDI Telescope Controls → Star lock panel, Shift+L; `capture/guider.py`,
   `capture/lock_gui.py`, config `[lock]`). Locks on 2-3 reference stars (never the target),
   corrects the mount with INDI guide pulses through the Mount panel after a short calibration,
   and plots the target's flux live (target / lock stars). Corrections only while every check
@@ -78,6 +78,10 @@ uses [Semantic Versioning](https://semver.org/).
   30 s and then solves the whole sky (a stale hint: 65 s instead of 187 s; a good one: 2 s).
 - CAPTURE.md: the Pi 5's compute reserve at 50 fps (recording + the lock's work: no frame lost,
   5 % of a core).
+
+### Changed
+- Camera: the menu **Mount** is now **INDI Telescope Controls** (Mount, Focuser and Star lock panels, INDI
+  settings); the settings window is titled "INDI settings".
 
 ## [1.0.0] - 2026-11-15
 

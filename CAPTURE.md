@@ -811,11 +811,11 @@ lost frames at full frame, 40 %, from 89 to 36 in 30 s.
 
 ## Mount and focuser (INDI)
 
-The camera window's **Mount** panel (menu **Mount**, Mount panel, or Shift+M; a dock: beside the
+The camera window's **Mount** panel (menu **INDI Telescope Controls**, Mount panel, or Shift+M; a dock: beside the
 side panel, or pulled out as a window of its own, closed when not needed; Qt remembers the
 arrangement) drives a mount through [INDI](https://www.indilib.org). The panel holds only what is
 used at the telescope (Connect, position, target, goto / sync, jog, park / home); the drivers and
-the connection are in **Mount → INDI settings…**, a window of their own. It follows ASTRID's approach: pick the drivers,
+the connection are in **INDI Telescope Controls → INDI settings…**, a window of their own. It follows ASTRID's approach: pick the drivers,
 and the program runs `indiserver` with them.
 
 - **Drivers** (INDI settings): the lists show the installed INDI drivers (from INDI's XML files in
@@ -859,7 +859,7 @@ and the program runs `indiserver` with them.
 The INDI client (`capture/indi.py`) and the mount (`capture/mount.py`) use only the standard
 library (the Pi's system Python).
 
-**Focuser panel** (menu **Mount**, Focuser panel, or Shift+F; a dock like the Mount panel) runs on
+**Focuser panel** (menu **INDI Telescope Controls**, Focuser panel, or Shift+F; a dock like the Mount panel) runs on
 the same INDI connection: pick the **Focuser driver** in INDI settings (ZWO EAF:
 `indi_asi_focuser`, `sudo apt install indi-asi`; Connect works from either panel, and a focuser
 alone, without a mount driver, connects too).
@@ -1144,7 +1144,7 @@ against INDI's telescope simulator), and plots the target's flux live as a quick
 event. Residual field rotation is ignored. Code: `capture/guider.py` (the lock, numpy / OpenCV),
 `capture/lock_gui.py` (the dock); settings `[lock]` in the config.
 
-**Use.** Mount menu → **Star lock panel** (Shift+L).
+**Use.** Menu **INDI Telescope Controls** → **Star lock panel** (Shift+L).
 1. Show the target's marker (star field + plate solve, as for the recording) so the lock knows
    which star not to use and whose flux to plot. Without a marker the plot shows the lock stars'
    own flux (transparency).

@@ -2774,7 +2774,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mount_dock = MountDock(self)
         self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.mount_dock)
         self.mount_dock.hide()
-        menu = self.menuBar().addMenu("&Mount")
+        menu = self.menuBar().addMenu("&INDI Telescope Controls")
         act = self.mount_dock.toggleViewAction()
         act.setText("Mount &panel")
         act.setShortcut(QtGui.QKeySequence("Shift+M"))
