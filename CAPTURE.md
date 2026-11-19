@@ -892,6 +892,16 @@ Go to best; for a focuser with backlash, finish the move in the same direction a
 Clear curve starts again; closing the window stops the measuring. Night mode draws the plot in
 dim red.
 
+**Power the EAF from 12 V (its DC socket) or a powered USB hub, not from the Pi's USB alone.**
+The Pi 5 shares a fixed USB current among all its ports (600 mA unless the firmware sees a 5 A
+supply; `usb_max_current_enable=1` in `/boot/firmware/config.txt` raises it, only safe with the
+official 5 A supply). Over it, it cuts **all** ports at once (kernel log: `over-current change`):
+on 2026-11-18 the EAF's motor, with its hand controller and temperature probe on, did so 30 times
+in 3 hours. Every device drops off USB and comes back: the mount's port moves (ttyACM0 ->
+ttyACM1), the EAF's driver keeps a dead handle ("Failed to read position. Error: 4": removed), so
+nothing moves and the mount reports I/O errors. The Focuser window shows the driver's message
+and says so; **Disconnect, then Connect** (Mount panel or Focuser window) restarts the drivers.
+
 Tested against INDI's focuser simulator (moves, mark, the curve with a simulated star) and on
 synthetic frames; the EAF connects through `indi_asi_focuser` (INDI 1.9.9, position, maximum
 and temperature read); the curve not yet on the sky.

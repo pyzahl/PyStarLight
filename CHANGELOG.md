@@ -19,7 +19,10 @@ uses [Semantic Versioning](https://semver.org/).
 - Camera: the mount connects before the focuser (a focuser driver that cannot connect no longer
   holds it up); the Focuser window says why a focuser is missing, and names `indi_asi_focuser`
   when a ZWO EAF is on USB with another driver picked. A focuser's state shows Alert only from
-  the property it is moved by (the EAF keeps an unused one in Alert).
+  the property it is moved by (the EAF keeps an unused one in Alert). The Focuser window shows
+  the driver's latest message for the focuser, and after a USB drop-out (ZWO's "Error: 4") says
+  to Disconnect / Connect; CAPTURE.md: power the EAF from 12 V or a powered hub (the Pi 5 cuts
+  all USB ports on over-current).
 - Camera 1.3.0: **Focuser panel** (menu INDI Telescope Controls, Shift+F; `capture/focuser.py`) on the Mount
   panel's INDI connection, the focuser driver from INDI settings (e.g. `indi_asi_focuser` for a
   ZWO EAF, package `indi-asi`): position (and temperature), steps in / out (the step picked, or

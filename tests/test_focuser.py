@@ -17,7 +17,7 @@ class FakeClient:
     """Properties as {name: (state, values)}; what is sent is recorded in order."""
 
     def __init__(self, props):
-        self.props, self.sent = props, []
+        self.props, self.sent, self.messages = props, [], []
 
     def get(self, device, name):
         return self.props.get(name)
@@ -251,3 +251,14 @@ def test_usb_hint_names_the_driver(tmp_path):
     assert "indi_asi_focuser" in fc.usb_hint("indi_ieaf_focus", str(tmp_path))
     assert fc.usb_hint("indi_asi_focuser", str(tmp_path)) == ""
     assert fc.usb_hint("", str(tmp_path / "none")) == ""
+
+
+def test_driver_message_and_lost_hint():
+    c = FakeClient({fc.ABS: ("Alert", {"FOCUS_ABSOLUTE_POSITION": 13259.0})})
+    c.messages = [("ZWO AM5", "Error reading RA/DEC."),
+                  ("ASI EAF", "[ERROR] Failed to read position. Error: 4"),
+                  ("ZWO AM5", "Error reading RA/DEC.")]
+    st = fc.Focuser(c, "ASI EAF").status()
+    assert st["alert"] and st["message"] == "[ERROR] Failed to read position. Error: 4"
+    assert "Disconnect, then Connect" in fc.lost_hint(st["message"])
+    assert fc.lost_hint("[INFO] ASI EAF parameters updated") == ""

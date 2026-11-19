@@ -132,8 +132,22 @@ class Focuser:
         if self._has("FOCUS_ABORT_MOTION"):
             self.client.set_switch(self.device, "FOCUS_ABORT_MOTION", {"ABORT": True})
 
+    def message(self):
+        """The driver's newest message about this focuser ('' none)."""
+        return next((text for dev, text in reversed(self.client.messages) if dev == self.device), "")
+
     def status(self):
         """Everything the GUI shows, in one dict."""
         return {"device": self.device, "kind": self.kind(), "position": self.position(),
                 "max": self.maximum(), "moved": self.moved, "moving": self.moving(),
-                "alert": self.alert(), "temperature": self.temperature()}
+                "alert": self.alert(), "temperature": self.temperature(), "message": self.message()}
+
+
+def lost_hint(message):
+    """'' or what to do when the driver says the device is gone (ZWO's SDK: error 4, removed):
+    after a USB reset the driver keeps a dead handle until it is started again."""
+    m = message.lower()
+    if "error: 4" in m or "removed" in m or "input/output error" in m:
+        return ("The focuser dropped off USB (the Pi cuts all USB ports on over-current: power the "
+                "focuser from 12 V or a powered hub). Disconnect, then Connect.")
+    return ""

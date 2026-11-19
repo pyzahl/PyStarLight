@@ -442,7 +442,10 @@ class FocuserWindow(QtWidgets.QWidget):
             if st["temperature"] is not None:
                 info += f"   {st['temperature']:.1f} °C"
             self.info_label.setText(info.strip())
-            msg = ""
+            msg = st["message"]
+            hint = fc.lost_hint(msg) if st["alert"] or "error" in msg.lower() else ""
+            if hint:
+                msg = f"{msg}\n{hint}"
         self.goto_spin.setMaximum(int(st["max"]) if st and st["max"] else 10000000)
 
         has_meter = self.meter is not None
