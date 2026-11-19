@@ -30,8 +30,10 @@ uses [Semantic Versioning](https://semver.org/).
 - CAPTURE.md: the Pi header pins in use, one table (GPS, compass, hotspot switch GPIO26 / pin 37
   and its LED GPIO20 / pin 38, at the far end of the header, clear of the connector on pins 1-10).
 - `scripts/netswitch.py`: home WiFi or the Pi's own hotspot by a toggle switch on GPIO26 / pin 37
-  (LED on GPIO20 / pin 38), or by hand; installs itself as a systemd service. CAPTURE.md "Remote screen in the
-  field": VNC (wayvnc, Remmina), autologin under SDDM, a fixed screen size without a display.
+  (LED on GPIO20 / pin 38), or by hand; installs itself as a systemd service. `hotspot` refuses at
+  once when a system `dnsmasq` service blocks the hotspot's own (it would fail after 30 s with
+  "Address already in use") and names the fix. CAPTURE.md "Remote screen in the field": VNC
+  (wayvnc, Remmina), autologin under SDDM, a fixed screen size without a display.
 - Camera: Focuser window: a number typed into Go to stays until it is used (the half-second
   refresh put the focuser's position back between pressing and releasing Go to); Enter goes
   there too.

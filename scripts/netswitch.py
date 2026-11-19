@@ -71,10 +71,24 @@ def setup(ssid, password, band="bg", run=subprocess.run):
     print(f"hotspot profile {PROFILE}: network {ssid}, {'5 GHz' if band == 'a' else '2.4 GHz'}")
 
 
+def dns_blocker(run=subprocess.run):
+    """'' or why the hotspot cannot hand out addresses: a system dnsmasq service already holds
+    the DNS / DHCP ports on every address (NetworkManager's own dnsmasq then fails, 'Address
+    already in use', and the hotspot is dropped after 30 s)."""
+    r = run(["systemctl", "is-active", "dnsmasq"], capture_output=True, text=True)
+    if r.stdout.strip() == "active":
+        return ("a system dnsmasq service is running and blocks the hotspot's own (address in use): "
+                "sudo systemctl disable --now dnsmasq")
+    return ""
+
+
 def set_mode(mode, run=subprocess.run, log=print):
     """'hotspot': bring the hotspot up; 'home': take it down, NetworkManager joins the known WiFi."""
     up = PROFILE in active(run)
     if mode == "hotspot" and not up:
+        blocker = dns_blocker(run)
+        if blocker:
+            raise RuntimeError(blocker)
         log(f"hotspot: {PROFILE} up (VNC: {HOTSPOT_ADDRESS})")
         nmcli("connection", "up", PROFILE, run=run)
     elif mode == "home" and up:
@@ -233,7 +247,10 @@ def main(argv=None):
     elif a.cmd == "watch":
         watch(a.pin, None if a.led < 0 else a.led)
     elif a.cmd in ("hotspot", "home"):
-        set_mode(a.cmd)
+        try:
+            set_mode(a.cmd)
+        except RuntimeError as e:
+            raise SystemExit(f"{a.cmd}: {e}") from None
     elif a.cmd == "install":
         install()
     elif a.cmd == "pin":

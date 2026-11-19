@@ -362,6 +362,12 @@ runs too), so it is as quick.
       sudo python3 scripts/netswitch.py hotspot | home                 # by hand
       python3 scripts/netswitch.py status | pin
 
+  **A system `dnsmasq` service blocks it:** NetworkManager runs its own dnsmasq for the hotspot's
+  addresses; one installed as a service (`apt install dnsmasq`) holds the ports on every address,
+  the hotspot's fails ("Address already in use") and the hotspot is dropped after 30 s. The Pi
+  does not need that service (NetworkManager uses `dnsmasq-base`): `sudo systemctl disable --now
+  dnsmasq`. `netswitch.py hotspot` checks for it and says so instead of trying.
+
   On the hotspot, join **PyStarLight** and connect the VNC viewer to **10.42.0.1** (no internet
   through it; the Pi is off the home network meanwhile). `setup --band a`: 5 GHz, faster, if the
   tablet has it. The pins are read with libgpiod (the header is `gpiochip15`, `pinctrl-rp1`, on

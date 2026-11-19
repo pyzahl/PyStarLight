@@ -18,10 +18,12 @@ def ns():
 
 
 class FakeNM:
-    def __init__(self, active):
-        self.active, self.calls = list(active), []
+    def __init__(self, active, dnsmasq="inactive"):
+        self.active, self.calls, self.dnsmasq = list(active), [], dnsmasq
 
     def __call__(self, cmd, capture_output=True, text=True):
+        if cmd[0] == "systemctl":                      # the dnsmasq check
+            return SimpleNamespace(returncode=3, stdout=self.dnsmasq + "\n", stderr="")
         args = cmd[1:]
         self.calls.append(args)
         if args[:4] == ["-t", "-f", "NAME", "connection"]:
@@ -56,3 +58,10 @@ def test_setup_profile_never_comes_up_by_itself(ns):
 def test_unit_runs_this_script(ns):
     text = ns.unit("/home/percy/PyStarLight/scripts/netswitch.py", "/usr/bin/python3")
     assert "ExecStart=/usr/bin/python3 /home/percy/PyStarLight/scripts/netswitch.py watch" in text
+
+
+def test_a_system_dnsmasq_is_named_not_waited_for(ns):
+    nm = FakeNM(["31A138_5G"], dnsmasq="active")
+    with pytest.raises(RuntimeError, match="systemctl disable --now dnsmasq"):
+        ns.set_mode("hotspot", run=nm, log=lambda m: None)
+    assert ["connection", "up", ns.PROFILE] not in nm.calls        # home WiFi kept
