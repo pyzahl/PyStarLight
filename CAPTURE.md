@@ -97,6 +97,24 @@ needed fitted:
   to the Pi's 5 V therefore connects the same rail. The ground connection is the essential one: it
   is the reference of the trigger input.
 
+**The Pi's 40-pin header, everything wired** (pin 1 has the square solder pad; odd pins on the
+inner row, even pins on the row along the board's edge):
+
+| Pin | Signal | To | |
+|---|---|---|---|
+| 2 | 5 V | GPS VCC, camera adapter J3-1 | |
+| 6 | GND | GPS GND, camera adapter J3-2 | |
+| 8 | GPIO14, UART0 TXD | GPS RX | |
+| 10 | GPIO15, UART0 RXD | GPS TX | |
+| 3, 5 | GPIO2 / GPIO3, I2C bus 1 | compass (QMC5883L / HMC5883L), optional | |
+| 37 | GPIO26 | **hotspot switch**, other side to pin 39 (GND): closed = hotspot | optional |
+| 38 | GPIO20 | **hotspot LED** through 330 ohm, LED to pin 34 (GND) | optional |
+
+The switch and LED are read and set by `scripts/netswitch.py` (see [Remote screen in the
+field](#remote-screen-in-the-field-vnc-hotspot-switch)); the pin's own pull-up holds it open (home
+WiFi) when nothing is wired. The GPS timepulse does not go to the Pi but to the camera adapter's
+J3-3.
+
 ## Running it
 
 The app runs in the repo's uv venv, like the rest of PyStarLight:
@@ -316,6 +334,38 @@ Not while recording (later). The GPS box's **Pi clock** line shows the result.
 - In GPS mode, start and stop times refer to the **trigger pulse**. A recording armed for 23:40:00
   begins with the frame of exactly that pulse. "Stop after 10 s" at 2 fps gives exactly 20 frames.
 - In free run they refer to the exposure start.
+
+## Remote screen in the field: VNC, hotspot switch
+
+The Pi runs without a display. **Raspberry Pi Connect** shows its desktop in a browser but needs
+the internet (it connects through Raspberry Pi's servers). Offline, use **VNC** over the local
+network or the Pi's own WiFi hotspot; both use the same screen capture (wayvnc, which Pi Connect
+runs too), so it is as quick.
+
+- **VNC:** `sudo raspi-config nonint do_vnc 0` (wayvnc, port 5900). Viewers: Remmina (VNC plugin),
+  TigerVNC, bVNC (Android); login: the Pi user and password (wayvnc's TLS "VeNCrypt"; RealVNC
+  Viewer is not needed).
+- **Log in by itself:** with KDE Plasma installed the login screen is SDDM, which Preferences'
+  autologin (LightDM's) does not reach: `/etc/sddm.conf.d/autologin.conf` with `[Autologin]`,
+  `User=<user>`, `Session=LXDE-pi-labwc.desktop`.
+- **Screen size without a display:** the desktop then makes up a virtual screen (sized by Pi
+  Connect's window); `video=HDMI-A-1:1920x1080@60D` at the end of the single line in
+  `/boot/firmware/cmdline.txt` keeps 1920 x 1080 (D: on without a display). 4K works but is
+  heavy to send.
+- **Hotspot switch** (`scripts/netswitch.py`, system Python, NetworkManager): a toggle switch
+  from **GPIO26 (pin 37) to GND (pin 39)**: closed = the Pi's hotspot, open = home WiFi; optional
+  LED on **GPIO20 (pin 38)** through 330 ohm to GND (pin 34), on while the hotspot is up. At the
+  far end of the header, clear of the connector on pins 1-10. No switch wired: home WiFi.
+
+      sudo python3 scripts/netswitch.py setup --password <8+ chars>   # once: network PyStarLight
+      sudo python3 scripts/netswitch.py install                        # starts with the Pi
+      sudo python3 scripts/netswitch.py hotspot | home                 # by hand
+      python3 scripts/netswitch.py status | pin
+
+  On the hotspot, join **PyStarLight** and connect the VNC viewer to **10.42.0.1** (no internet
+  through it; the Pi is off the home network meanwhile). `setup --band a`: 5 GHz, faster, if the
+  tablet has it. The pins are read with libgpiod (the header is `gpiochip15`, `pinctrl-rp1`, on
+  this Pi 5; gpiozero's lgpio did not find it).
 
 ## Stack & plate solve
 

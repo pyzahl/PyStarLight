@@ -13,6 +13,9 @@ so it works even when .venv is missing or broken):
     ./install.sh --managed-python     build .venv on uv's own Python (has Tk; remembered)
     ./install.sh --rebuild            delete .venv and build it again
     ./install.sh --check              only check the installation (pystarlight doctor)
+    ./install.sh --launcher           also menu entries and desktop icons (Linux; remembered,
+                                      refreshed on each update): Camera, Player, Analyze
+    ./install.sh --launcher --camera-args="--gps-pulse-ms 1"   the camera's options (remembered; with =)
 
 Standard library only, Python 3.8+. The choices live in .pystarlight-install.json (git-ignored).
 """
@@ -379,6 +382,61 @@ def doctor(uv: str, extras) -> int:
                 "--extras", ",".join(sorted(extras)) or "none"]).returncode
 
 
+# ---------------------------------------------------------------------------
+# Menu entries and desktop icons (Linux, freedesktop .desktop files)
+# ---------------------------------------------------------------------------
+LAUNCHERS = (  # command, name, comment, in a terminal (the log stays readable)
+    ("camera", "PyStarLight Camera", "GPS-timed occultation recording", True),
+    ("player", "PyStarLight Player", "A recording with its time stamps, stack and plate solve", False),
+    ("analyze", "PyStarLight Analyze", "Light curves of an occultation recording", False),
+)
+ICON = ROOT / "src" / "pystarlight" / "pystarlight_logo.svg"
+
+
+def launcher_files(uv: str, extras, camera_args: str = "", home: Path = None) -> dict:
+    """{path: (text, executable)}: a start script per tool in ~/.local/bin and its menu entry in
+    ~/.local/share/applications (the camera only with the camera extra)."""
+    home = Path(home or Path.home())
+    out = {}
+    for cmd, name, comment, terminal in LAUNCHERS:
+        if cmd == "camera" and "camera" not in extras:
+            continue
+        script = home / ".local" / "bin" / f"pystarlight-{cmd}-start"
+        args = f" {camera_args}" if cmd == "camera" and camera_args else ""
+        tail = ('echo\necho "PyStarLight ended. Press Enter to close."\nread x\n' if terminal else "")
+        out[script] = (f"#!/bin/sh\n# PyStarLight {cmd} from the desktop menu / icon (written by {WRAPPER} "
+                       f"--launcher)\ncd '{ROOT}' || exit 1\n'{uv}' run pystarlight {cmd}{args} \"$@\"\n"
+                       + tail, True)
+        out[home / ".local" / "share" / "applications" / f"pystarlight-{cmd}.desktop"] = (
+            "[Desktop Entry]\nType=Application\n"
+            f"Name={name}\nComment={comment}\nExec={script}\nIcon={ICON}\n"
+            f"Terminal={'true' if terminal else 'false'}\nCategories=Science;Astronomy;\n"
+            "StartupNotify=true\n", True)
+    return out
+
+
+def install_launchers(uv: str, extras, camera_args: str = "") -> None:
+    if WINDOWS or sys.platform == "darwin":
+        say("Launchers: Linux desktops only (freedesktop menu entries); skipped.")
+        return
+    head("Launchers")
+    uv = shutil.which(uv) or uv                         # an absolute path: menus have no PATH of ours
+    desktop = Path.home() / "Desktop"
+    for path, (text, executable) in launcher_files(uv, extras, camera_args).items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        if executable:
+            path.chmod(0o755)
+        if path.suffix == ".desktop" and desktop.is_dir():
+            icon = desktop / path.name
+            icon.write_text(text)
+            icon.chmod(0o755)
+            run(["gio", "set", icon, "metadata::trusted", "true"], capture=True)   # no "run it?" question
+        say(f"  {path}")
+    where = f"; icons on {desktop}" if desktop.is_dir() else ""
+    say(f"Menu: Science / Education -> PyStarLight ...{where}")
+
+
 def resolve_extras(args_extras, state: dict, table: dict) -> list:
     if args_extras:
         chosen = [] if args_extras == ["none"] else [e for x in args_extras for e in x.split(",") if e]
@@ -403,6 +461,11 @@ def main(argv=None) -> int:
     p.add_argument("--system-python", action="store_true", help="let uv take the system's Python again")
     p.add_argument("--rebuild", action="store_true", help="delete .venv and build it again")
     p.add_argument("--check", action="store_true", help="only check the installation")
+    p.add_argument("--launcher", action="store_true",
+                   help="menu entries and desktop icons for Camera, Player, Analyze (Linux; remembered)")
+    p.add_argument("--no-launcher", action="store_true", help="no longer refresh the launchers")
+    p.add_argument("--camera-args", default=None,
+                   help='options for the Camera launcher, e.g. --camera-args="--gps-pulse-ms 1" (remembered)')
     a = p.parse_args(argv)
 
     uv = find_uv()
@@ -420,6 +483,10 @@ def main(argv=None) -> int:
         state["managed_python"] = a.managed_python
     if a.rebuild:
         state["rebuild"] = True
+    if a.launcher or a.no_launcher:
+        state["launcher"] = a.launcher
+    if a.camera_args is not None:
+        state["camera_args"] = a.camera_args.strip()
     full = expand(extras, table)
     say(f"Extras: {' '.join(extras) or 'none'}"
         + (f"  (= {' '.join(sorted(full))})" if full != set(extras) else ""))
@@ -443,6 +510,8 @@ def main(argv=None) -> int:
     if code:
         return code
     fix_adv2_on_apple_silicon(full)
+    if state.get("launcher"):
+        install_launchers(uv, full, state.get("camera_args", ""))
     code = doctor(uv, full)
     head("Done" if code == 0 else "Done, with problems (see above)")
     say(f"Run: uv run pystarlight      Update later: {WRAPPER}")

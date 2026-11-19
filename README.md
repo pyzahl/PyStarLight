@@ -195,6 +195,8 @@ The installer (`scripts/install.py`, run by uv, so it works even when `.venv` is
 ./install.sh --no-pull                  # sync only
 ./install.sh --managed-python           # .venv on uv's own Python (remembered; --system-python undoes)
 ./install.sh --rebuild                  # delete .venv, build it again
+./install.sh --launcher                 # Linux: menu entries + desktop icons (Camera, Player, Analyze; remembered)
+./install.sh --camera-args="--gps-pulse-ms 1"   # options the Camera launcher starts with (remembered; with =)
 ./install.sh --check                    # only the check (= uv run pystarlight doctor)
 ```
 

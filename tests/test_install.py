@@ -109,3 +109,21 @@ def test_doctor_runs_as_a_file():
 def test_cli_has_doctor():
     assert cli.TOOLS["doctor"][1] == "pystarlight.doctor"
     assert cli.ALIASES["check"] == "doctor"
+
+
+def test_launchers_camera_only_with_its_extra(inst, tmp_path):
+    files = inst.launcher_files("/home/u/.local/bin/uv", {"camera", "plot"}, "--gps-pulse-ms 1",
+                                home=tmp_path)
+    names = sorted(p.name for p in files)
+    assert names == ["pystarlight-analyze-start", "pystarlight-analyze.desktop", "pystarlight-camera-start",
+                     "pystarlight-camera.desktop", "pystarlight-player-start", "pystarlight-player.desktop"]
+    script = files[tmp_path / ".local" / "bin" / "pystarlight-camera-start"][0]
+    assert "'/home/u/.local/bin/uv' run pystarlight camera --gps-pulse-ms 1 \"$@\"" in script
+    assert f"cd '{inst.ROOT}'" in script and "read x" in script                  # the log stays readable
+    entry = files[tmp_path / ".local" / "share" / "applications" / "pystarlight-camera.desktop"][0]
+    assert "Terminal=true" in entry and f"Exec={tmp_path}/.local/bin/pystarlight-camera-start" in entry
+    assert "pystarlight_logo.svg" in entry and inst.ICON.exists()
+    player = files[tmp_path / ".local" / "share" / "applications" / "pystarlight-player.desktop"][0]
+    assert "Terminal=false" in player
+    without = inst.launcher_files("uv", {"plot"}, home=tmp_path)
+    assert not any("camera" in p.name for p in without)

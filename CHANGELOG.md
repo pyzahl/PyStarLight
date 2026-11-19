@@ -23,6 +23,15 @@ uses [Semantic Versioning](https://semver.org/).
   the driver's latest message for the focuser, and after a USB drop-out (ZWO's "Error: 4") says
   to Disconnect / Connect; CAPTURE.md: power the EAF from 12 V or a powered hub (the Pi 5 cuts
   all USB ports on over-current).
+- Installer: `--launcher` writes menu entries and desktop icons for Camera (in a terminal, the
+  window waits for Enter at the end), Player and Analyze (Linux; start scripts in ~/.local/bin,
+  remembered and refreshed on each update; `--no-launcher` stops that); `--camera-args` the
+  Camera's options (remembered).
+- CAPTURE.md: the Pi header pins in use, one table (GPS, compass, hotspot switch GPIO26 / pin 37
+  and its LED GPIO20 / pin 38, at the far end of the header, clear of the connector on pins 1-10).
+- `scripts/netswitch.py`: home WiFi or the Pi's own hotspot by a toggle switch on GPIO26 / pin 37
+  (LED on GPIO20 / pin 38), or by hand; installs itself as a systemd service. CAPTURE.md "Remote screen in the
+  field": VNC (wayvnc, Remmina), autologin under SDDM, a fixed screen size without a display.
 - Camera: Focuser window: a number typed into Go to stays until it is used (the half-second
   refresh put the focuser's position back between pressing and releasing Go to); Enter goes
   there too.
