@@ -27,6 +27,10 @@ uses [Semantic Versioning](https://semver.org/).
   window waits for Enter at the end), Player and Analyze (Linux; start scripts in ~/.local/bin,
   remembered and refreshed on each update; `--no-launcher` stops that); `--camera-args` the
   Camera's options (remembered).
+- CAPTURE.md: the IMX265M's GPS timing checked against ASTRID #0182 with hand flashes on a
+  white ceiling (2026-11-18): run 1, 7 edges, −0.1 ms; run 2, 56 flashes at 200 fps, +0.2 … +0.5
+  ms (ASTRID saturated, fitted to the IMX265's light curve); run 3, 60 flashes, +0.24 ± 0.38 ms.
+  Together +0.25 ± 0.12 ms (the IMX265 probably a quarter ms late). No frame or ms offset.
 - Wiring diagram (`docs/wiring/capture_wiring.svg`): the field network switch (pin 37 GPIO26 to
   pin 39 GND) and its LED (pin 38 GPIO20, 330 ohm, pin 34 GND), with the far end of the header.
 - CAPTURE.md: the Pi header pins in use, one table (GPS, compass, hotspot switch GPIO26 / pin 37

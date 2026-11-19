@@ -302,7 +302,7 @@ after anchoring, then every minute, when it is off by more than
 `[camera] system_clock_tolerance_ms` (default 20 ms; `set_system_clock = false` turns it off).
 Not while recording (later). The GPS box's **Pi clock** line shows the result.
 - Accuracy: that of the anchoring, i.e. the pulse-to-frame lag of the sensor's timing profile
-  (IMX178 measured to ~0.1 ms; the IMX265's profile is assumed, so possibly a few ms) and the
+  (IMX178 measured to ~0.1 ms; the IMX265's profile is assumed, checked to ~0.5 ms) and the
   frame-start jitter (~10 us). Plenty for file times, the mount and other programs; the frame
   stamps never depend on the system clock.
 - Setting the clock needs root: a small helper that *adds an offset* to the clock (so the delay
@@ -1112,7 +1112,7 @@ The timing model is chosen by sensor (`timing.sensor_timing`, `CameraSession.tim
 | profile | models | status |
 |---|---|---|
 | `IMX178` | MV-MIPI-IMX178M | measured (12 bit; 10 / 8 bit estimated) |
-| `SONY_GLOBAL` | IMX265M, IMX264M, IMX296M, IMX287M (Sony Pregius global shutter) | **assumed, not measured** |
+| `SONY_GLOBAL` | IMX265M, IMX264M, IMX296M, IMX287M (Sony Pregius global shutter) | assumed; IMX265M GPS mode **checked against ASTRID: within 0.5 ms** (below) |
 | IMX178 model, uncalibrated | any other VEYE MV model | guess |
 
 What the Sony global-shutter profile assumes until it is measured:
@@ -1131,6 +1131,36 @@ What the Sony global-shutter profile assumes until it is measured:
 - Recordings say `FRAME-TIMING-ACCURACY` 5 ms (uncalibrated) instead of 0.1 ms.
 - Not modelled either: the smallest region (the IMX178's 320 rows is assumed) and the x-offset
   firmware bug (x is cropped in software anyway, which works on any model).
+
+**Checked against ASTRID (2026-11-18).** Both pointed at a white ceiling indoors, flashlight
+switched on and off by hand; ASTRID #0182 (IMX296, OTEStamper; tested against a GPS LED timing
+device) as the reference, both recording at once. A frame lit for part of its exposure gives the
+switching time within it (global shutters: the fraction of the step in the frame is the fraction
+of the exposure), so each camera times the same edges independently of its frame grid. Different
+frame rates are better: the edges fall at every phase of both cameras' frames.
+
+| run | IMX265M (GPS trigger) | ASTRID | edges | IMX265 − ASTRID |
+|---|---|---|---|---|
+| 1 | 2048 × 1544, 54 fps, 16.5 ms | 30 fps, 33.3 ms | 7 | −0.1 ms (single edges −0.8 … +0.8) |
+| 2 | 360 × 320, 200 fps, 3.0 ms | 30 fps, 33.3 ms, saturated when lit | 56 flashes | +0.2 … +0.5 ms (68 %: +0.24 … +0.54) |
+| 3 | 360 × 320, 200 fps, 3.0 ms, 12 dB | 20 fps, 49.9 ms, mostly saturated | 60 flashes | +0.24 ms ± 0.38 |
+
+Weighted by their uncertainties, the three runs give **IMX265 − ASTRID = +0.25 ± 0.12 ms**: the
+IMX265's stamps probably sit about a quarter of a millisecond late (two standard deviations;
+each run alone allows zero). That fits a small delay from the GPS pulse to the start of the
+exposure, which the profile takes as zero. Not corrected in `timing.py` until confirmed.
+
+Runs 2 and 3: ASTRID clipped most flashes (the whole image at 65472), so its partly lit frames
+(35 and 97 of them) were fitted to the IMX265's light curve (which never saturated) with ASTRID's offset and
+sensitivity free; the dimmer frames, less affected by saturation, give +0.2 … +0.3 ms. Within
+the uncertainties the runs agree: no offset of a frame or a millisecond. Run 3 is noisier: a
+longer ASTRID exposure spreads each edge over more time. To settle it: ASTRID below saturation
+(half scale when lit: a dimmer light or paper over its lens, and a short exposure, i.e. a high
+frame rate), a longer IMX265 exposure (less dead time
+between frames, fewer edges lost in it), 30-50 flashes; then both cameras' edges are timed
+directly and the two methods check each other. Side results: 200 fps GPS-triggered at 360 × 320
+recorded 9500 frames without a gap; at full frame and 54 fps (about 340 MB/s) the recorder lost
+whole 1-s blocks (sequence numbers jump, the camera delivered them).
 
 **Measuring it** (the same LED setup, `--gps-pulse-ms 1`): with a global shutter the LED doesn't
 form a band; it is lit in a frame when the 1 ms flash overlaps that frame's exposure, and its
