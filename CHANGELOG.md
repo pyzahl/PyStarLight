@@ -27,6 +27,8 @@ uses [Semantic Versioning](https://semver.org/).
   window waits for Enter at the end), Player and Analyze (Linux; start scripts in ~/.local/bin,
   remembered and refreshed on each update; `--no-launcher` stops that); `--camera-args` the
   Camera's options (remembered).
+- Wiring diagram (`docs/wiring/capture_wiring.svg`): the field network switch (pin 37 GPIO26 to
+  pin 39 GND) and its LED (pin 38 GPIO20, 330 ohm, pin 34 GND), with the far end of the header.
 - CAPTURE.md: the Pi header pins in use, one table (GPS, compass, hotspot switch GPIO26 / pin 37
   and its LED GPIO20 / pin 38, at the far end of the header, clear of the connector on pins 1-10).
 - `scripts/netswitch.py`: home WiFi or the Pi's own hotspot by a toggle switch on GPIO26 / pin 37

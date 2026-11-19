@@ -68,7 +68,7 @@ The code is the `src/pystarlight/capture/` package (`uv run pystarlight-camera`)
 
 ### Wiring
 
-![Wiring: Pi header pins 2-10 to a custom interconnect, from there to the GPS module and to the camera adapter's J3](docs/wiring/capture_wiring.svg)
+![Wiring: Pi header pins 2-10 to a custom interconnect, from there to the GPS module and to the camera adapter's J3; below, the field network switch on pins 37 / 39 and its LED on pins 38 / 34](docs/wiring/capture_wiring.svg)
 
 The owner's rig, made from ribbon cable and crimped pin-header housings with only the wires that are
 needed fitted:
