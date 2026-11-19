@@ -30,12 +30,15 @@ def driver_combo(entries, current):
     it is not installed here: a remote server may have it)."""
     combo = QtWidgets.QComboBox()
     combo.addItem(NO_DRIVER, "")
-    for label, exe in sorted(entries):
+    for label, exe in sorted(entries, key=lambda e: (e[0].lower(), e[1])):
         combo.addItem(f"{label}  ({exe})", exe)
     if current and combo.findData(current) < 0:
         combo.addItem(f"{current}  (not installed here)", current)
     combo.setCurrentIndex(max(0, combo.findData(current or "")))
     narrow(combo)
+    # a drop-down list that scrolls (Fusion's popup over the box runs off a small screen)
+    combo.setStyleSheet("QComboBox { combobox-popup: 0; }")
+    combo.setMaxVisibleItems(15)
     return combo
 
 
@@ -74,7 +77,8 @@ class MountDock(QtWidgets.QDockWidget):
         g.setSpacing(4)
         r = 0
         self.connect_button = QtWidgets.QPushButton("Connect")
-        self.connect_button.setToolTip("drivers, USB / Wi-Fi, server: menu INDI Telescope Controls, INDI settings")
+        self.connect_button.setToolTip("drivers, USB / Wi-Fi, server: menu INDI Telescope Controls, "
+                                       "INDI settings")
         self.connect_button.clicked.connect(self.on_connect)
         self.state_label = QtWidgets.QLabel("not connected")
         self.state_label.setWordWrap(True)
