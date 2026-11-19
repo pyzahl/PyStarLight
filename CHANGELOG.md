@@ -38,7 +38,8 @@ uses [Semantic Versioning](https://semver.org/).
   hotspot address and the Pi's addresses, so viewers connect without a name warning on either
   network. `home` brings up the known home WiFi by name (in range; highest priority, then the one
   used last): `nmcli device connect wlan0` started the hotspot again a second after taking it down.
-  `pin` reads the switch through `pinctrl` while the service holds the line. CAPTURE.md "Remote screen in the field": VNC
+  `pin` reads the switch through `pinctrl` while the service holds the line; the service logs each
+  switch at once (`journalctl -u pystarlight-netswitch`). CAPTURE.md "Remote screen in the field": VNC
   (wayvnc, Remmina), autologin under SDDM, a fixed screen size without a display.
 - Camera: Focuser window: a number typed into Go to stays until it is used (the half-second
   refresh put the focuser's position back between pressing and releasing Go to); Enter goes

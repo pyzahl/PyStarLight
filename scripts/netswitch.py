@@ -230,7 +230,7 @@ def watch(pin=SWITCH_PIN, led_pin=LED_PIN):
     def apply():
         mode = "hotspot" if pins.closed() else "home"
         try:
-            set_mode(mode)
+            set_mode(mode, log=lambda m: print(m, flush=True))     # straight into the service's log
         except RuntimeError as e:
             print(f"{mode}: {e}", flush=True)
 
