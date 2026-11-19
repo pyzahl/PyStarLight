@@ -6,14 +6,17 @@ indiserver or one already running, config [indi]), the mount's position (J2000, 
 GPS or config site), goto / goto without tracking / sync / tracking / abort / park, and the
 plate-solve loop: Solve & sync (new stack -> solve -> sync) and Center (goto, solve & sync,
 goto again until within CENTER_TOLERANCE_DEG, at most CENTER_ROUNDS times). Network and
-slews run in threads; the dock polls its state twice a second.
+slews run in threads; the dock polls its state twice a second. FocuserDock: the focuser
+(capture/focuser.py) on the same INDI connection: position, steps in / out, go to, a focus mark;
+a focuser alone (no mount driver) connects too.
 """
 import threading
 import time
 
+from . import focuser as fc
 from . import indi, localconfig, station_header
 from . import mount as mt
-from .qt import QtCore, QtWidgets
+from .qt import QtCore, QtGui, QtWidgets
 
 CENTER_TOLERANCE_DEG = 1 / 60
 CENTER_ROUNDS = 4
@@ -57,8 +60,9 @@ class MountDock(QtWidgets.QDockWidget):
                     "host": "localhost", "port": indi.PORT, "mount_connection": "usb", "mount_port": "",
                     **localconfig.section("indi")}
         self.server = self.client = self.mount = None
+        self.focuser = None                      # the Focuser panel's, on the same connection
         self.busy = ""                           # what a worker thread is doing
-        self.error = ""
+        self.error = self.focus_error = ""
         self.job = None                          # Solve & sync / Center state
         self.drivers = indi.drivers_installed()
 
@@ -256,17 +260,28 @@ class MountDock(QtWidgets.QDockWidget):
                     self.server = indi.Server([mount_drv, focus_drv], port=port).start()
                 client = indi.Client(host, port).connect()
                 self.client = client
-                m = mt.Mount(client, timeout=15.0)
-                used = m.set_link(link, link_port)
-                if used:
-                    print(f"mount: {m.device} on {used}")
-                m.connect()
-                site = self.site()
-                if site:
-                    m.set_site(*site)
-                m.set_time()
-                self.mount = m
+                # a focuser alone is fine: the mount is then looked for only briefly
+                mdev = client.find_device(indi.TELESCOPE, 15.0 if mount_drv or not focus_drv else 2.0)
+                fdev = fc.find(client, 10.0 if focus_drv else 1.0)
+                if mdev is None and fdev is None:
+                    raise RuntimeError("no mount or focuser among the INDI devices")
                 self.error = ""
+                if fdev is not None:
+                    try:
+                        self.focuser = fc.Focuser(client, fdev).connect()
+                    except RuntimeError as e:
+                        self.focus_error = str(e)
+                if mdev is not None:
+                    m = mt.Mount(client, mdev)
+                    used = m.set_link(link, link_port)
+                    if used:
+                        print(f"mount: {m.device} on {used}")
+                    m.connect()
+                    site = self.site()
+                    if site:
+                        m.set_site(*site)
+                    m.set_time()
+                    self.mount = m
             except Exception as e:
                 self.error = str(e)
                 self.disconnect_indi()
@@ -287,7 +302,7 @@ class MountDock(QtWidgets.QDockWidget):
             self.client.close()
         if self.server is not None:
             self.server.stop()
-        self.client = self.server = self.mount = None
+        self.client = self.server = self.mount = self.focuser = None
 
     def site(self):
         """(lat, lon, alt_m) from the GPS fix, else the config's [observer] site; None."""
@@ -560,7 +575,8 @@ class MountDock(QtWidgets.QDockWidget):
                 self.home_button.setToolTip("this mount driver offers no home position")
             msg = st["message"]
         else:
-            self.state_label.setText(self.busy or "not connected")
+            self.state_label.setText(self.busy or ("connected, no mount" if self.client is not None
+                                                   else "not connected"))
             if self.tracking_shown is not None:
                 self.set_tint(None)
             self.pos_label.setText("")
@@ -614,3 +630,203 @@ class MountDock(QtWidgets.QDockWidget):
     def shutdown(self):
         self.timer.stop()
         self.disconnect_indi()
+
+
+FOCUS_STEPS = (1, 10, 100, 1000, 10000)
+
+
+class FocuserDock(QtWidgets.QDockWidget):
+    """The focuser on the Mount panel's INDI connection (its driver: Mount → INDI settings):
+    position (and temperature), steps in / out (the step picked, or ten of them), go to a
+    position, abort, and a focus mark to come back to (remembered per focuser)."""
+
+    def __init__(self, main):
+        super().__init__("Focuser", main)
+        self.setObjectName("dock_focuser")
+        self.main = main
+        w = QtWidgets.QWidget()
+        g = QtWidgets.QGridLayout(w)
+        g.setContentsMargins(6, 6, 6, 6)
+        g.setSpacing(4)
+        r = 0
+        self.connect_button = QtWidgets.QPushButton("Connect")
+        self.connect_button.setToolTip("the Mount panel's INDI connection (focuser driver: Mount, "
+                                       "INDI settings)")
+        self.connect_button.clicked.connect(lambda: self.main.mount_dock.on_connect())
+        self.state_label = QtWidgets.QLabel("not connected")
+        self.state_label.setWordWrap(True)
+        g.addWidget(self.connect_button, r, 0)
+        g.addWidget(self.state_label, r, 1, 1, 3)
+        r += 1
+        self.pos_label = QtWidgets.QLabel("")
+        self.pos_label.setStyleSheet("font-size: 16pt; font-weight: bold;")
+        self.pos_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        self.info_label = QtWidgets.QLabel("")
+        self.info_label.setWordWrap(True)
+        g.addWidget(self.pos_label, r, 0, 1, 2)
+        g.addWidget(self.info_label, r, 2, 1, 2)
+        r += 1
+
+        self.step_combo = QtWidgets.QComboBox()
+        self.step_combo.setEditable(True)
+        self.step_combo.setValidator(QtGui.QIntValidator(1, 1000000, self))
+        for s in FOCUS_STEPS:
+            self.step_combo.addItem(str(s))
+        self.step_combo.setToolTip("steps per click (type any number); the double arrows move ten "
+                                   "times as far. A timer focuser: milliseconds")
+        self.step_combo.setCurrentText("100")
+        self.step_combo.currentTextChanged.connect(self.on_step_changed)
+        g.addWidget(QtWidgets.QLabel("Step"), r, 0)
+        g.addWidget(self.step_combo, r, 1)
+        r += 1
+        self.move_buttons = []
+        for col, (text, sign, factor, tip) in enumerate((
+                ("◀◀ In", -1, 10, "in by ten steps"), ("◀ In", -1, 1, "in by one step"),
+                ("Out ▶", 1, 1, "out by one step"), ("Out ▶▶", 1, 10, "out by ten steps"))):
+            b = QtWidgets.QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _=False, s=sign * factor: self.on_move(s))
+            g.addWidget(b, r, col)
+            self.move_buttons.append(b)
+        r += 1
+        self.goto_spin = QtWidgets.QSpinBox()
+        self.goto_spin.setRange(0, 10000000)
+        self.goto_spin.setToolTip("an absolute position (steps)")
+        self.goto_button = QtWidgets.QPushButton("Go to")
+        self.goto_button.clicked.connect(lambda: self.on_goto(self.goto_spin.value()))
+        self.abort_button = QtWidgets.QPushButton("Abort")
+        self.abort_button.setStyleSheet("font-weight: bold;")
+        self.abort_button.clicked.connect(self.on_abort)
+        g.addWidget(self.goto_spin, r, 0, 1, 2)
+        g.addWidget(self.goto_button, r, 2)
+        g.addWidget(self.abort_button, r, 3)
+        r += 1
+        self.mark_button = QtWidgets.QPushButton("Mark focus")
+        self.mark_button.setToolTip("remember this position as the focus (per focuser)")
+        self.mark_button.clicked.connect(self.on_mark)
+        self.back_button = QtWidgets.QPushButton("Back to mark")
+        self.back_button.clicked.connect(lambda: self.on_goto(self.mark()))
+        self.mark_label = QtWidgets.QLabel("")
+        g.addWidget(self.mark_button, r, 0, 1, 2)
+        g.addWidget(self.back_button, r, 2, 1, 2)
+        r += 1
+        g.addWidget(self.mark_label, r, 0, 1, 4)
+        r += 1
+        self.msg_label = QtWidgets.QLabel("")
+        self.msg_label.setWordWrap(True)
+        self.msg_label.setStyleSheet("color: gray;")
+        g.addWidget(self.msg_label, r, 0, 1, 4)
+        g.setRowStretch(r + 1, 1)
+        self.error = ""
+        self.device_shown = None
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidget(w)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.setWidget(scroll)
+        self.timer = QtCore.QTimer(self, timeout=self.poll, interval=500)
+        self.timer.start()
+        self.poll()
+
+    def focuser(self):
+        dock = self.main.mount_dock
+        f = dock.focuser
+        return f if f is not None and dock.client is not None and dock.client.connected else None
+
+    def key(self, name):
+        return f"focuser/{self.device_shown}/{name}"
+
+    def step(self):
+        try:
+            return max(1, int(self.step_combo.currentText()))
+        except ValueError:
+            return 1
+
+    def on_step_changed(self, text):
+        if self.device_shown and text.isdigit():
+            self.main.settings.setValue(self.key("step"), text)
+
+    def run(self, what, *args):
+        f = self.focuser()
+        if f is None:
+            return
+        try:
+            out = what(f, *args)
+            self.error = ""
+            return out
+        except RuntimeError as e:
+            self.error = str(e)
+
+    def on_move(self, factor):
+        self.run(fc.Focuser.move_by, factor * self.step())
+
+    def on_goto(self, position):
+        if position is not None:
+            self.run(fc.Focuser.move_to, position)
+
+    def on_abort(self):
+        self.run(fc.Focuser.abort)
+
+    def mark(self):
+        v = self.main.settings.value(self.key("mark"), None) if self.device_shown else None
+        try:
+            return int(float(v)) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def on_mark(self):
+        f = self.focuser()
+        pos = f.position() if f is not None else None
+        if pos is not None:
+            self.main.settings.setValue(self.key("mark"), int(pos))
+
+    def poll(self):
+        dock = self.main.mount_dock
+        f = self.focuser()
+        self.connect_button.setText("Disconnect" if dock.client is not None else "Connect")
+        self.connect_button.setEnabled(not dock.busy)
+        st = f.status() if f is not None else None
+        if st is not None and st["device"] != self.device_shown:        # a focuser connected
+            self.device_shown = st["device"]
+            step = self.main.settings.value(self.key("step"), None)
+            if step:
+                self.step_combo.setCurrentText(str(step))
+            if st["position"] is not None:
+                self.goto_spin.setValue(int(st["position"]))
+        absolute = st is not None and st["kind"] == "absolute"
+        for b in self.move_buttons:
+            b.setEnabled(st is not None)
+        for b in (self.goto_button, self.goto_spin, self.mark_button):
+            b.setEnabled(absolute)
+        self.abort_button.setEnabled(st is not None)
+        mark = self.mark() if absolute else None
+        self.back_button.setEnabled(mark is not None)
+        self.mark_label.setText(f"mark: {mark}" if mark is not None else "")
+        if st is None:
+            self.state_label.setText(dock.busy or ("connected, no focuser" if dock.client is not None
+                                                   else "not connected"))
+            self.pos_label.setText("")
+            self.info_label.setText("")
+            msg = dock.focus_error if dock.client is not None else ""
+        else:
+            what = "moving" if st["moving"] else "stopped (alert)" if st["alert"] else "idle"
+            self.state_label.setText(f"{st['device']}: {what}")
+            if st["kind"] == "absolute" and st["position"] is not None:
+                self.pos_label.setText(f"{int(st['position'])}")
+                info = f"of {int(st['max'])}" if st["max"] else ""
+            elif st["kind"] == "relative":
+                self.pos_label.setText(f"{st['moved']:+d}")
+                info = "steps since connect (no position read back)"
+            else:
+                self.pos_label.setText("")
+                info = "timer focuser: step = ms"
+            if st["temperature"] is not None:
+                info += f"\n{st['temperature']:.1f} °C"
+            self.info_label.setText(info.strip())
+            msg = ""
+        self.msg_label.setText(self.error or msg)
+        self.goto_spin.setMaximum(int(st["max"]) if st and st["max"] else 10000000)
+
+    def shutdown(self):
+        self.timer.stop()

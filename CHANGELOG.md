@@ -7,6 +7,12 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Camera 1.3.0: **Focuser panel** (Mount menu, Shift+F; `capture/focuser.py`) on the Mount
+  panel's INDI connection, the focuser driver from INDI settings (e.g. `indi_asi_focuser` for a
+  ZWO EAF, package `indi-asi`): position (and temperature), steps in / out (the step picked, or
+  ten of them; remembered per focuser), go to a position, abort, and a focus mark to return to.
+  Relative-only focusers show the steps moved since connect, timer focusers take ms. A focuser
+  alone, without a mount driver, connects too.
 - Camera: **star lock** (Mount menu → Star lock panel, Shift+L; `capture/guider.py`,
   `capture/lock_gui.py`, config `[lock]`). Locks on 2-3 reference stars (never the target),
   corrects the mount with INDI guide pulses through the Mount panel after a short calibration,

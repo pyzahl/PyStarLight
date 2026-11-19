@@ -2763,7 +2763,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.view.update()
 
     def make_telescope_docks(self):
-        from .telescope_gui import MountDock
+        from .telescope_gui import FocuserDock, MountDock
         self.solve_status = QtWidgets.QLabel()         # "plate solving 37 s": busy indicator
         self.solve_status.setToolTip("a plate solve is running (Stack & plate solve: Cancel solve)")
         self.statusBar().addPermanentWidget(self.solve_status)
@@ -2778,6 +2778,13 @@ class MainWindow(QtWidgets.QMainWindow):
         act = self.mount_dock.toggleViewAction()
         act.setText("Mount &panel")
         act.setShortcut(QtGui.QKeySequence("Shift+M"))
+        menu.addAction(act)
+        self.focuser_dock = FocuserDock(self)         # on the Mount panel's INDI connection
+        self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.focuser_dock)
+        self.focuser_dock.hide()
+        act = self.focuser_dock.toggleViewAction()
+        act.setText("&Focuser panel")
+        act.setShortcut(QtGui.QKeySequence("Shift+F"))
         menu.addAction(act)
         menu.addAction("INDI &settings…", self.mount_dock.show_settings)
         self.lock_dock = None
@@ -2802,6 +2809,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.solve_cancel is not None:
             self.solve_cancel.set()
         self.settings.setValue("dock_state", self.saveState())
+        self.focuser_dock.shutdown()
         self.mount_dock.shutdown()
         if self.lock_dock is not None:
             self.lock_dock.shutdown()

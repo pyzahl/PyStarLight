@@ -857,7 +857,27 @@ and the program runs `indiserver` with them.
   A driver with `EQUATORIAL_COORD` gets J2000 as it is.
 
 The INDI client (`capture/indi.py`) and the mount (`capture/mount.py`) use only the standard
-library (the Pi's system Python). Tested against INDI 1.9.9's telescope simulator (goto, sync,
+library (the Pi's system Python).
+
+**Focuser panel** (menu **Mount**, Focuser panel, or Shift+F; a dock like the Mount panel) runs on
+the same INDI connection: pick the **Focuser driver** in INDI settings (ZWO EAF:
+`indi_asi_focuser`, `sudo apt install indi-asi`; Connect works from either panel, and a focuser
+alone, without a mount driver, connects too).
+
+- **Position** in steps, of the focuser's maximum, and its temperature when it has a probe; idle /
+  moving / stopped (alert).
+- **Step** (1 .. 10000 or typed; remembered per focuser): **◀ In** / **Out ▶** move one step,
+  **◀◀ In** / **Out ▶▶** ten; **Go to** a position; **Abort**.
+- **Mark focus** remembers the position (per focuser), **Back to mark** returns to it (e.g. after
+  a filter or a flip).
+- Absolute focusers (the EAF, most steppers) get absolute targets, kept within 0 .. maximum.
+  Relative-only ones get the direction, then the steps, and show the steps moved since connect;
+  timer (DC) focusers take the step as milliseconds.
+
+Tested against INDI's focuser simulator (`capture/focuser.py`, standard library only); not yet on
+the EAF.
+
+The mount: tested against INDI 1.9.9's telescope simulator (goto, sync,
 tracking off after a slew, the Center loop); not yet on the AM5. Next: pre-pointing a favorite
 (goto ahead with tracking, or the fixed-alt/az point for a mount that does not track) and EAF
 autofocus from the stars' FWHM.
