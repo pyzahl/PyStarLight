@@ -266,6 +266,9 @@ def solve_local(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0,
            '--wcs', dest, '--new-fits', 'none', '--corr', 'none', '--match', 'none',
            '--rdls', 'none', '--index-xyls', 'none', '--temp-axy', '--crpix-center',
            '--cpulimit', str(int(timeout))]
+    import tempfile                         # solve-field's own temp files (tmp.axy.*, tmp.ppm.*): in a folder
+    tmpdir = tempfile.mkdtemp(prefix='pystarlight-solve-')   # of ours, removed after (killed runs left them in /tmp)
+    cmd += ['--temp-dir', tmpdir]
     if scale_arcsec:
         err = scale_err_pct / 100.0
         cmd += ['--scale-units', 'arcsecperpix', '--scale-low', f'{scale_arcsec * (1 - err):.4f}',
@@ -288,8 +291,12 @@ def solve_local(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0,
     t0 = time.monotonic()
     # a session of its own: cancel / timeout end solve-field and the astrometry-engine it starts
     # (which otherwise keeps a core busy until its CPU limit)
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                            start_new_session=True)
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                start_new_session=True)
+    except OSError:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
     th = threading.Thread(target=reader, args=(proc,), daemon=True)
     th.start()
     try:
@@ -303,6 +310,7 @@ def solve_local(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0,
     finally:
         _end_group(proc)
         th.join(2)
+        shutil.rmtree(tmpdir, ignore_errors=True)
     if not os.path.exists(dest):
         raise RuntimeError('local astrometry.net could not solve the image'
                            + (f' ({tail[-1]})' if tail else ''))

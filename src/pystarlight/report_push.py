@@ -117,7 +117,7 @@ def drop_in_inbox(path, inbox: str) -> Path:
     stamp = re.sub(r'\D', '', str(js.get('created_utc') or ''))[:14]
     name = Path(path).name
     dest = d / (f'{stamp}_{name}' if stamp else name)
-    fd, tmp = tempfile.mkstemp(dir=d, suffix='.tmp')
+    fd, tmp = tempfile.mkstemp(prefix='pystarlight-', dir=d, suffix='.tmp')
     with os.fdopen(fd, 'wb') as f:
         f.write(Path(path).read_bytes())
     os.replace(tmp, dest)
