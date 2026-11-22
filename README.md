@@ -26,11 +26,12 @@ programs behind it:
   - magnitude histograms;
   - an `event.json` with every detail of the event, which can go straight to PySyzygos'
     observation report.
-- **`pystarlight camera`, capture on a Raspberry Pi 5 (experimental)** (camera 1.4.0). It
+- **`pystarlight camera`, capture on a Raspberry Pi 5 (experimental)** (camera 1.5.0). It
   records frames GPS-triggered and stamped in UTC (VEYE MIPI and Aravis cameras, u-blox GPS)
   to RAVF or SER; ZWO ASI cameras and any `/dev/video` device (e.g. an analog grabber)
   free-run with the computer's time stamps. It has a live stack and plate solve, a mount
-  panel (INDI: goto, solve & sync, centring), a focuser window (e.g. ZWO EAF) with a live focus curve and a star lock that holds reference stars by
+  panel (INDI: goto, solve & sync, centring), polar alignment by plate solves with a live arrow
+  for the Alt / Az knobs, a focuser window (e.g. ZWO EAF) with a live focus curve and a star lock that holds reference stars by
   guide pulses and plots the target's flux live. Every recording carries the station and
   equipment data, the GPS position and (RAVF) the target. Tonight's events can be loaded from a
   [PySyzygos](https://github.com/pyzahl/PySyzygos) favorites server: target star, asteroid

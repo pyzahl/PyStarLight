@@ -228,6 +228,7 @@ class ImageView(QtWidgets.QWidget):
         self.markers = []           # [(x, y, radius, text, QColor)]: ticks around, star left free
         self.banner = ""            # shown at the bottom (e.g. while the stack is displayed)
         self.cursor_img = None      # image point under the mouse
+        self.polar = None           # the Polar alignment window's marks (polar_gui.paint_overlay)
 
     def reset_view(self):
         self.zoom, self.center = 1.0, None
@@ -321,6 +322,9 @@ class ImageView(QtWidgets.QWidget):
             if text:
                 p.drawText(QtCore.QPointF(cx + rs + 3, cy - 3), text)
         self.paint_markers(p)
+        if self.polar:
+            from .polar_gui import paint_overlay
+            paint_overlay(self, p, self.polar)
         if self.crosshair and self.img_size:
             self.paint_crosshair(p)
         if self.compass:
@@ -2767,9 +2771,10 @@ class MainWindow(QtWidgets.QMainWindow):
         dock = getattr(self, "mount_dock", None)
         if dock is not None:
             dock.set_night(on)
-        window = getattr(self, "focuser_window", None)
-        if window is not None:
-            window.set_night(on)
+        for name in ("focuser_window", "polar_window"):
+            window = getattr(self, name, None)
+            if window is not None:
+                window.set_night(on)
         self.redraw = True
         self.view.update()
 
@@ -2795,6 +2800,11 @@ class MainWindow(QtWidgets.QMainWindow):
         act = menu.addAction("&Focuser window")
         act.setShortcut(QtGui.QKeySequence("Shift+F"))
         self.focuser_window.bind_action(act)
+        from .polar_gui import PolarWindow
+        self.polar_window = PolarWindow(self)         # a window of its own, on the same connection
+        act = menu.addAction("&Polar alignment window")
+        act.setShortcut(QtGui.QKeySequence("Shift+P"))
+        self.polar_window.bind_action(act)
         menu.addAction("INDI &settings…", self.mount_dock.show_settings)
         self.lock_dock = None
         if getattr(self.c, "locker", None) is not None:   # star lock (lock_gui.py, guider.py)
@@ -2820,6 +2830,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings.setValue("dock_state", self.saveState())
         self.focuser_window.shutdown()
         self.focuser_window.close()
+        self.polar_window.shutdown()
+        self.polar_window.close()
         self.mount_dock.shutdown()
         if self.lock_dock is not None:
             self.lock_dock.shutdown()

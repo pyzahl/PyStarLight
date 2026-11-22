@@ -31,6 +31,7 @@ from .cameras import CameraSession, find_cameras, open_camera, pixel_um, select_
 from .decode import format_bits
 from .focus import FocusMeter
 from .guider import LockThread, Settings, StarLock
+from .polar import STAR_BOX as POLAR_BOX
 from .recorder import RECORD_FORMATS, Recorder, file_tag
 from .recorder import main as repair_main
 from .stacker import LiveStacker
@@ -349,6 +350,9 @@ def main(argv=None):
         s.grabber.locker = s.locker
         s.focus = FocusMeter(s.decode_raw, full_scale=s.decode.max_value)   # Focuser window
         s.grabber.focus = s.focus
+        # the Polar alignment window's star, followed while the knobs move it (polar_gui.py)
+        s.polar = FocusMeter(s.decode_raw, full_scale=s.decode.max_value, r=POLAR_BOX, follow=POLAR_BOX)
+        s.grabber.polar = s.polar
 
         # the GUI's imports (Qt: ~1 s) before streaming, so they don't starve the grabber
         from .gui import MainWindow
@@ -386,6 +390,8 @@ def main(argv=None):
                 session.locker.close()
             if session.focus is not None:
                 session.focus.close()
+            if getattr(session, "polar", None) is not None:
+                session.polar.close()
             if session.controller is not None and session.controller.is_alive():
                 session.controller.stop()
                 session.controller.join(timeout=2)

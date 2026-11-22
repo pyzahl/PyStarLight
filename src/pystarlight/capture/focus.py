@@ -110,11 +110,14 @@ def fit_curve(points):
 class FocusMeter(threading.Thread):
     """Measures the focus star on frames from the grabber (wants() / put(), as the star lock).
     ask('center') / ask('at', x, y) chooses the star on the next frame, ask('stop') ends.
-    samples: [(monotonic t, hfd, fwhm, peak)] while measuring; star: (x, y) or None."""
+    samples: [(monotonic t, hfd, fwhm, peak)] while measuring; star: (x, y) or None.
+    follow: how far (px) the star may move from one frame to the next and still be followed
+    (default r / 2; the Polar alignment window's follower: the whole box, the knobs move it)."""
 
-    def __init__(self, decode, full_scale=None, r=BOX_R):
+    def __init__(self, decode, full_scale=None, r=BOX_R, follow=None):
         super().__init__(daemon=True)
         self.decode, self.full_scale, self.r = decode, full_scale, r
+        self.follow = r / 2 if follow is None else follow
         self.inbox = queue.Queue(maxsize=1)
         self.request = None
         self.star = None
@@ -176,7 +179,7 @@ class FocusMeter(threading.Thread):
             return
         self.missed = 0
         self.state, self.note = "measuring", ""
-        if np.hypot(m["x"] - self.star[0], m["y"] - self.star[1]) < self.r / 2:
+        if np.hypot(m["x"] - self.star[0], m["y"] - self.star[1]) < self.follow:
             self.star = (m["x"], m["y"])            # follow it (drift)
         core = measure(img, *self.star, min(self.r, 15))
         self.samples.append((t, m["hfd"], core["fwhm"] if core else float("nan"), m["peak"]))

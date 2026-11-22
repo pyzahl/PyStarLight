@@ -7,6 +7,18 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Camera 1.5.0: **Polar alignment** window (menu INDI Telescope Controls, Shift+P;
+  `capture/polar.py`, `capture/polar_gui.py`, config `[polar_align]`). Stack + plate solve, sync,
+  turn the RA axis only (a goto at the mount's own Dec), solve again: the RA axis from two points
+  and the turn the mount reports, or from the plane through three points (the two-point answer as
+  a check); refraction put in. Any field with stars works, Polaris (σ Oct) is optional, so a
+  limited horizon is fine: the allowed range is the RA step, the direction (auto: the side that
+  stays highest), a minimum altitude along the whole way, and no meridian crossing (a German
+  mount would flip). Then a star near the centre (or one clicked) is followed live while the
+  Alt / Az knobs turn: the window shows what is left ("Alt: raise 12.3′", "Az: move east
+  4.1′", the error left, ✓ aligned under 2′), the image an arrow from the star along the Az leg,
+  then the Alt leg, to a ring, and the pole and the RA axis when they are near the field.
+  **Refresh** plate-solves again (knobs at rest) and re-bases the model. Not yet on the sky.
 - Camera 1.4.0: the Focuser is a **window of its own** (menu INDI Telescope Controls, Shift+F;
   closed when done, place and size remembered; `capture/focuser_gui.py`) instead of a panel, and
   has a **focus curve** (`capture/focus.py`): a star (Centre star: the brightest unsaturated one

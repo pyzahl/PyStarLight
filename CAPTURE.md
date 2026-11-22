@@ -974,6 +974,62 @@ tracking off after a slew, the Center loop); not yet on the AM5. Next: pre-point
 (goto ahead with tracking, or the fixed-alt/az point for a mount that does not track) and EAF
 autofocus from the stars' FWHM.
 
+## Polar alignment
+
+The **Polar alignment** window (menu **INDI Telescope Controls**, Polar alignment window, or
+Shift+P; a window of its own, place and size remembered) tells how far to turn the mount's Alt
+and Az knobs after a rough set-up in the field, and shows on the live image where a star has to
+go while you turn them. It uses the [Mount panel](#mount-and-focuser-indi)'s connection and the
+camera window's stack and plate solve (`capture/polar.py` the method, `capture/polar_gui.py`
+the window; config `[polar_align]`, the window saves its choices there).
+
+**Measure:**
+
+1. (**Start: near Polaris**: a goto to Polaris, σ Oct in the south, first. Optional: any field
+   with stars works, so a horizon that hides the pole is fine.)
+2. A stack, plate-solved; the mount is synced to it.
+3. The RA axis turns by the **RA step** (default 30°): a goto to the mount's own Dec, so only
+   the RA axis moves. Then a stack and plate solve again (for **3 points** once more).
+4. Each solved field centre, as a direction fixed to the ground (refraction put in: the
+   telescope points at the raised star), lies on a circle around the mount's real RA axis,
+   wherever the camera sits on the mount:
+   - **2 points:** the axis is the one about which the first field turns into the second by the
+     angle the RA axis turned, which is the change of the mount's own hour angle. A mount synced
+     once turns its axis exactly as it reports.
+   - **3 points:** the axis is the normal of the plane through the three fields (no angle
+     needed); the two-point answer from the outer fields is shown as a check.
+5. The axis against the true celestial pole gives the turns: **Alt: raise / lower**, **Az: move
+   east / west** (the axis' north end; south: its south end), and the total error.
+
+**Where the RA axis may turn** (the allowed range): the step, the **Direction** (auto: the side
+whose path stays highest; or west / east), a **Min. altitude** that the field must stay above on
+the whole way (trees, houses), and **may cross the meridian** (off by default: a German mount
+would flip there, and a flip moves the Dec axis, which spoils the measurement). When neither
+side fits, the window says why. Larger steps are more accurate (the solve's error over the
+chord); 20-40° is usual. A field near the meridian at medium height, or near the pole, responds
+well to both knobs; low in the east or west the Alt knob barely moves the field (the window
+warns: "the Alt knob barely moves this field").
+
+**Adjust:** the mount keeps tracking; the brightest unsaturated star near the centre is
+followed on the live frames (**Pick star**: the one clicked next). Its position gives the knob
+turns made so far (two turns for the star's two coordinates; tracking about the measured axis
+is modelled, so a slow drift does not count as a turn). The window shows what is left, the
+image an arrow: from the star (green box, red when lost) along the **yellow Az leg**, then
+the **blue Alt leg**, to the **green ring**, where the star sits once the axis is on the pole.
+Turn either knob first: the numbers follow. Below 2′ (`good_arcmin`) it shows ✓ aligned. When
+the pole and the RA axis are near the field (near Polaris), both are marked, as in a polar
+scope: bring the pole onto the axis.
+
+**Refresh** (knobs at rest) plate-solves the field again: the turns made follow from the new
+solution, the model is re-based on it, and the star is picked again. Use it after big turns, a
+lost star, or as a final check. **Measure again** starts afresh (e.g. once close, with a larger
+step). Closing the window stops the following.
+
+Limits: the knobs are taken as turning the whole mount about the vertical (Az) and about the
+horizontal axis across the pole's direction (Alt), which is near enough for a mount set up
+roughly north (the error of that is second order). Tested on simulated mounts and fields only,
+not yet on the sky.
+
 ## Timestamps: what the recordings hold
 
 **Which instant of the exposure** a recording's time stamps mark is in its header,

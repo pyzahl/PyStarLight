@@ -205,7 +205,8 @@ class CameraSession:
         self.stream = None
         self.stream_lock = threading.Lock()         # held while the stream is replaced
         self.acquiring = False
-        self.controller = self.grabber = self.recorder = self.stacker = self.locker = self.focus = None
+        self.controller = self.grabber = self.recorder = self.stacker = None
+        self.locker = self.focus = self.polar = None
         self.gps = self.compass = None
         self.sysclock = None             # sysclock.SystemClock (Pi clock from GPS UTC)
         self.pixel_um = (getattr(camera, "pixel_um", None)  # um, for the plate-scale hint

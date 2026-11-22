@@ -280,6 +280,7 @@ def test_camera_window_docks_hidden_toggled_remembered(monkeypatch, tmp_path):
         w.make_telescope_docks()
         w.mount_dock.timer.stop()
         w.focuser_window.timer.stop()
+        w.polar_window.timer.stop()
         return w
 
     w = window()

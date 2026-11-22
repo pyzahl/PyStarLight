@@ -28,6 +28,7 @@ class Grabber(threading.Thread):
         self.stacker = None         # LiveStacker: gets a raw copy of a frame when it is free
         self.locker = None          # guider.LockThread (star lock): the same, when it is free
         self.focus = None           # focus.FocusMeter (Focuser window): the same
+        self.polar = None           # focus.FocusMeter following a star (Polar alignment window)
         # Count frames missing from gaps in the frame timing too: the Pi's CSI-2 receiver
         # drops frames without a sequence gap when no buffer is free. frame_period_ns():
         # expected spacing when free-running (None: don't check, e.g. triggered).
@@ -161,6 +162,9 @@ class Grabber(threading.Thread):
             focus = self.focus
             if focus is not None and focus.wants():
                 focus.put(buf.get_data(), exp_ns)
+            polar = self.polar
+            if polar is not None and polar.wants():
+                polar.put(buf.get_data(), exp_ns)
             with self.lock:
                 old, self.latest = self.latest, (buf, fid, exp_ns)
             if old is not None:                 # GUI didn't want it in time -> recycle
