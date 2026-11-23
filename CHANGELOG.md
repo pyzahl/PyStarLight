@@ -7,6 +7,9 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Player 1.1.0: a recording **dragged from a file manager** (Thunar, Nautilus, Dolphin ...) onto
+  the window opens (a FITS frame: its folder); a file that does not open leaves the one shown
+  as it was (also from the dialog: the new file is opened before the old one is closed).
 - Camera 1.5.0: **DSLR window** (menu DSLR, Shift+C; `capture/dslr.py`, `capture/dslr_gui.py`,
   extra `dslr`: python-gphoto2 + rawpy, config `[dslr]`): a DSLR or mirrorless camera as a second,
   photo-only camera while the video camera keeps streaming, recording and tracking. ISO,
@@ -29,6 +32,18 @@ uses [Semantic Versioning](https://semver.org/).
   card. Start: as programmed, or shifted so the program or a reference (C1, C2, ...) comes in
   15 s. Dry run without a camera, fast-forward or on time, as a Markdown list + CSV (GUI, and
   `python -m pystarlight.capture.schedule`). The tab is laid out as the Sony app's screen. DSLR files are named as the recordings: `<model>_<asteroid>_<star>_<UTC>Z_photo.*`.
+- Camera: DSLR photos **plate-solved and annotated as the video camera's stack** (`capture/photo_solve.py`;
+  the marker code moved out of gui.py into `capture/marks.py`, shared): the WCS (RA / Dec <-> pixel),
+  centre, scale, named stars and the target's pixel into the photo's FITS (its mosaic unchanged),
+  `.wcs.fit`, `.solve.json` and an annotated colour PNG beside it; the markers on the DSLR window's
+  photo; `python -m pystarlight.capture.photo_solve` for photos afterwards. `solve_stack` takes a
+  timeout for the whole-sky solve (a DSLR photo without a scale hint: `[dslr] solve_timeout_s`).
+- Camera: `photo_solve` takes camera files (ARW, CR2, NEF, DNG, JPG; FITS to `-o DIR`), `--focal`
+  / `--camera` for the scale hint; the annotated PNG stretched for the sky (asinh from the sky
+  level) with the camera window's tick markers. `capture/photo_stack.py`: colour stacks of DSLR
+  photos aligned by their plate solutions (homography; drift and field rotation), weighted
+  mean with leave-one-out kappa-sigma clipping, the stack solved and annotated. Tried on the
+  owner's 2017 A7R II + K150 (3000 mm) photos of M31.
 - Camera: gui.py split: `imageview.py` (ImageView, RecordOverlay), `widgets.py` (night theme,
   CollapsibleBox, LevelsBox, zscale), `station_dialog.py`; `gui` still offers the names.
   `stacker.write_fits` writes uint16 (BZERO) and planes (n, h, w) too.

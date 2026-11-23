@@ -374,12 +374,34 @@ def label_grid(grid, rows, start=0):
     return labels
 
 
+RECORDINGS = (".ravf", ".ser", ".adv", ".aav", ".avi", ".mov", ".fits", ".fit", ".fts")
+FITS_EXT = (".fits", ".fit", ".fts")
+
+
+def dropped_path(mime):
+    """The recording in a drag's data (a file manager: Thunar, Nautilus, Dolphin ... send file
+    URLs): the first local file with a recording's extension (a FITS frame: its folder), or a
+    folder (of FITS frames); None when there is none."""
+    if mime is None or not mime.hasUrls():
+        return None
+    for url in mime.urls():
+        if not url.isLocalFile():
+            continue
+        p = url.toLocalFile()
+        if os.path.isdir(p):
+            return p
+        if p.lower().endswith(RECORDINGS) and os.path.isfile(p):
+            return os.path.dirname(p) if p.lower().endswith(FITS_EXT) else p
+    return None
+
+
 class PlayerWindow(QtWidgets.QMainWindow):
     timing_ready = Signal()
 
     def __init__(self, path=None, focal_mm=None, pixel_um_=None):
         super().__init__()
         self.settings = QtCore.QSettings("PyStarLight", "review")   # its name before: keeps the layout
+        self.setAcceptDrops(True)           # a recording dropped from a file manager opens
         self.mv = None
         self.path = None
         self.index = 0
@@ -570,21 +592,43 @@ class PlayerWindow(QtWidgets.QMainWindow):
                  self.settings.value("last_dir", "", type=str) or os.path.expanduser("~/data"))
         p, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, "Open recording", start,
-            "Recordings (*.ravf *.ser *.adv *.aav *.avi *.mov *.fits *.fit *.fts);;All files (*)")
+            "Recordings (" + " ".join(f"*{e}" for e in RECORDINGS) + ");;All files (*)")
         if not p:
             return False
-        if p.lower().endswith((".fits", ".fit", ".fts")):
+        if p.lower().endswith(FITS_EXT):
             p = os.path.dirname(p)              # a FITS folder: one frame per file
         self.open(p)
         return True
 
+    # ---- drag and drop from a file manager ----
+    def dragEnterEvent(self, e):
+        if dropped_path(e.mimeData()) is not None:
+            e.acceptProposedAction()
+        else:
+            e.ignore()
+
+    def dragMoveEvent(self, e):
+        self.dragEnterEvent(e)
+
+    def dropEvent(self, e):
+        path = dropped_path(e.mimeData())
+        if path is None:
+            e.ignore()
+            return
+        e.acceptProposedAction()
+        try:
+            self.open(path)
+        except Exception as ex:                 # not a recording after all: say so, keep the old one
+            self.statusBar().showMessage(f"cannot open {os.path.basename(path)}: {ex}", 10000)
+
     def open(self, path):
         from ..movie import open_movie
+        new = open_movie(str(path))             # first: a file that does not open changes nothing
         self.stop_play()
         if self.mv is not None:
             self.mv.close()
         self.path = str(path)
-        self.mv = open_movie(self.path)
+        self.mv = new
         self.settings.setValue("last_dir", os.path.dirname(os.path.abspath(self.path)))   # the next dialog
         n = len(self.mv)
         self.setWindowTitle(f"PyStarLight player {PLAYER_VERSION} - {os.path.basename(self.path)}")

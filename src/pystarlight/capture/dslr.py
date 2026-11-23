@@ -52,6 +52,15 @@ GVFS_HINT = ("the desktop's file manager holds the camera (gvfs): close its wind
              "'pkill -f gvfs-gphoto2-volume-monitor; pkill -f gvfsd-gphoto2', or set it to "
              "PC / PTP mode without the card mounted")
 MAX_BULB_S = 1800.0
+# pixel pitch (um) of DSLRs by model, for the plate-scale hint ([dslr] pixel_um overrides)
+DSLR_PIXEL_UM = {"A7R II": 4.51, "A7RII": 4.51, "ILCE-7RM2": 4.51, "D7000": 4.78}
+
+
+def pixel_um_of(model):
+    m = str(model or "").upper().replace("-", " ").replace("_", " ")
+    return next((um for k, um in DSLR_PIXEL_UM.items() if k.upper().replace("-", " ") in m), None)
+
+
 BAYER_GENICAM = {"RGGB": "BayerRG", "BGGR": "BayerBG", "GRBG": "BayerGR", "GBRG": "BayerGB"}
 
 
@@ -192,14 +201,17 @@ def decode(name, data):
 
 def preview_rgb(img, width=900):
     """An 8-bit RGB (h, w, 3) quick look of a photo: debayered with the camera's white balance,
-    black level off, stretched (99.7 % of the light, square root), at most `width` wide."""
+    black level off, at most `width` wide, stretched for the sky (stretch_rgb)."""
     import cv2
 
     from .decode import BAYER_CODES
     if img.kind == "rgb":
         rgb = img.data.transpose(1, 2, 0)
         scale = width / rgb.shape[1]
-        return cv2.resize(rgb, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1 else rgb
+        if scale < 1:
+            rgb = cv2.resize(rgb, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        # a JPEG is shown as it is; linear RGB (a stack) is stretched for the sky
+        return rgb if rgb.dtype == np.uint8 else stretch_rgb(rgb.astype(np.float32))
     m = img.data
     if img.pattern is None:                     # not Bayer: grey
         bgr = np.repeat(m[..., None], 3, axis=2)
@@ -210,9 +222,22 @@ def preview_rgb(img, width=900):
         bgr = cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
     rgb = bgr[..., ::-1].astype(np.float32) - img.black
     rgb *= np.array(img.wb, np.float32)
-    lo, hi = np.percentile(rgb[::2, ::2].mean(axis=2), (5.0, 99.7))
-    out = np.sqrt(np.clip((rgb - lo) / max(hi - lo, 1e-3), 0.0, 1.0))
-    return (out * 255).astype(np.uint8)
+    return stretch_rgb(rgb)
+
+
+def stretch_rgb(rgb):
+    """8-bit RGB of linear RGB: black at the sky (the median), asinh with its knee at 8 x the sky
+    noise, white at 99.97 % of the light: a dark sky, faint stars and a bright core alike (a
+    noisy high-ISO frame does not turn grey)."""
+    lum = rgb[::2, ::2].mean(axis=2)
+    bg = float(np.median(lum))
+    noise = 1.4826 * float(np.median(np.abs(lum - bg)))
+    hi = float(np.percentile(lum, 99.97))
+    span = max(hi - bg, 1e-3)
+    soft = max(8.0 * noise, 0.02 * span)
+    k = span / soft
+    out = np.arcsinh(np.clip((rgb - bg) / span, 0.0, None) * k) / np.arcsinh(k)
+    return (np.clip(out, 0.0, 1.0) * 255).astype(np.uint8)
 
 
 def fits_cards(img, shot, header_cards):

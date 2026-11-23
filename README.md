@@ -38,7 +38,7 @@ programs behind it:
   equipment data, the GPS position and (RAVF) the target. Tonight's events can be loaded from a
   [PySyzygos](https://github.com/pyzahl/PySyzygos) favorites server: target star, asteroid
   and the recording window are filled in for you.
-- **`pystarlight player`, a player that knows about time** (player 1.0.0). Unlike a normal
+- **`pystarlight player`, a player that knows about time** (player 1.1.0). Unlike a normal
   video player it shows each frame's UTC and GPS status, checks the time stamps (dropped,
   duplicated and irregular frames), and stacks and plate-solves a frame range.
 

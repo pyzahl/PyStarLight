@@ -559,7 +559,9 @@ status and the step to the previous frame, and marks dropped, duplicated and irr
 FITS frame standing for its folder), or **Play last clip** in the camera
 app's Recording box (starts it as its own process, on the file just recorded; with the system
 Python it uses the repo's `.venv`). Reads RAVF, SER, ADV/AAV, AVI and FITS folders
-(`open_movie`, also unfinished recordings).
+(`open_movie`, also unfinished recordings). A recording **dragged from a file manager** (Thunar,
+Nautilus, Dolphin ...) onto the window opens too (a FITS frame: its folder); one that does not
+open leaves the recording shown as it was, with a note in the status bar.
 
 - **Frame**: number, UTC, step to the previous frame against the typical step, the problem at
   this frame, and for RAVF the frame header: sequence number, exposure, GPS satellites, fix,
@@ -1196,7 +1198,66 @@ after the planned slots**; the EXIF has the shutter and ISO as programmed; the A
   still taken. The log has the program's values and, in `camera_settings`, the camera's own
   shutter / ISO / aperture at the release (here `0.8 ISO800 f/0` where f/5.6 was programmed).
 
-The FITS has no WCS yet: the video camera's plate solution belongs to another camera. To solve
+**Plate solve** (the DSLR window's *Plate solve*, on by default): each photo is solved and annotated
+as the video camera's stack is (`capture/photo_solve.py`; the markers: `capture/marks.py`, shared
+with the camera window): the same solve (local solve-field or nova; near the mount's position,
+then the whole sky), on the photo's mosaic debayered to one luminance image at full size, so the
+solution is in the FITS's own pixels; the brightest stars named from the catalogues with their
+magnitudes (as many as the camera window's markers), the target (T) and verify star (V) of the
+Recording panel looked up, the target checked for a star at its place. Written:
+
+- into the photo's FITS (its uint16 mosaic unchanged): the WCS (RA / Dec <-> pixel, SIP
+  distortion terms), `RA`, `DEC`, `OBJCTRA`, `OBJCTDEC` of the centre, `PIXSCALE`, `NORTHDEG`,
+  `MIRRORED`, `FIELDW` / `FIELDH`, `STAR1` .. (name ra dec x y), `TRGX` / `TRGY` (the target's
+  pixel), `PLTSOLVD`; solved again, the old cards are replaced;
+- beside it: `<photo>.wcs.fit` (astrometry.net's solution), `<photo>.solve.json` (the result and
+  the markers), `<photo>_annotated.png` (the photo in colour, the markers, N / E, the centre).
+
+The window shows the markers on the photo and the solve's notes. The plate-scale hint is
+`[dslr] focal_mm` with the pixel pitch (`[dslr] pixel_um`, else a known camera's: A7R II 4.51 um,
+D7000 4.78 um): without it the solve is blind and gives up after `[dslr] solve_timeout_s` (120 s).
+A 42 MP photo takes about half a minute to prepare (read, debayer, hot pixels) on a desktop
+before the solve starts. Program photos are not solved as they come (the cadence); afterwards:
+
+```
+uv run python -m pystarlight.capture.photo_solve PHOTO.fits [...] [--target NAME] [--verify NAME]
+    [--stars 5] [--scale ARCSEC] [--timeout 120] [--no-simbad]
+```
+
+(their FITS: the program's file mode *files + FITS*). It also takes the camera's own files (ARW,
+CR2, NEF, DNG, JPG, e.g. from an archive): their FITS is written to `-o DIR` first (never beside
+them), named after the file; `--focal 3000 --camera "Sony Alpha-A7r II"` gives the scale hint,
+`--utc` the time (else the file's).
+
+The annotated PNG shows the photo stretched for the sky (black at the sky's level, asinh with
+its knee at 8 x the sky noise), the markers as on the camera window (four ticks around each star,
+the label on a dark box), N / E and the field.
+
+Tried on the owner's 2017 A7R II photos through the K150 (3000 mm; no lens data in the EXIF):
+DSC02154, M31's core, solved blind in 18 s (0.330"/px: 2820 mm effective); with the scale hint
+7-9 s (DSC02109, DSC02148); a 42 MP photo takes about 15 s more to read, debayer and name.
+
+### Stacking photos
+
+```
+uv run python -m pystarlight.capture.photo_stack PHOTOS... -o DIR [--focal 3000 --camera NAME]
+    [--bin 2] [--kappa 3] [--target NAME]
+```
+
+`capture/photo_stack.py`: each photo (our FITS or a camera file) plate-solved, debayered with the
+camera's white balance, black level off, and mapped onto the first photo's pixels by a homography
+fitted through both plate solutions: drift, field rotation and scale in one warp, no star
+matching. Averaged with a weight map; from 5 photos on, a second pass leaves out what lies too far from
+the *other* photos' mean (with the spread of all of them a single outlier could never reach
+3 sigma in a small stack): hot pixels that moved with the drift, satellites, planes. "Too far"
+is Student's t for the few others (their sample sigma, sqrt(1 + 1/m) for one new value), set
+to leave out as little of the noise as `--kappa` sigma would of a normal distribution (3:
+0.27 %): 10.3 sigma with 4 others, 4.0 with 11, towards 3 for many. (A plain 3 sigma against 4
+others' spread clipped 10.6 % of an A7R II stack: noise, not outliers.) The stack: `<first>_stack<N>.fits` (R, G, B planes, float32, NCOMBINE, summed
+EXPTIME, DATE-OBS / DATE-END), solved and annotated as a photo. Memory: a 42 MP frame in RGB float32
+is about 0.5 GB, the stack holds a few such images (`--bin 2`: a quarter). Test: DSC02212-02216
+(5 x 10 s, ISO 32000; drifting 310 px in 1.7 minutes): stacked and solved in under 4 minutes, M31's
+core. To solve
 a photo: `uv run python -m pystarlight.wcs.solve_stack PHOTO.fits` (after debayering, or as it is
 for a bright field). Next: a plate solve of the photo.
 
@@ -1483,6 +1544,14 @@ every other pulse once that's exceeded; watch `lost` in the status bar.
 - An "LED off" option for the y-trigger: the off edge needs only a short delay, so no pulses are
   skipped. It needs the pulse length (`min(100 ms, period / 4)`, as `set_timepulse` sets it; 100
   ms after a GPS power cycle).
+- **Calibration frame helpers** (owner's to-do, 2026-11-23): guided series of darks, flats, bias
+  and dark flats for the video camera and the DSLR (matching exposure / ISO / gain / temperature,
+  counts, the cap-on / flat-panel prompts), marked in the files (IMAGETYP), and used by the
+  stacking (`calibrate.py` masters for video, the same for DSLR photos).
+- **File organisation** (owner's to-do, 2026-11-23): review and plan the folders: recordings,
+  snapshots, stacks, DSLR photos and their FITS / solutions / annotated PNGs, program logs and
+  dry runs, calibration frames; per night / per event / per target, and what goes where by
+  default (today everything lands flat in the recording folder, `~/data`).
 
 ## Star lock and live flux
 

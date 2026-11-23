@@ -86,13 +86,16 @@ def solve_stack(image: np.ndarray, header: dict, n_stars: int = 5, workdir: str 
                 use_simbad: bool = True, site: Optional[dict] = None,
                 log: Callable[[str], None] = print,
                 cancel: Optional[threading.Event] = None,
-                center: Optional[tuple[float, float]] = None, radius_deg: float = 2.0) -> dict:
+                center: Optional[tuple[float, float]] = None, radius_deg: float = 2.0,
+                timeout: Optional[float] = None) -> dict:
     """Solve `image` with astrometry.net (local solve-field, or nova with the API key from
     [astrometry] in the config: see solve_astrometry_net) and describe the field; see the
     module doc. Blocks for up to the config's timeout: use a thread.
 
     center: (ra, dec) deg where the field is expected (e.g. the last solution, the target),
-    searched within radius_deg; if the solve fails there it is tried once more without it."""
+    searched within radius_deg; if the solve fails there it is tried once more without it.
+    timeout: seconds for the whole-sky solve (a local one; None: the config's, else none): a DSLR
+    photo without a plate-scale hint would search all scales for many minutes."""
     from ..config import load
     cfg = load()
     img = np.array(image, dtype=np.float32)
@@ -115,7 +118,7 @@ def solve_stack(image: np.ndarray, header: dict, n_stars: int = 5, workdir: str 
         # minutes to give up when it is not (a stale hint): give up early, then the whole sky
         return solve_astrometry_net(
             img, workdir=str(Path(workdir) / '.wcs-work'), log=log, cancel=cancel,
-            timeout=NEAR_TIMEOUT_S if (near is not None and local) else None,
+            timeout=NEAR_TIMEOUT_S if (near is not None and local) else timeout,
             scale_arcsec=scale, scale_err_pct=float(cfg['astrometry']['scale_err_pct']),
             center=near, radius_deg=radius_deg, dest=dest, return_job=True,
             downsample=2 if shape[1] > DOWNSAMPLE_ABOVE_PX else None)

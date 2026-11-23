@@ -245,6 +245,7 @@ def test_dslr_window(monkeypatch, tmp_path):
     w.on_setting("iso")
     assert until(lambda: thread.settings.get("iso") == "3200")
     w.exp_spin.setValue(1.0)
+    w.solve_check.setChecked(False)                    # no real plate solve here (test_photo_solve)
     w.on_photo()
     assert until(lambda: thread.shots == 1 and thread.state == "idle" and "IMG_0005" not in w.error
                  and w.info_label.text())

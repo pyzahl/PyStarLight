@@ -1809,67 +1809,18 @@ class MainWindow(QtWidgets.QMainWindow):
             marks, notes = [], []
             try:
                 from astropy.io import fits
-                from astropy.wcs import WCS
 
-                from pystarlight.wcs.catnames import catalog_name, decimal_year, resolve_target, verify
+                from .marks import solution_marks
                 try:
                     hdr = fits.getheader(sol["stack"])
                     roi = (int(hdr.get("ROIX", 0)), int(hdr.get("ROIY", 0)))
                 except Exception:
                     roi = (0, 0)
-                epoch = decimal_year(sol["time"]) if sol.get("time") else None
-                radius = max(5.0, 3.0 * sol["scale_arcsec"])
-                for i, s in enumerate(sol.get("stars", [])[:n], 1):
-                    log(f"naming star {i}")
-                    hit = catalog_name(s["ra"], s["dec"], radius, epoch, log=log)
-                    name = hit["name"] if hit else (s.get("name") or s.get("ra_hms", ""))
-                    mag = f"  {hit['mag']:.1f}" if hit and np.isfinite(hit["mag"]) else ""
-                    marks.append({"x": s["x"], "y": s["y"], "r": max(4.0, 1.5 * (s.get("fwhm") or 3)),
-                                  "label": f"{i} {name}{mag}", "kind": "star",
-                                  "name": name, "ra": s["ra"], "dec": s["dec"]})
-                wcs = WCS(fits.getheader(sol["wcs"]))
-                found = {}
-                for kind, query, tag in (("target", text, "T"), ("verify", check, "V")):
-                    if not query:
-                        continue
-                    log(f"looking up {query}")
-                    try:
-                        t = resolve_target(query, epoch, log=log)
-                    except Exception as e:
-                        notes.append(f"{kind}: {e}")
-                        continue
-                    found[kind] = t
-                    if kind == "target":
-                        self.target_radec = (t["ra"], t["dec"])
-                        self.target_found = (query, t["name"])
-                    mag = f"  {t['band']} {t['mag']:.1f}" if np.isfinite(t["mag"]) else ""
-                    c = sol["center"]
-                    off = float(np.degrees(np.arccos(np.clip(
-                        np.sin(np.radians(c["dec"])) * np.sin(np.radians(t["dec"]))
-                        + np.cos(np.radians(c["dec"])) * np.cos(np.radians(t["dec"]))
-                        * np.cos(np.radians(t["ra"] - c["ra"])), -1, 1))))
-                    if off > 2 * max(sol.get("field_deg") or [1.0]):
-                        # far off the field: the distortion terms of the solution diverge there
-                        # (and took all the markers with them); just say where it is
-                        notes.append(f"{tag} {t['name']}{mag}: {off:.1f} deg from the field centre "
-                                     "(OUTSIDE the stacked field)")
-                        continue
-                    x, y = (float(v) for v in wcs.all_world2pix(t["ra"], t["dec"], 0, quiet=True))
-                    marks.append({"x": x, "y": y, "r": 8.0 if kind == "target" else 14.0,
-                                  "label": f"{tag} {t['name']}{mag}", "kind": kind})
-                    ids = ", ".join(v for k, v in t["ids"].items() if v != t["name"])
-                    notes.append(f"{tag} {t['name']}" + (f" = {ids}" if ids else "")
-                                 + f"{mag} at x {x + roi[0]:.0f}, y {y + roi[1]:.0f}"
-                                 + ("" if 0 <= x < sol["width"] and 0 <= y < sol["height"]
-                                    else "  (OUTSIDE the stacked field)"))
-                    if kind == "target":
-                        notes.append("   " + self.detect_text(sol, x, y))
-                if len(found) == 2:
-                    v = verify(found["target"], found["verify"])
-                    notes.append(v["text"])
-                    if v["same"]:                   # one marker, the verify label under it
-                        vm = marks.pop()
-                        marks[-1]["label"] += "  ✓ " + vm["label"][2:].split("  ")[0]
+                marks, notes, found = solution_marks(sol, n, text, check, log=log, offset=roi)
+                if "target" in found:
+                    t = found["target"]
+                    self.target_radec = (t["ra"], t["dec"])
+                    self.target_found = (text, t["name"])
                 for m in marks:                     # stack pixels -> sensor pixels
                     m["x"] += roi[0]
                     m["y"] += roi[1]
@@ -1886,32 +1837,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.marks_log = "naming the stars..."
         self.marks_thread = threading.Thread(target=work, daemon=True)
         self.marks_thread.start()
-
-    @staticmethod
-    def detect_text(sol, x, y, half=15):
-        """Is there a star at (x, y) of the solved stack? Offset and significance of the
-        brightest smoothed peak within `half` px."""
-        try:
-            from astropy.io import fits
-            img = np.asarray(fits.getdata(sol["stack"]), dtype=np.float32)
-        except Exception as e:
-            return f"not checked in the stack ({e})"
-        H, W = img.shape[:2]
-        x0, y0 = int(round(x)) - 3 * half, int(round(y)) - 3 * half
-        if x0 < 0 or y0 < 0 or x0 + 6 * half >= W or y0 + 6 * half >= H:
-            return "too near the edge to check in the stack"
-        box = cv2.GaussianBlur(img[y0:y0 + 6 * half + 1, x0:x0 + 6 * half + 1], (7, 7), 2.0)
-        sky = float(np.median(box))
-        noise = 1.4826 * float(np.median(np.abs(box - sky))) + 1e-6
-        inner = box[2 * half:4 * half + 1, 2 * half:4 * half + 1]
-        j, i = np.unravel_index(int(np.argmax(inner)), inner.shape)
-        snr = (inner[j, i] - sky) / noise
-        dx, dy = x0 + 2 * half + i - x, y0 + 2 * half + j - y
-        sep = float(np.hypot(dx, dy)) * sol["scale_arcsec"]
-        if snr < 5:
-            return f"NO star detected at the target in the stack (best {snr:.1f} sigma)"
-        return (f"detected in the stack: {snr:.0f} sigma, {np.hypot(dx, dy):.1f} px "
-                f"({sep:.1f}\") from the catalogue position")
 
     def track_marks(self, img):
         """Field drift of a live frame against the stack: the bright marked stars' centroids

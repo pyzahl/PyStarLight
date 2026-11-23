@@ -673,3 +673,56 @@ def test_photo_fits_with_the_plate_solution(tmp_path):
     sky = WCS(h).all_pix2world([[1023.5 - 97, 771.5 - 52]], 0)[0]      # the stack's reference pixel
     assert sky == pytest.approx((8.69, 4.23), abs=1e-6)
     assert h["RA"] == pytest.approx(WCS(h).all_pix2world([[399.5, 299.5]], 0)[0][0], abs=1e-6)
+
+
+def test_player_opens_a_dropped_file(tmp_path, monkeypatch):
+    """Drag and drop from a file manager (file URLs): a recording opens, a FITS frame stands for
+    its folder, anything else is refused; a broken file leaves the open one as it was."""
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    try:
+        from pystarlight.capture import player
+        from pystarlight.capture.qt import QtCore, QtGui, QtWidgets
+    except ImportError as e:
+        pytest.skip(f"no Qt: {e}")
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    for fmt in (QtCore.QSettings.NativeFormat, QtCore.QSettings.IniFormat):
+        QtCore.QSettings.setPath(fmt, QtCore.QSettings.UserScope, str(tmp_path / "settings"))
+    ser = tmp_path / "a.ser"
+    record(ser_writer.SerWriter, ser, frames(3))
+    (tmp_path / "notes.txt").write_text("x")
+    (tmp_path / "broken.ravf").write_bytes(b"not a recording")
+    fits_dir = tmp_path / "frames"
+    fits_dir.mkdir()
+    (fits_dir / "f0001.fits").write_bytes(b"")
+
+    def mime(*paths, remote=False):
+        m = QtCore.QMimeData()
+        m.setUrls([QtCore.QUrl("https://example.org/a.ser") if remote else QtCore.QUrl.fromLocalFile(str(p))
+                   for p in paths])
+        return m
+    assert player.dropped_path(mime(tmp_path / "notes.txt", ser)) == str(ser)      # the first recording
+    assert player.dropped_path(mime(fits_dir / "f0001.fits")) == str(fits_dir)       # its folder
+    assert player.dropped_path(mime(fits_dir)) == str(fits_dir)
+    assert player.dropped_path(mime(tmp_path / "notes.txt")) is None
+    assert player.dropped_path(mime(ser, remote=True)) is None
+
+    win = player.PlayerWindow(None)
+    assert win.acceptDrops()
+    move = QtCore.Qt.CopyAction
+
+    def drag(m):
+        e = QtGui.QDragEnterEvent(QtCore.QPoint(10, 10), move, m, QtCore.Qt.LeftButton, QtCore.Qt.NoModifier)
+        win.dragEnterEvent(e)
+        return e.isAccepted()
+
+    def drop(m):
+        e = QtGui.QDropEvent(QtCore.QPointF(10, 10), move, m, QtCore.Qt.LeftButton, QtCore.Qt.NoModifier)
+        win.dropEvent(e)
+    assert drag(mime(ser)) and not drag(mime(tmp_path / "notes.txt"))
+    drop(mime(ser))
+    assert win.path == str(ser) and len(win.mv) == 3
+    drop(mime(tmp_path / "broken.ravf"))                                # a message, the SER stays
+    assert win.path == str(ser) and len(win.mv) == 3 and win.mv.read(2) is not None
+    assert "broken.ravf" in win.statusBar().currentMessage()
+    win.close()
+    assert app is not None

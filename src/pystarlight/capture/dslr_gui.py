@@ -10,6 +10,7 @@ folder, with the site, target and time the camera window knows. The window shows
 night mode in dim red. Config [dslr].
 """
 import os
+import threading
 import time
 
 import numpy as np
@@ -18,7 +19,7 @@ from . import dslr as ds
 from . import localconfig, photo, station_header
 from .qt import QtCore, QtGui, QtWidgets
 
-DEFAULTS = {"focal_mm": 0.0, "pixel_um": 0.0, "out_dir": "", "exposure_s": 10.0}
+DEFAULTS = {"focal_mm": 0.0, "pixel_um": 0.0, "out_dir": "", "exposure_s": 10.0, "solve_timeout_s": 120.0}
 NO_CAMERA = "(no camera found)"
 
 
@@ -27,6 +28,14 @@ def re_safe(text):
     'Sony_Alpha-A7r_II', as the video camera's file names)."""
     import re
     return re.sub(r"[^A-Za-z0-9.+_-]+", "_", text or "").strip("_.")[:60]
+
+
+MARK_COLORS = {"star": "#40c4ff", "target": "#ff4081", "verify": "#ffd740"}   # as the camera window
+
+
+def _compass(sol):
+    from .photo_solve import compass
+    return compass(sol)
 
 
 class PhotoView(QtWidgets.QLabel):
@@ -39,9 +48,16 @@ class PhotoView(QtWidgets.QLabel):
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.setStyleSheet("background: black; color: gray;")
         self.rgb, self.night = None, False
+        self.marks, self.compass = [], None       # the plate solve's: (x, y as fractions, label, kind)
 
-    def show_rgb(self, rgb):
+    def show_rgb(self, rgb, keep_marks=False):
         self.rgb = None if rgb is None else np.ascontiguousarray(rgb)
+        if not keep_marks:
+            self.marks, self.compass = [], None
+        self._draw()
+
+    def set_marks(self, marks, compass):
+        self.marks, self.compass = list(marks), compass
         self._draw()
 
     def set_night(self, on):
@@ -63,8 +79,31 @@ class PhotoView(QtWidgets.QLabel):
             rgb[..., 0] = v
         h, w = rgb.shape[:2]
         qimg = QtGui.QImage(rgb.data, w, h, rgb.strides[0], QtGui.QImage.Format_RGB888).copy()
-        self.setPixmap(QtGui.QPixmap.fromImage(qimg).scaled(
-            self.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+        pix = QtGui.QPixmap.fromImage(qimg).scaled(self.size(), QtCore.Qt.KeepAspectRatio,
+                                                   QtCore.Qt.SmoothTransformation)
+        if self.marks or self.compass:
+            self._paint_marks(pix)
+        self.setPixmap(pix)
+
+    def _paint_marks(self, pix):
+        """The markers (stars, T, V) and N / E over the photo, as on the camera window's image;
+        night mode: dim red."""
+        p = QtGui.QPainter(pix)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        W, H = pix.width(), pix.height()
+        for fx, fy, label, kind in self.marks:
+            color = QtGui.QColor("#a00000" if self.night else MARK_COLORS.get(kind, "#ffffff"))
+            p.setPen(QtGui.QPen(color, 1.5))
+            x, y = fx * W, fy * H
+            p.drawEllipse(QtCore.QPointF(x, y), 7.0, 7.0)
+            p.drawText(QtCore.QPointF(x + 10, y - 4), label)
+        if self.compass:
+            ox, oy = W - 40.0, H - 40.0
+            p.setPen(QtGui.QPen(QtGui.QColor("#a00000" if self.night else "#ffa726"), 1.5))
+            for label, ux, uy in self.compass:
+                p.drawLine(QtCore.QPointF(ox, oy), QtCore.QPointF(ox + 24 * ux, oy + 24 * uy))
+                p.drawText(QtCore.QPointF(ox + 32 * ux - 4, oy + 32 * uy + 4), label)
+        p.end()
 
 
 class DslrWindow(QtWidgets.QWidget):
@@ -79,6 +118,9 @@ class DslrWindow(QtWidgets.QWidget):
         self.error = ""
         self.shown_live = self.shown_shots = -1
         self.settings_shown = None
+        self.solving = None               # the plate solve's thread
+        self.solve_log = ""
+        self.solution = None              # of the last photo: photo_solve's dict
 
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
@@ -143,7 +185,14 @@ class DslrWindow(QtWidgets.QWidget):
         self.live_check.setToolTip("the camera's live view here (framing, focus on a bright star); "
                                    "pauses for a photo")
         self.live_check.toggled.connect(self.on_live)
-        g.addWidget(self.photo_button, r, 0, 1, 3)
+        self.solve_check = QtWidgets.QCheckBox("Plate solve")
+        self.solve_check.setChecked(main.settings.value("dslr/solve", True, type=bool))
+        self.solve_check.setToolTip("solve each photo as the video camera's stack (the camera window's star "
+                                    "names, target and verify star): WCS and markers into its FITS, an "
+                                    "annotated PNG beside it")
+        self.solve_check.toggled.connect(lambda on: main.settings.setValue("dslr/solve", on))
+        g.addWidget(self.photo_button, r, 0, 1, 2)
+        g.addWidget(self.solve_check, r, 2)
         g.addWidget(self.live_check, r, 3)
         r += 1
         self.view = PhotoView()
@@ -265,7 +314,8 @@ class DslrWindow(QtWidgets.QWidget):
     # ---- photos ----
     def header_info(self, model):
         observer = localconfig.section("observer")
-        info = {"instrument": model, "pixel_um": float(self.cfg.get("pixel_um") or 0.0),
+        info = {"instrument": model,
+                "pixel_um": float(self.cfg.get("pixel_um") or 0.0) or ds.pixel_um_of(model) or 0.0,
                 "focal_mm": float(self.cfg.get("focal_mm") or 0.0)}
         info.update(station_header.site_meta(getattr(self.main.c, "gps", None), observer))
         return info
@@ -315,7 +365,7 @@ class DslrWindow(QtWidgets.QWidget):
             paths, img = ds.save(shot, out_dir, name, header(shot))
             sat = float(np.mean(img.data >= 0.98 * img.white)) if img.kind == "raw" else 0.0
             return {"paths": paths, "rgb": ds.preview_rgb(img), "kind": img.kind, "pattern": img.pattern,
-                    "shape": img.data.shape, "saturated": sat, "shot": shot}
+                    "shape": img.data.shape, "saturated": sat, "shot": shot, "image": img}
         self.error = ""
         t.ask("photo", seconds, save)
 
@@ -365,7 +415,12 @@ class DslrWindow(QtWidgets.QWidget):
             if t.error:
                 self.error = t.error
                 t.error = ""
-        self.msg_label.setText(self.error)
+        pending = getattr(self, "pending_marks", None)
+        if pending is not None:                  # the solve's markers onto the photo (GUI thread)
+            self.pending_marks = None
+            if not self.live_check.isChecked():
+                self.view.set_marks(*pending)
+        self.msg_label.setText("\n".join(t for t in (self.error, self.solve_log) if t))
         self.program.poll()
 
     def show_photo(self, res):
@@ -381,6 +436,53 @@ class DslrWindow(QtWidgets.QWidget):
                                 + (" (bulb)" if shot.bulb else "")
                                 + f", ISO {shot.settings.get('iso')}{sat}\n{files}")
         print(f"DSLR photo: {', '.join(res['paths'])}")
+        self.solution = None
+        self.view.set_marks([], None)
+        if self.solve_check.isChecked():
+            self.start_solve(res)
+        res.pop("image", None)                   # (85 MB: the solve has it now)
+
+    # ---- plate solve: as the video camera's stack (photo_solve, marks) ----
+    def start_solve(self, res):
+        if self.solving is not None:
+            self.solve_log = "a plate solve runs still: this photo later (photo_solve on its FITS)"
+            return
+        main = self.main
+        fits_path = next(p for p in res["paths"] if p.endswith(".fits"))
+        img, shape = res["image"], res["shape"]
+        n_stars = getattr(getattr(main, "stars_spin", None), "value", lambda: 5)()
+        n_marks = getattr(getattr(main, "marks_spin", None), "value", lambda: 5)()
+        simbad = getattr(getattr(main, "simbad_check", None), "isChecked", lambda: True)()
+        target = getattr(getattr(main, "target_edit", None), "text", lambda: "")().strip()
+        verify = getattr(getattr(main, "verify_edit", None), "text", lambda: "")().strip()
+        center = getattr(main, "solve_hint", lambda: None)()
+        t0 = time.monotonic()
+
+        def log(msg):
+            self.solve_log = f"plate solve [{time.monotonic() - t0:.0f} s] {msg}"
+
+        def work():
+            try:
+                from .photo_solve import solve_photo
+                sol = solve_photo(fits_path, n_stars, n_marks, target, verify, simbad, center=center, log=log,
+                                  img=img, timeout=float(self.cfg.get("solve_timeout_s") or 120.0))
+                c = sol["center"]
+                self.solution = sol
+                self.solve_log = (f"solved: {c['ra_hms']} {c['dec_dms']}, {sol['field_deg'][0]:.2f} x "
+                                  f"{sol['field_deg'][1]:.2f} deg, {sol['scale_arcsec']:.2f}\"/px, "
+                                  f"{len(sol['marks'])} markers; WCS in the FITS, "
+                                  f"{os.path.basename(sol['annotated'])}")
+                if sol["notes"]:
+                    self.solve_log += "\n" + "\n".join(sol["notes"])
+                h, w = shape[-2:]
+                self.pending_marks = ([(m["x"] / w, m["y"] / h, m["label"], m["kind"]) for m in sol["marks"]],
+                                      _compass(sol))
+            except Exception as e:
+                self.solve_log = f"plate solve failed: {e}"
+            self.solving = None
+        self.solve_log = "plate solving…"
+        self.solving = threading.Thread(target=work, daemon=True)
+        self.solving.start()
 
     def shutdown(self):
         self.timer.stop()
