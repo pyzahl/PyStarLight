@@ -7,6 +7,31 @@ uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Camera 1.5.0: **DSLR window** (menu DSLR, Shift+C; `capture/dslr.py`, `capture/dslr_gui.py`,
+  extra `dslr`: python-gphoto2 + rawpy, config `[dslr]`): a DSLR or mirrorless camera as a second,
+  photo-only camera while the video camera keeps streaming, recording and tracking. ISO,
+  aperture, image format and where the files go from the camera's own lists; the exposure set
+  to the nearest shutter speed, or Bulb timed by the computer beyond the longest; **Photo** keeps
+  the camera's files (ARW / CR2 / NEF, JPEG) and writes a FITS: the RAW's Bayer mosaic as uint16
+  (BAYERPAT, ROWORDER TOP-DOWN, black / white level, white balance, ISO, shutter) or a JPEG's RGB
+  planes, with the time the release was sent (GPS UTC when anchored), the site and the target.
+  Colour live view in the window; the last photo shown debayered with the camera's white
+  balance, dim red in night mode. Seen working with a Sony A7R II (connect, settings, live view);
+  photos tested against a simulated camera. `pystarlight doctor` checks the extra.
+- Camera 1.5.0: **photo programs** (DSLR window, Program tab; `capture/schedule.py`,
+  `capture/schedule_gui.py`), derived from the owner's SoFiMagic: its eclipse XML programs read
+  and written (contacts C1 .. C4, C0, phases with interval (N) or back-to-back (-1) shooting,
+  exposure lists with drive S / C / M / L / B, bursts and brackets done here), our TOML for any
+  reference times (event time, NOW) and `every`; the editor ported from the Sony app's settings
+  screens; timeline with warnings; test run; runs on the GPS UTC clock with the exposure set
+  before the slot, catch-up / skipping, no exposure into the next phase, failed photos logged
+  and passed, a CSV photo log; files with FITS (in the background), files only, or left on the
+  card. Start: as programmed, or shifted so the program or a reference (C1, C2, ...) comes in
+  15 s. Dry run without a camera, fast-forward or on time, as a Markdown list + CSV (GUI, and
+  `python -m pystarlight.capture.schedule`). The tab is laid out as the Sony app's screen. DSLR files are named as the recordings: `<model>_<asteroid>_<star>_<UTC>Z_photo.*`.
+- Camera: gui.py split: `imageview.py` (ImageView, RecordOverlay), `widgets.py` (night theme,
+  CollapsibleBox, LevelsBox, zscale), `station_dialog.py`; `gui` still offers the names.
+  `stacker.write_fits` writes uint16 (BZERO) and planes (n, h, w) too.
 - Camera 1.5.0: **Polar alignment** window (menu INDI Telescope Controls, Shift+P;
   `capture/polar.py`, `capture/polar_gui.py`, config `[polar_align]`). Stack + plate solve, sync,
   turn the RA axis only (a goto at the mount's own Dec), solve again: the RA axis from two points

@@ -86,12 +86,18 @@ def _card(key, value, comment=""):
 
 
 def write_fits(path, image, header=()):
-    """2-D float32 FITS (BITPIX -32). header: [(key, value, comment)], keys <= 8 chars.
-    Array row 0 is FITS row 1 (as astropy writes and reads it)."""
-    img = np.asarray(image, dtype=">f4")
-    h, w = img.shape
-    cards = [_card("SIMPLE", True, "conforms to FITS standard"), _card("BITPIX", -32),
-             _card("NAXIS", 2), _card("NAXIS1", w), _card("NAXIS2", h)]
+    """FITS of a 2-D image, or of planes (n, h, w) (a colour photo: R, G, B). float32 (BITPIX -32),
+    or uint16 as it is (BITPIX 16 with BZERO 32768: a DSLR's raw mosaic, half the size).
+    header: [(key, value, comment)], keys <= 8 chars. Array row 0 is FITS row 1 (as astropy
+    writes and reads it)."""
+    image = np.asarray(image)
+    if image.dtype == np.uint16:
+        img = (image.astype(np.int32) - 32768).astype(">i2")
+        bitpix, scale = 16, [_card("BZERO", 32768), _card("BSCALE", 1)]
+    else:
+        img, bitpix, scale = image.astype(">f4"), -32, []
+    axes = [_card("NAXIS", img.ndim)] + [_card(f"NAXIS{i + 1}", n) for i, n in enumerate(img.shape[::-1])]
+    cards = [_card("SIMPLE", True, "conforms to FITS standard"), _card("BITPIX", bitpix), *axes, *scale]
     cards += [_card(*c) for c in header]
     cards.append("END".ljust(80))
     head = "".join(cards).encode("ascii", "replace")

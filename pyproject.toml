@@ -52,6 +52,9 @@ camera = ["PySide6-Essentials>=6.5,<6.8.1; platform_machine == 'aarch64'",
 # introspection (apt: libgirepository1.0-dev libcairo2-dev gir1.2-aravis-0.8); 3.51+ needs
 # girepository-2.0 (GLib 2.80), newer than Debian 12 / Raspberry Pi OS bookworm has
 aravis = ["PyGObject>=3.42,<3.51"]
+# a DSLR / mirrorless camera as a second, photo-only camera (the camera's DSLR window): libgphoto2's
+# binding (wheels bundle libgphoto2) and LibRaw for RAW files
+dslr = ["gphoto2>=2.5", "rawpy>=0.19"]
 
 [project.scripts]
 pystarlight = "pystarlight.cli:main"                  # pystarlight analyze | player | camera | config

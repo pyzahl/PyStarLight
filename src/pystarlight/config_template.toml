@@ -227,6 +227,14 @@ cross_meridian = false     # false: never across the meridian (a German mount wo
 refraction = true          # the solved positions raised by refraction (where the telescope points)
 good_arcmin = 2.0          # error left at or below this: shown as aligned
 
+[dslr]
+# A DSLR / mirrorless camera as a second, photo-only camera (camera: menu DSLR / Shift+C,
+# CAPTURE.md "DSLR as a photo camera"; extra `dslr`). The video camera keeps running.
+focal_mm = 0.0             # the DSLR's optics (lens or telescope), into its FITS (0: left out)
+pixel_um = 0.0             # its pixel pitch, um (0: left out; e.g. 4.5 for a Sony A7R II)
+out_dir = ""               # "": the camera window's recording folder
+exposure_s = 10.0          # the window's first exposure (it remembers the last one)
+
 [pysyzygos_server]
 # The camera's Favorites button: tonight's events from a PySyzygos server (its SERVER_MODE.md,
 # favorites API). url e.g. "http://home:8080"; token from 'pysyzygos gui --new-token PyStarLight'

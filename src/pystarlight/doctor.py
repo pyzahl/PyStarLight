@@ -224,6 +224,8 @@ CHECKS = [
     Check("pyserial (GPS)", "camera", lambda: importable("serial", "camera", "pyserial")),
     Check("Aravis cameras", "aravis", check_aravis),
     Check("ZWO ASI cameras", None, check_zwo),
+    Check("DSLR (gphoto2)", "dslr", lambda: importable("gphoto2", "dslr")),
+    Check("DSLR RAW files (rawpy)", "dslr", lambda: importable("rawpy", "dslr")),
     Check("local plate solver", None, check_solver),
     Check("GPS clock helper", None, check_settime_helper),
     Check("config", None, check_config),

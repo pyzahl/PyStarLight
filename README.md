@@ -31,7 +31,9 @@ programs behind it:
   to RAVF or SER; ZWO ASI cameras and any `/dev/video` device (e.g. an analog grabber)
   free-run with the computer's time stamps. It has a live stack and plate solve, a mount
   panel (INDI: goto, solve & sync, centring), polar alignment by plate solves with a live arrow
-  for the Alt / Az knobs, a focuser window (e.g. ZWO EAF) with a live focus curve and a star lock that holds reference stars by
+  for the Alt / Az knobs, a DSLR or mirrorless camera as a second photo camera (gphoto2:
+  RAW + FITS with the Bayer pattern, colour live view, timed photo programs such as an
+  eclipse's, SoFiMagic-compatible), a focuser window (e.g. ZWO EAF) with a live focus curve and a star lock that holds reference stars by
   guide pulses and plots the target's flux live. Every recording carries the station and
   equipment data, the GPS position and (RAVF) the target. Tonight's events can be loaded from a
   [PySyzygos](https://github.com/pyzahl/PySyzygos) favorites server: target star, asteroid

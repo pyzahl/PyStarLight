@@ -35,11 +35,12 @@ from pathlib import Path
 import numpy as np
 
 from .cameras import pixel_um
-from .gui import CollapsibleBox, ImageView, LevelsBox, grid_box, zscale
+from .imageview import ImageView
 from .qt import QShortcut, QtCore, QtGui, QtWidgets, Signal, event_pos, exec_app, fix_cv2_qt_env
 from .ravf_writer import FRAME_HEAD, ravf_to_unix
 from .stacker import LiveStacker
 from .version import PLAYER_VERSION
+from .widgets import CollapsibleBox, LevelsBox, grid_box, zscale
 
 TICKS_UNIX_EPOCH = 621355968000000000      # .NET ticks at 1970-01-01T00:00:00Z (SER)
 FIX_NAMES = {0: "no fix", 1: "time kept", 2: "time fix", 3: "time + position"}

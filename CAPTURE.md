@@ -1030,6 +1030,176 @@ horizontal axis across the pole's direction (Alt), which is near enough for a mo
 roughly north (the error of that is second order). Tested on simulated mounts and fields only,
 not yet on the sky.
 
+## DSLR as a photo camera
+
+The **DSLR** window (menu **DSLR**, DSLR window, or Shift+C; a window of its own, place and size
+remembered) runs a DSLR or mirrorless camera as a **second, photo-only camera**: the video
+camera keeps streaming, recording and tracking (star lock, polar alignment) meanwhile.
+`capture/dslr.py` does the camera (libgphoto2), `capture/dslr_gui.py` the window; config `[dslr]`.
+
+Install: the extra `dslr` (python-gphoto2, whose wheels bring libgphoto2, and rawpy / LibRaw for
+RAW files): `./install.sh all camera dslr` or `uv sync --extra ... --extra dslr`; Debian's
+`python3-gphoto2` works too. `pystarlight doctor` checks both.
+
+- **Camera:** USB, in PC / PTP / **PC Remote** mode (Sony: Menu, USB Connection, PC Remote;
+  then gphoto2 lists it as "Sony Alpha-A7r II (Control)"). **Find** lists the cameras, **Connect**
+  opens one. A desktop's file manager may hold the camera (gvfs): the window says so
+  (`pkill -f gvfs-gphoto2-volume-monitor; pkill -f gvfsd-gphoto2`).
+- **Settings** from the camera's own lists: ISO, aperture (a lens with contacts; a telescope
+  shows f/0), image format (RAW, RAW + JPEG, JPEG), where the files go (the camera's RAM:
+  downloaded only; the card: kept there too, where the camera offers the choice). The camera
+  should be in **M** (manual) for the shutter speed to be set from here; battery level shown.
+- **Exposure** in seconds: the nearest shutter speed of the camera, or, longer than its longest
+  (usually 30 s), **Bulb**, pressed and released by the computer's timer (Canon's remote
+  release, Nikon / Sony's bulb switch).
+- **Photo:** the camera's files are kept as they are (`<model>_<UTC>Z_photo.arw` / `.cr2` /
+  `.nef` / `.jpg`) in the recording folder (or `[dslr] out_dir`), and a **FITS** beside them:
+  - RAW: the **Bayer mosaic** as uint16, unscaled and with the black level in (LibRaw's
+    visible area), `BAYERPAT` (e.g. RGGB, from the top-left pixel), `ROWORDER = TOP-DOWN`,
+    `BLKLEVEL`, `SATURATE` (white level), the camera's white balance (`WBRED`, `WBBLUE`), `BITDEPTH`;
+    Siril and PixInsight debayer it.
+  - JPEG only: the RGB planes (3, h, w).
+  - Both: `DATE-OBS` = the UTC the release was sent (GPS UTC once the GPS clock is anchored,
+    else the Pi clock), `EXPTIME`, `ISOSPEED`, `SHUTTER`, `APERTURE`, `INSTRUME`, `CAMFILE`, the
+    site (GPS / config) and the target (Recording panel), `FOCALLEN` / `XPIXSZ` from `[dslr]`.
+  The **shutter lag** (tens to hundreds of ms, the camera's own) is not known: the photo's time
+  is good to about a second, not for event timing (the video camera does that).
+- **Live view** (colour, the camera's JPEG; the Sony A7R II: 1024 x 680 in 0.04 s) for framing
+  and focus on a bright star; it pauses for a photo. The window otherwise shows the last photo
+  debayered with the camera's white balance and stretched; night mode shows it in dim red.
+
+**File names** follow the video camera's recordings: `<DSLR model>_<asteroid>_<star>_<UTC>Z_photo`
+(spaces as `_`, the asteroid and star of the Recording panel, `-1`, `-2` for more photos in the
+same second), e.g. `Sony_Alpha-A7r_II_476_TYC-3574-1718-1_20261122T031405Z_photo.arw` and `.fits`.
+
+### Photo programs (Program tab)
+
+The DSLR window's **Program** tab edits, checks and runs timed photo programs on the GPS UTC
+clock: an eclipse's contacts, an occultation's event time, a time-lapse from now.
+`capture/schedule.py` (the model, the timeline, the runner) and `capture/schedule_gui.py` (the
+editor) are derived from the owner's [SoFiMagic](https://github.com/pyzahl/SoFiMagic) (the Sony
+on-camera app and its gphoto2 script gMagicPy); the XML programs of both are read and written
+as they are.
+
+- **Reference times:** named UTC instants, typed as HH:MM:SS[.fff] on the program's **date**, or
+  ISO (`2026-08-12T17:46:20Z`); **UTC** or **local time** (the Sony app ran on the camera's local
+  clock). An eclipse has C1 .. C4, and C0 = (C2 + C3) / 2 follows. **NOW** is when Run is pressed.
+- **Phases**, in shooting order, each from a reference +/- seconds to a reference +/- seconds:
+  **Shots** N spreads N exposure blocks evenly from start to end (SoFiMagic's interval
+  shooting; **every** instead: a block every that many seconds), **-1** repeats the block back
+  to back until the end.
+- **Layout** as the Sony app's screen: the reference times side by side, a **Phase** slider (+ −
+  ◀ ▶ add, remove, move), the phase on one line (name, start reference + offset *to* end
+  reference + offset, # shots, every), and its exposures as a grid, one column each.
+- **Exposure grid** rows: **CF** drive (S single, C / M / L a burst, B a bracket by the shutter
+  speed), **BT** burst seconds or bracket code (SoFiMagic's: 10 = 1 EV x 3, 11 = 1 EV x 5, ...),
+  **ISO**, **F** (`-`: as the lens is), **t** shutter. Editing a cell offers the connected
+  camera's values, else the Sony app's lists; a column that does not read turns red.
+- **Timeline** as you type: each phase's start and end, blocks, photos, how long a block takes
+  against the time between blocks (a guess per photo until the run measures it), and warnings
+  (a block longer than the interval, phases out of order, a phase already over).
+- **New eclipse** (the Sony app's default program), **New sequence** (from NOW: count, every,
+  exposures), **Open…** (SoFiMagic XML with or without its `xmlns`, or our TOML), **Save** (XML
+  when the program fits SoFiMagic: contacts only, every exposure with shutter and ISO; else TOML).
+- **Files:** download with a FITS too (written in the background: a 42 MP RAW takes about a
+  second to decode); download the camera's files only (faster); or **leave them on the card**
+  (the release only, gMagicPy's trigger mode; where gphoto2 offers a card target: a Sony in PC
+  Remote mode has none, its files are downloaded). **MF**: manual focus at the start.
+- **Start:** *as programmed*, or the whole program moved so that it (*program in 15 s*) or a
+  reference time (*C1 in 15 s*, *C2 in 15 s*, ...) comes 15 s from now: an old eclipse program
+  can be tried any day, from any contact on (the phases before that reference are over and
+  skipped). **Run** / **Stop** (between photos) use it, and so do the dry runs.
+- **Dry run** (no camera): *fast-forward* runs the program at once on a virtual clock, *on time*
+  runs it in real time with a simulated camera (each photo takes its shutter plus the overhead
+  of the file mode). Either writes `<model>_<asteroid>_<star>_dryrun_<UTC>Z_<program>.md`
+  (opened from the link in the status) and the CSV beside it: every photo with phase, block,
+  exposure, planned and release time, how late, the time as programmed when shifted, shutter,
+  ISO, f, drive; then per phase the photos, first / last, the worst lateness and the sets of
+  exposures cut at the next phase. Without the GUI:
+  `python -m pystarlight.capture.schedule PROGRAM [--date 2026-08-12] [--local] [--start-now [C2]]
+  [--on-time] [--lead 5] [--overhead 0.4] [-o DIR]` (fast-forward at the programmed times by
+  default). The status shows the phase, the next shot's
+  countdown, photos, blocks skipped and cut, the last error. A run first sets single-shot drive
+  (a self-timer or bracket drive mode spoils programmed shooting, as SoFiMagic warns).
+
+How it runs (`schedule.Runner`):
+
+- Before each slot the block's first exposure is set on the camera (ISO, shutter, aperture), then
+  the shutter is released on the slot: on time, not a set-up later.
+- A slot is skipped when the next one is due already: a start in the middle of a phase (a restart
+  during the eclipse) catches up, and an overrunning block never piles up late blocks.
+- **No exposure starts that would end after the next phase begins.** gMagicPy finished a whole
+  exposure list before looking at the clock: a 12-exposure totality block (15-20 s with its
+  settings pauses) started just before TotalityB's end could run into Contact3 (C3 +/- 6 s).
+- A failed photo (camera busy, a value the camera refuses) is logged and the program goes on.
+- Every photo goes into `<model>_<asteroid>_<star>_<UTC>Z_<program>_photolog.csv`: planned and
+  actual release (UTC), how late, phase, block, exposure, shutter, ISO, f, drive mode, the
+  camera's files, the error.
+
+The program format of our own (TOML; `schedule.EXAMPLE_TOML`):
+
+```toml
+name = "Occultation field"
+date = "2026-11-22"                # for HH:MM:SS times; UTC unless local = true
+files = "files"                    # fits / files / card
+
+[times]
+T0 = "03:14:05"
+
+[[phase]]
+name = "before"
+start = "T0 - 300"
+end = "T0 - 30"
+shots = 10                         # spread evenly; -1: back to back
+exposures = ["2 ISO1600", "10 ISO1600", "1/4000 ISO100 C4", "1/500 ISO400 B10"]
+
+[[phase]]
+name = "after"
+start = "T0 + 30"
+every = 60
+shots = 5
+exposures = ["2 ISO1600 f/4"]
+```
+
+Notes from reading gMagicPy, kept here (they are handled as described above):
+
+- Its interval with `NUMBER_SHOTS` 1 divides by zero; here one shot is at the start.
+- An XML that does not parse (a missing `LOGGING_LEVEL`, a shutter speed without `/` such as
+  `30`, a fractional START, the `xmlns` left in) is caught and only logged: what was read up to
+  the failing phase is used, the rest are the built-in default phases (on the file's contacts,
+  or at 12:00 when it failed before them). Here it is an error that names the problem; `30`
+  and `2.5` are read. (Its fallback, writing a default XML, fails itself on a NameError, which
+  is what keeps the user's file from being overwritten.)
+- Its XML with fewer phases than the built-in default (7) and no END phase runs the defaults'
+  remaining phases too; here only the file's phases run.
+- An exposure list shorter in shutter speeds than in ISOs reuses a left-over default speed; here
+  the camera's speed is kept and the editor says so.
+- It sends the whole camera configuration for each exposure: one value the camera refuses stays
+  in it and every later change fails too (it goes on shooting at the old settings, logging the
+  new ones). Here each setting is sent alone, to the nearest value the camera offers.
+- Its times are seconds of the day: a program across midnight breaks; here they are UTC instants.
+- The camera / trigger calls are not guarded: a busy camera ends the program; here the photo is
+  logged as failed and the program continues.
+- The widget names are the Nikon's (`shutterspeed2`, `f-number`); here they are looked up per maker.
+
+**Tested on the Sony A7R II** (PC Remote, USB, no lens with contacts; 2026-11-23): single
+photos (1 s and 10 s, ISO 640) and a sequence (0.8 s, ISO 800, every 30 s): released **5 and 7 ms
+after the planned slots**; the EXIF has the shutter and ISO as programmed; the ARW decodes to a
+7968 x 5320 RGGB mosaic, 14 bit, black level 512, white 16383. Two lessons:
+
+- **The camera's clock is not the time.** Its EXIF said 21:58:30 local (02:58:30 UTC) for a photo
+  released at 02:56:36 UTC: about 1 min 54 s fast, and gphoto2 offers no clock setting for this
+  Sony. Use the photo log and the FITS (`DATE-OBS`: the computer's UTC, GPS once anchored), not
+  the EXIF time.
+- **An aperture the camera does not take** (a telescope or a manual lens: the A7R II still lists
+  f-numbers and reports f/0) is read back after setting: a warning in the status, the photo
+  still taken. The log has the program's values and, in `camera_settings`, the camera's own
+  shutter / ISO / aperture at the release (here `0.8 ISO800 f/0` where f/5.6 was programmed).
+
+The FITS has no WCS yet: the video camera's plate solution belongs to another camera. To solve
+a photo: `uv run python -m pystarlight.wcs.solve_stack PHOTO.fits` (after debayering, or as it is
+for a bright field). Next: a plate solve of the photo.
+
 ## Timestamps: what the recordings hold
 
 **Which instant of the exposure** a recording's time stamps mark is in its header,
