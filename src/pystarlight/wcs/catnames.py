@@ -296,7 +296,9 @@ def catalog_name(ra: float, dec: float, radius_arcsec: float = 5.0, epoch: Optio
 def parse_target(text: str):
     """'Gaia DR3 123' / 'DR3 123' / '123' -> ('gaia', 123); 'UCAC4 634-113397' ->
     ('ucac4', '634-113397'); 'TYC 3185-1234-1' -> ('tyc', (3185, 1234, 1)); RA Dec ->
-    ('radec', ra_deg, dec_deg). ValueError otherwise."""
+    ('radec', ra_deg, dec_deg); a star's proper name ('Polaris', 'Atlas', 'alf UMi': the
+    camera's offline table, capture/starnames.py) -> ('name', the table's entry). ValueError
+    otherwise."""
     t = text.strip()
     m = re.fullmatch(r'(?:gaia\s*)?dr3\s*(\d{1,20})|(\d{6,20})', t, re.I)   # bare: a long number
     if m:
@@ -321,7 +323,12 @@ def parse_target(text: str):
             return 'radec', float(c.ra.deg), float(c.dec.deg)
         except Exception:
             pass
-    raise ValueError(f"'{text}': give 'Gaia DR3 <id>', 'UCAC4 zzz-nnnnnn', 'TYC n-n-n' or RA Dec")
+    from ..capture import starnames
+    star = starnames.lookup(t)
+    if star is not None:
+        return 'name', star
+    raise ValueError(f"'{text}': give 'Gaia DR3 <id>', 'UCAC4 zzz-nnnnnn', 'TYC n-n-n', RA Dec or "
+                     "a star's name (Polaris, Atlas, alf UMi)")
 
 
 def cross_ids(star: dict, epoch: float, catalog='auto', log=print) -> dict:
@@ -403,14 +410,23 @@ def resolve_target(text: str, epoch: Optional[float] = None, catalog='auto', log
         if not rows:
             raise LookupError_(f'TYC {t1}-{t2}-{t3}: no such star')
         star = rows[0]
+    elif kind == 'name':     # a proper name: its position now, the catalogue star there
+        from ..capture import starnames
+        named = v[0]
+        ra, dec = starnames.position(named, epoch)
+        mag = named['mag'] if named['mag'] is not None else float('nan')
+        star = {'name': named['name'], 'ids': {}, 'ra': ra, 'dec': dec, 'mag': mag, 'band': 'V',
+                'source': 'SIMBAD name'}
     else:
         star = {'name': '', 'ids': {}, 'ra': v[0], 'dec': v[1], 'mag': float('nan'), 'band': '',
                 'source': 'position'}
-    if kind == 'radec':     # the star at a typed position
+    if kind in ('radec', 'name'):     # the star at a typed (or named) position
         hit = catalog_name(star['ra'], star['dec'], 2.0, epoch, nearest=True, catalog=catalog, log=log)
         if hit:
             star = {**hit, 'source': hit['source']}
     star['ids'] = cross_ids(star, epoch, catalog, log)
+    if kind == 'name':
+        star['ids'] = {'name': v[0]['name'], 'SIMBAD': v[0]['designation'], **star['ids']}
     ids = star['ids']
     star['name'] = ids.get('UCAC4') or ids.get('TYC') or ids.get('Gaia DR3') or star['name'] \
         or text.strip()

@@ -20,7 +20,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import bodies, favorites, localconfig, photo, station_header
+from . import bodies, favorites, localconfig, photo, starnames, station_header
 from .cameras import VEYE_MIN_ROI
 from .decode import format_bits, format_for_bits
 from .imageview import ImageView, RecordOverlay  # noqa: F401  (also imported from gui)
@@ -1541,7 +1541,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                    "instead of the live frames")
         self.stack_show.toggled.connect(self.on_stack_show)
         self.target_edit = QtWidgets.QLineEdit(self.settings.value("target", "", type=str))
-        self.target_edit.setPlaceholderText("Gaia DR3 id, UCAC4 zzz-nnnnnn, RA Dec, Moon, Jupiter...")
+        self.target_edit.setPlaceholderText("Gaia DR3 id, UCAC4 zzz-nnnnnn, RA Dec, Polaris, Moon...")
         self.target_edit.setToolTip("occultation target, marked on the view after a plate solve "
                                     "(looked up online at GAVO / ESA); the Moon or a planet: its "
                                     "position for this site now (offline), also the Mount panel's "
@@ -1841,6 +1841,33 @@ class MainWindow(QtWidgets.QMainWindow):
         self.target_radec, self.target_found = (ra, dec), (text, name)
         return True
 
+    def update_star_name(self):
+        """A star's proper name as the target (Polaris, Atlas, alf UMi): its position now from the
+        offline table at once (Mount panel: From target), then, in the background, the
+        catalogue star there (UCAC4, else TYC, else Gaia DR3) for the file names and headers.
+        False if the target is no name in the table."""
+        text = self.target_edit.text().strip()
+        star = starnames.lookup(text)
+        if star is None:
+            return False
+        if self.target_found and self.target_found[0] == text:
+            return True                         # looked up already
+        self.target_radec, self.target_found = starnames.position(star), (text, star["name"])
+
+        def work():
+            try:
+                from pystarlight.wcs.catnames import resolve_target
+                t = resolve_target(text, log=lambda m: None)
+            except Exception as e:
+                print(f"target {text}: no catalogue name ({e})")
+                return
+            if self.target_edit.text().strip() == text:
+                self.target_radec, self.target_found = (t["ra"], t["dec"]), (text, t["name"])
+                print(f"target {text} = {t['name']} (" + ", ".join(f"{k} {v}" for k, v in t["ids"].items()
+                                                         if v != t["name"]) + ")")
+        threading.Thread(target=work, daemon=True).start()
+        return True
+
     def focal_from_solution(self):
         """A new plate solution: the Focal length box from its scale (206.265 x pixel um /
         arcsec per px) when that differs by more than 0.5 %, so the next solves have the right
@@ -1896,7 +1923,8 @@ class MainWindow(QtWidgets.QMainWindow):
     # ---- markers: target and brightest stars with catalogue names ----
     def on_target(self):
         self.settings.setValue("target", self.target_edit.text().strip())
-        self.update_body(force=True)
+        if not self.update_body(force=True):
+            self.update_star_name()
         self.settings.setValue("verify", self.verify_edit.text().strip())
         self.settings.setValue("mark_stars", self.marks_spin.value())
         self.marks_key = None                   # made again (update_stack_box starts it)

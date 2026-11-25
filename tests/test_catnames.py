@@ -19,8 +19,9 @@ def test_parse_target_forms():
         assert kind == 'radec'
         assert ra == pytest.approx(321.2475, abs=1e-4) and dec == pytest.approx(36.67917, abs=1e-4)
     assert parse_target('321.2475, 36.6792') == ('radec', 321.2475, 36.6792)
+    assert parse_target('Deneb')[0] == 'name'           # a star's proper name (offline table)
     with pytest.raises(ValueError):
-        parse_target('Deneb')
+        parse_target('Deneb Kaitos the Third')
 
 
 def test_pick_prefers_bright_star_over_faint_neighbour():

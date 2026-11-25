@@ -1,12 +1,13 @@
 """The Moon and the planets as targets (camera target, Mount panel goto, file names).
 
-NEW CODE. Astrometric geocentric positions from astropy's built-in ephemeris (ERFA: Moon98
-for the Moon, EPV00 / Plan94 for the planets; offline, no IERS download): barycentric, light
-time from the Earth, no aberration, on the ICRS (J2000) axes, as the catalogue stars and the
-plate solutions (JPL Horizons' "astrometric RA/Dec"), so they compare on the image and the
-mount's J2000 -> JNow precession treats them alike. (astropy's get_body is the apparent GCRS
-place: annual aberration in it, up to 20".) Then the topocentric shift for the site (WGS84, mean sidereal time): up to 1 deg for
-the Moon, < 1' for the planets. Accuracy a few arcseconds (the Moon ~10"): well inside any field.
+NEW CODE. Astrometric geocentric positions from astropy's built-in ephemeris (ERFA: Moon98 for
+the Moon, EPV00 / Plan94 for the planets; offline, no IERS download): barycentric, light time
+from the Earth, no aberration, on the ICRS (J2000) axes, as the catalogue stars and the plate
+solutions (JPL Horizons' "astrometric RA/Dec"), so they compare on the image and the mount's
+J2000 -> JNow precession treats them alike. (astropy's get_body is the apparent GCRS place:
+annual aberration in it, up to 20".) Then the topocentric shift for the site (WGS84, mean
+sidereal time): up to 1 deg for the Moon, < 1' for the planets. Accuracy: see ephemeris() (up to
+~20" built in, < 1" with DE440s): well inside any field.
 The Sun is refused on purpose (a goto at it would burn the camera).
 """
 import math
@@ -41,6 +42,25 @@ def is_body(text):
 
 
 C_KM_S = 299792.458
+DE_URL = "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440s.bsp"
+_ephem = None
+
+
+def ephemeris():
+    """'de440s' when jplephem is installed and the file is in astropy's cache already (< 1"),
+    else 'builtin' (vs JPL Horizons: Mercury-Mars < 2", Uranus, Neptune ~5", the Moon ~8",
+    Saturn ~18", Jupiter ~22"). Never downloads: no stall in the field."""
+    global _ephem
+    if _ephem is None:
+        _ephem = "builtin"
+        try:
+            import jplephem  # noqa: F401
+            from astropy.utils.data import is_url_in_cache
+            if is_url_in_cache(DE_URL):
+                _ephem = "de440s"
+        except Exception:
+            pass
+    return _ephem
 
 
 def geocentric(name, when=None):
@@ -54,7 +74,7 @@ def geocentric(name, when=None):
     from astropy.utils import iers
     when = when or datetime.now(timezone.utc)
     with warnings.catch_warnings(), iers.conf.set_temp("auto_download", False), \
-            iers.conf.set_temp("auto_max_age", None), solar_system_ephemeris.set("builtin"):
+            iers.conf.set_temp("auto_max_age", None), solar_system_ephemeris.set(ephemeris()):
         warnings.simplefilter("ignore")
         t = Time(when, scale="utc")
         earth = get_body_barycentric("earth", t).xyz.to(u.km).value

@@ -13,7 +13,7 @@ connects too.
 import threading
 import time
 
-from . import bodies, indi, localconfig, station_header
+from . import bodies, indi, localconfig, starnames, station_header
 from . import focuser as fc
 from . import mount as mt
 from .qt import QtCore, QtWidgets
@@ -93,9 +93,10 @@ class MountDock(QtWidgets.QDockWidget):
         r += 1
 
         self.target_edit = QtWidgets.QLineEdit()
-        self.target_edit.setPlaceholderText("target RA Dec J2000, Moon, Jupiter...")
+        self.target_edit.setPlaceholderText("target RA Dec J2000, Polaris, Moon, Jupiter...")
         self.target_edit.setToolTip("J2000: 20:41:25.9 +45:16:49, 20h41m25.9s +45d16m49s or degrees; "
-                                    "the Moon or a planet by name: its position for this site at the Goto")
+                                    "a star's name (Polaris, Atlas, alf UMi) or the Moon / a planet: its "
+                                    "position at the Goto")
         g.addWidget(self.target_edit, r, 0, 1, 3)
         r += 1
         self.from_target = QtWidgets.QPushButton("From target")
@@ -330,6 +331,9 @@ class MountDock(QtWidgets.QDockWidget):
             return mt.parse_radec(text)
         except ValueError:
             pass
+        star = starnames.lookup(text)                # a star's proper name: offline table
+        if star is not None:
+            return starnames.position(star)
         if bodies.is_body(text):                     # the Moon / a planet: where it is now
             try:
                 _, ra, dec = bodies.position(text, self.site())
@@ -340,7 +344,8 @@ class MountDock(QtWidgets.QDockWidget):
         found = self.named_star(text)
         if found is None:
             self.error = (f"'{text.strip()}' is neither RA Dec nor a star named on the image "
-                          "(or the stack panel's target), the Moon or a planet: type RA Dec, e.g. "
+                          "(or the stack panel's target), a star's name, the Moon or a planet: "
+                          "type RA Dec, e.g. "
                           "00:35:03 +04:02:07")
         return found
 
