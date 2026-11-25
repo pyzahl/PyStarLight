@@ -7,6 +7,7 @@ Keys: e/E exposure -/+, g/G gain -/+, d/D gamma -/+, a auto levels, t software t
 r record on/off, s stack, c continue live view, q quit.
 """
 import importlib.util
+import math
 import os
 import subprocess
 import sys
@@ -19,7 +20,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import favorites, localconfig, photo, station_header
+from . import bodies, favorites, localconfig, photo, station_header
 from .cameras import VEYE_MIN_ROI
 from .decode import format_bits, format_for_bits
 from .imageview import ImageView, RecordOverlay  # noqa: F401  (also imported from gui)
@@ -122,6 +123,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.marks_frame = None             # frame id the drift was last measured on
         self.target_radec = None            # (ra, dec) of the target once looked up
         self.target_found = None            # (text typed, catalogue name) of that look-up
+        self.body_at = 0.0                  # the Moon / a planet as the target: its position's time
         self.roi_seen = 0                   # controller.roi_changes already followed
         self.roi_pending = None             # selected/typed region not applied yet
         # last requested values (keys step from these, not from a lagging camera read-back)
@@ -1099,6 +1101,7 @@ class MainWindow(QtWidgets.QMainWindow):
         rec.out_dir = os.path.expanduser(self.dir_edit.text().strip() or self.args.record_dir)
         asteroid = self.asteroid_edit.text().strip()
         # observer / telescope come from the config ([observer], station_header); the command line overrides
+        self.update_body(force=True)
         star = self.target_edit.text().strip()
         looked_up = bool(star) and self.target_found is not None and self.target_found[0] == star
         ra, dec = self.target_radec if looked_up and self.target_radec else (None, None)
@@ -1201,6 +1204,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_status_timer(self):
         c = self.c
         now = time.monotonic()
+        self.update_body()
         mode = self.mode()
         rec = c.recorder
 
@@ -1424,7 +1428,9 @@ class MainWindow(QtWidgets.QMainWindow):
         source = ("GPS clock" if gps is not None and gps.clock.anchored else "Pi clock")
         ms = self.photo_spin.value()
         if self.photo is not None:
-            self.rec_overlay.show_photo("Cancel photo", "#ffa726", True,
+            left = self.photo_left()
+            self.photo_button.setText("Cancel photo" + left)
+            self.rec_overlay.show_photo("Cancel photo" + left, "#ffa726", True,
                                         "waiting for the photo frame")
         else:
             exp = f"{ms / 1000:g} s" if ms >= 1000 else f"{ms:g} ms"
@@ -1518,9 +1524,11 @@ class MainWindow(QtWidgets.QMainWindow):
                                    "instead of the live frames")
         self.stack_show.toggled.connect(self.on_stack_show)
         self.target_edit = QtWidgets.QLineEdit(self.settings.value("target", "", type=str))
-        self.target_edit.setPlaceholderText("Gaia DR3 id, UCAC4 zzz-nnnnnn or RA Dec")
+        self.target_edit.setPlaceholderText("Gaia DR3 id, UCAC4 zzz-nnnnnn, RA Dec, Moon, Jupiter...")
         self.target_edit.setToolTip("occultation target, marked on the view after a plate solve "
-                                    "(looked up online at GAVO / ESA)")
+                                    "(looked up online at GAVO / ESA); the Moon or a planet: its "
+                                    "position for this site now (offline), also the Mount panel's "
+                                    "From target")
         self.target_edit.editingFinished.connect(self.on_target)
         self.verify_edit = QtWidgets.QLineEdit(self.settings.value("verify", "", type=str))
         self.verify_edit.setPlaceholderText("another ID of the target, to check (DR3 / UCAC4 / TYC)")
@@ -1618,12 +1626,26 @@ class MainWindow(QtWidgets.QMainWindow):
         if p["applied"] is None:
             if not c.controller.busy and abs(c.controller.exposure_us - p["us"]) <= max(5, 0.02 * p["us"]):
                 p["applied"] = self.now_ns()
+                # the countdown: at worst the frame under way, then the photo frame
+                p["end"] = time.monotonic() + 2 * p["us"] / 1e6
             return
         if exp_ns is None or exp_ns < p["applied"] + 50_000_000 or self.img is None:
+            p["end"] = time.monotonic() + p["us"] / 1e6     # not this one: the photo frame starts now
             return
         img, exposure_s = self.img.copy(), c.controller.exposure_us / 1e6
         self.end_photo("")
         threading.Thread(target=self.save_photo, args=(img, exp_ns, exposure_s), daemon=True).start()
+
+    def photo_left(self):
+        """The photo button's countdown for a long photo (> 1 s): ' 23 s' until the photo frame is
+        read, '' for short ones."""
+        p = self.photo
+        if p is None or p["us"] <= 1e6:
+            return ""
+        if p.get("end") is None:
+            return " (setting)"
+        left = p["end"] - time.monotonic()
+        return f" {math.ceil(left):.0f} s" if left > 0 else " (reading)"
 
     def end_photo(self, msg):
         p, self.photo = self.photo, None
@@ -1755,7 +1777,35 @@ class MainWindow(QtWidgets.QMainWindow):
         text = self.target_edit.text().strip()
         if self.target_found and self.target_found[0] == text:
             return self.target_found[1]
-        return text
+        try:
+            return bodies.body_name(text) or text   # 'jupiter' -> 'Jupiter'
+        except ValueError:
+            return text
+
+    def site_now(self):
+        """(lat, lon, alt_m) from the GPS fix, else the config's [observer] site; None."""
+        meta = station_header.site_meta(self.c.gps, localconfig.section("observer"))
+        if meta.get("latitude") is None or meta.get("longitude") is None:
+            return None
+        return meta["latitude"], meta["longitude"], meta.get("altitude") or 0.0
+
+    def update_body(self, force=False):
+        """The Moon or a planet as the target: its position for the site now (every 10 s, the
+        Moon moves 5" in that time), as target_radec. False if the target is none of them."""
+        text = self.target_edit.text().strip()
+        if not bodies.is_body(text):
+            return False
+        if not force and time.monotonic() - self.body_at < 10.0:
+            return True
+        self.body_at = time.monotonic()
+        try:
+            name, ra, dec = bodies.position(text, self.site_now())
+        except Exception as e:
+            self.target_radec, self.target_found = None, None
+            self.marks_log = f"target: {e}"
+            return True
+        self.target_radec, self.target_found = (ra, dec), (text, name)
+        return True
 
     def solve_hint(self):
         """Where the field probably is: where the mount points (Mount panel connected), else the
@@ -1793,6 +1843,7 @@ class MainWindow(QtWidgets.QMainWindow):
     # ---- markers: target and brightest stars with catalogue names ----
     def on_target(self):
         self.settings.setValue("target", self.target_edit.text().strip())
+        self.update_body(force=True)
         self.settings.setValue("verify", self.verify_edit.text().strip())
         self.settings.setValue("mark_stars", self.marks_spin.value())
         self.marks_key = None                   # made again (update_stack_box starts it)
@@ -1816,7 +1867,14 @@ class MainWindow(QtWidgets.QMainWindow):
                     roi = (int(hdr.get("ROIX", 0)), int(hdr.get("ROIY", 0)))
                 except Exception:
                     roi = (0, 0)
-                marks, notes, found = solution_marks(sol, n, text, check, log=log, offset=roi)
+                target = text
+                if bodies.is_body(text):            # the Moon / a planet when the stack was taken
+                    when = None
+                    if sol.get("time"):
+                        when = datetime.fromisoformat(sol["time"]).replace(tzinfo=timezone.utc)
+                    name, ra, dec = bodies.position(text, self.site_now(), when)
+                    target = {"name": name, "ra": ra, "dec": dec}
+                marks, notes, found = solution_marks(sol, n, target, check, log=log, offset=roi)
                 if "target" in found:
                     t = found["target"]
                     self.target_radec = (t["ra"], t["dec"])

@@ -13,8 +13,8 @@ connects too.
 import threading
 import time
 
+from . import bodies, indi, localconfig, station_header
 from . import focuser as fc
-from . import indi, localconfig, station_header
 from . import mount as mt
 from .qt import QtCore, QtWidgets
 
@@ -93,8 +93,9 @@ class MountDock(QtWidgets.QDockWidget):
         r += 1
 
         self.target_edit = QtWidgets.QLineEdit()
-        self.target_edit.setPlaceholderText("target RA Dec J2000")
-        self.target_edit.setToolTip("J2000: 20:41:25.9 +45:16:49, 20h41m25.9s +45d16m49s or degrees")
+        self.target_edit.setPlaceholderText("target RA Dec J2000, Moon, Jupiter...")
+        self.target_edit.setToolTip("J2000: 20:41:25.9 +45:16:49, 20h41m25.9s +45d16m49s or degrees; "
+                                    "the Moon or a planet by name: its position for this site at the Goto")
         g.addWidget(self.target_edit, r, 0, 1, 3)
         r += 1
         self.from_target = QtWidgets.QPushButton("From target")
@@ -329,10 +330,18 @@ class MountDock(QtWidgets.QDockWidget):
             return mt.parse_radec(text)
         except ValueError:
             pass
+        if bodies.is_body(text):                     # the Moon / a planet: where it is now
+            try:
+                _, ra, dec = bodies.position(text, self.site())
+                return ra, dec
+            except Exception as e:
+                self.error = str(e)
+                return None
         found = self.named_star(text)
         if found is None:
             self.error = (f"'{text.strip()}' is neither RA Dec nor a star named on the image "
-                          "(or the stack panel's target): type RA Dec, e.g. 00:35:03 +04:02:07")
+                          "(or the stack panel's target), the Moon or a planet: type RA Dec, e.g. "
+                          "00:35:03 +04:02:07")
         return found
 
     def named_star(self, text):
@@ -357,7 +366,10 @@ class MountDock(QtWidgets.QDockWidget):
                                  f"{mt.dms(dec).replace('°', ':').replace('′', ':').rstrip('″')}")
 
     def on_from_target(self):
-        if self.main.target_radec:
+        name = self.main.target_name()
+        if bodies.is_body(name):                     # by name: Goto / Sync compute it then
+            self.target_edit.setText(name)
+        elif self.main.target_radec:
             self.set_target(*self.main.target_radec)
         else:
             self.error = "no target looked up yet (Recording panel: Target, then Find)"
@@ -516,6 +528,8 @@ class MountDock(QtWidgets.QDockWidget):
                     self.job = None
                     self.error = f"synced to {mt.hms(c['ra'])} {mt.dms(c['dec'])}"
                     return
+                if bodies.is_body(self.target_edit.text()):    # the Moon moves 0.5' a minute
+                    job["target"] = self.target() or job["target"]
                 off = mt.separation(c["ra"], c["dec"], *job["target"])
                 if off <= CENTER_TOLERANCE_DEG:
                     self.job = None

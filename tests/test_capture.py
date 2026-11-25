@@ -726,3 +726,31 @@ def test_player_opens_a_dropped_file(tmp_path, monkeypatch):
     assert "broken.ravf" in win.statusBar().currentMessage()
     win.close()
     assert app is not None
+
+
+def test_photo_countdown(monkeypatch):
+    """A long photo (> 1 s) counts down on its button: at worst the frame under way plus the
+    photo once the exposure is set, the photo alone after a frame that was not it."""
+    from types import SimpleNamespace
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    try:
+        from pystarlight.capture import gui
+    except ImportError as e:
+        pytest.skip(f"no Qt: {e}")
+    now = [100.0]
+    monkeypatch.setattr(gui.time, "monotonic", lambda: now[0])
+    w = SimpleNamespace(photo=None)
+    left = lambda: gui.MainWindow.photo_left(w)              # noqa: E731
+    assert left() == ""
+    w.photo = {"us": 500_000}
+    assert left() == ""                                      # short: no countdown
+    w.photo = {"us": 40e6}
+    assert left() == " (setting)"
+    w.photo["end"] = now[0] + 80.0                           # exposure set: <= 2 x 40 s
+    now[0] += 0.5
+    assert left() == " 80 s"
+    w.photo["end"] = now[0] + 40.0                           # a frame that was not the photo
+    now[0] += 39.2
+    assert left() == " 1 s"
+    now[0] += 1.0
+    assert left() == " (reading)"

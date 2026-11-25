@@ -33,7 +33,8 @@ def detect_text(img, scale_arcsec, x, y, half=15):
 
 def solution_marks(sol, n, target="", verify="", log=print, image=None, offset=(0, 0)):
     """Markers of a solution (solve_stack's dict, its 'wcs' file): the n brightest stars with
-    catalogue names and magnitudes, the target (T) and the verify star (V) looked up, where
+    catalogue names and magnitudes, the target (T; a name to look up, or {'name', 'ra', 'dec'}
+    known already: the Moon, a planet) and the verify star (V) looked up, where
     they fall on the image. image: the solved image (2-D) for the target's detection check
     (default: the FITS sol['stack']); offset: added to the positions the notes print (the
     camera's region: sensor pixels). Returns (marks, notes, found): marks [{x, y, r, label,
@@ -59,12 +60,15 @@ def solution_marks(sol, n, target="", verify="", log=print, image=None, offset=(
     for kind, query, tag in (("target", target, "T"), ("verify", verify, "V")):
         if not query:
             continue
-        log(f"looking up {query}")
-        try:
-            t = resolve_target(query, epoch, log=log)
-        except Exception as e:
-            notes.append(f"{kind}: {e}")
-            continue
+        if isinstance(query, dict):
+            t = {"ids": {}, "mag": float("nan"), "band": "", **query}
+        else:
+            log(f"looking up {query}")
+            try:
+                t = resolve_target(query, epoch, log=log)
+            except Exception as e:
+                notes.append(f"{kind}: {e}")
+                continue
         found[kind] = t
         mag = f"  {t['band']} {t['mag']:.1f}" if np.isfinite(t["mag"]) else ""
         c = sol["center"]
