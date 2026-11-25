@@ -24,6 +24,8 @@ import numpy as np
 
 DOWN = 2                    # downsampling of the star maps
 MIN_RESPONSE = 0.02         # phase-correlation peak below this: alignment not trusted
+MAX_JUMP = 0.05             # a shift that jumps more than this x the frame (min. 50 px) from the
+                            # last one: a false match (few stars, e.g. very short exposures)
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +209,8 @@ class LiveStacker(threading.Thread):
                 self.window = cv2.createHanningWindow(cur.shape[::-1], cv2.CV_32F)
             else:
                 dx, dy, resp = measure_shift(self.ref_map, cur, self.window)
-                if resp < MIN_RESPONSE:
+                jump = max(50.0, MAX_JUMP * max(img.shape))
+                if resp < MIN_RESPONSE or max(abs(dx - self.shift[0]), abs(dy - self.shift[1])) > jump:
                     (dx, dy), self.unaligned = self.shift, self.unaligned + 1
         aligned, weight = shift_image(img, dx, dy) if (dx or dy) else (img, None)
         with self.lock:

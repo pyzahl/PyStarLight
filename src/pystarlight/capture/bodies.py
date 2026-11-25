@@ -1,9 +1,11 @@
 """The Moon and the planets as targets (camera target, Mount panel goto, file names).
 
-NEW CODE. Geocentric positions from astropy's built-in ephemeris (ERFA: Moon98 for the Moon,
-EPV00 / Plan94 for the planets; offline, no IERS download), light time and aberration included,
-on the ICRS (J2000) axes as the catalogue stars, so the mount's J2000 -> JNow precession treats
-them alike. Then the topocentric shift for the site (WGS84, mean sidereal time): up to 1 deg for
+NEW CODE. Astrometric geocentric positions from astropy's built-in ephemeris (ERFA: Moon98
+for the Moon, EPV00 / Plan94 for the planets; offline, no IERS download): barycentric, light
+time from the Earth, no aberration, on the ICRS (J2000) axes, as the catalogue stars and the
+plate solutions (JPL Horizons' "astrometric RA/Dec"), so they compare on the image and the
+mount's J2000 -> JNow precession treats them alike. (astropy's get_body is the apparent GCRS
+place: annual aberration in it, up to 20".) Then the topocentric shift for the site (WGS84, mean sidereal time): up to 1 deg for
 the Moon, < 1' for the planets. Accuracy a few arcseconds (the Moon ~10"): well inside any field.
 The Sun is refused on purpose (a goto at it would burn the camera).
 """
@@ -38,20 +40,31 @@ def is_body(text):
         return True                          # the Sun: a body, refused where it is looked up
 
 
+C_KM_S = 299792.458
+
+
 def geocentric(name, when=None):
-    """(ra_deg, dec_deg, distance_km) of the body from the Earth's centre at UTC `when` (a
-    datetime, default now), ICRS axes."""
+    """(ra_deg, dec_deg, distance_km): astrometric position of the body from the Earth's centre
+    at UTC `when` (a datetime, default now), ICRS axes, light time included."""
     import warnings
 
-    from astropy.coordinates import get_body, solar_system_ephemeris
+    import astropy.units as u
+    from astropy.coordinates import get_body_barycentric, solar_system_ephemeris
     from astropy.time import Time
     from astropy.utils import iers
     when = when or datetime.now(timezone.utc)
     with warnings.catch_warnings(), iers.conf.set_temp("auto_download", False), \
             iers.conf.set_temp("auto_max_age", None), solar_system_ephemeris.set("builtin"):
         warnings.simplefilter("ignore")
-        c = get_body(name.lower(), Time(when, scale="utc"))
-        return float(c.ra.deg), float(c.dec.deg), float(c.distance.to("km").value)
+        t = Time(when, scale="utc")
+        earth = get_body_barycentric("earth", t).xyz.to(u.km).value
+        lt = 0.0
+        for _ in range(3):                      # light time: where the body was when it sent the light
+            v = get_body_barycentric(name.lower(), t - lt * u.s).xyz.to(u.km).value - earth
+            lt = math.sqrt(sum(c * c for c in v)) / C_KM_S
+    x, y, z = (float(c) for c in v)
+    dist = math.sqrt(x * x + y * y + z * z)
+    return math.degrees(math.atan2(y, x)) % 360.0, math.degrees(math.asin(z / dist)), dist
 
 
 def observer_km(lat_deg, lon_deg, alt_m, jd):

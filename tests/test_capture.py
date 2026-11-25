@@ -754,3 +754,61 @@ def test_photo_countdown(monkeypatch):
     assert left() == " 1 s"
     now[0] += 1.0
     assert left() == " (reading)"
+
+
+def test_focal_length_from_solution(monkeypatch):
+    """A plate solution sets the Focal length box when its scale says otherwise (> 0.5 %)."""
+    from types import SimpleNamespace
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    try:
+        from pystarlight.capture import gui
+    except ImportError as e:
+        pytest.skip(f"no Qt: {e}")
+    box = SimpleNamespace(v=400.0)
+    box.value = lambda: box.v
+    box.setValue = lambda v: setattr(box, "v", v)
+    w = SimpleNamespace(c=SimpleNamespace(pixel_um=3.45), focal_spin=box, solve_log="",
+                        solution={"scale_arcsec": 0.956})
+    gui.MainWindow.focal_from_solution(w)
+    assert box.v == pytest.approx(744.4, abs=0.1) and "744.4 mm" in w.solve_log
+    box.v = 745.0                                   # the same solution again: left alone
+    gui.MainWindow.focal_from_solution(w)
+    assert box.v == 745.0
+    w.solution = {"scale_arcsec": 0.9555}           # a new one within 0.5 %: left alone
+    gui.MainWindow.focal_from_solution(w)
+    assert box.v == 745.0
+
+
+def test_long_photo_sums_frames(monkeypatch):
+    """A photo longer than the camera's longest exposure: n frames after the exposure is set,
+    summed, EXPTIME the total, the time stamp the first frame's."""
+    from types import SimpleNamespace
+
+    import numpy as np
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    try:
+        from pystarlight.capture import gui
+    except ImportError as e:
+        pytest.skip(f"no Qt: {e}")
+
+    class Now:                                   # threads run at once
+        def __init__(self, target, args, daemon):
+            self.go = lambda: target(*args)
+
+        def start(self):
+            self.go()
+    monkeypatch.setattr(gui.threading, "Thread", Now)
+    saved = []
+    w = SimpleNamespace(c=SimpleNamespace(controller=SimpleNamespace(busy=False, exposure_us=10e6)),
+                        img=np.ones((2, 3), np.uint16), now_ns=lambda: 1_000_000_000,
+                        end_photo=lambda msg: setattr(w, "photo", None),
+                        save_photo=lambda *a: saved.append(a))
+    w.photo = {"us": 10e6, "n": 3, "sum": None, "count": 0, "first_ns": None, "applied": None}
+    gui.MainWindow.check_photo(w, None)                       # exposure applied
+    assert gui.MainWindow.photo_left(w) == " 40 s"
+    gui.MainWindow.check_photo(w, 1_010_000_000)              # started before: not the photo
+    for t in (2, 3, 4):
+        gui.MainWindow.check_photo(w, t * 1_000_000_000)
+    img, first, exposure_s, n = saved[0]
+    assert n == 3 and exposure_s == 30.0 and first == 2_000_000_000 and img.max() == 3.0
+    assert w.photo is None

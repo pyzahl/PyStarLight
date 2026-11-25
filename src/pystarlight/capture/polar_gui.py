@@ -328,7 +328,12 @@ class PolarWindow(QtWidgets.QWidget):
             return
         st = main.c.stacker
         age = time.monotonic() - job["since"]
-        if age > STEP_TIMEOUT_S and job["phase"] in ("slew", "stack", "solve"):
+        limit = STEP_TIMEOUT_S
+        if job["phase"] == "stack":                  # long exposures: 16 x 40 s is more than that
+            frames = getattr(main, "stack_frames", None)
+            if frames is not None:
+                limit += 1.5 * frames.value() * main.c.controller.exposure_us / 1e6
+        if age > limit and job["phase"] in ("slew", "stack", "solve"):
             self.fail(f"gave up waiting for the {job['phase']}")
             return
         if job["phase"] == "slew":

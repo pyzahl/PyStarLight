@@ -120,3 +120,54 @@ def test_solve_stack_with_faked_astrometry(tmp_path, monkeypatch):
     assert xy == sorted((round(x), round(y)) for x, y, _ in sorted(STARS, key=lambda t: -t[2])[:3])
     assert (tmp_path / "cam_stack16.solve.json").exists()
     assert "Centre  RA 20h40m00" in solve_stack.describe(out)
+
+
+def test_wrong_focal_length_solves_near_without_scale(tmp_path, monkeypatch):
+    """A wrong FOCALLEN (another telescope): near the hint with the scale fails, near the hint
+    without it solves (no whole-sky search), and the solution names the real focal length."""
+    fits = pytest.importorskip("astropy.io.fits")
+    from astropy.wcs import WCS
+
+    from pystarlight.wcs import solve as solve_mod
+    monkeypatch.setenv("PYSTARLIGHT_CONFIG", "none")
+    monkeypatch.setattr(solve_mod, "uses_local_solver", lambda cfg: True)
+    w = WCS(naxis=2)
+    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    w.wcs.crpix = [(W + 1) / 2, (H + 1) / 2]
+    w.wcs.crval = [310.0, 45.0]
+    s = 20.63 / 3600
+    w.wcs.cd = [[-s, 0], [0, -s]]
+    wcs_file = tmp_path / "truth.wcs.fit"
+    fits.PrimaryHDU(header=w.to_header()).writeto(wcs_file)
+    calls = []
+
+    def fake_solve(image, **kw):
+        calls.append((kw["center"], kw["scale_arcsec"]))
+        if kw["scale_arcsec"] is not None:
+            raise RuntimeError("did not solve")
+        return str(wcs_file), None
+
+    monkeypatch.setattr(solve_stack, "solve_astrometry_net", fake_solve)
+    path = tmp_path / "cam_stack16.fits"
+    stacker.write_fits(str(path), field(), [("DATE-OBS", "2026-10-27T00:00:00.000"),
+                                            ("XPIXSZ", 2.4), ("FOCALLEN", 48.0)])
+    out = solve_stack.solve_fits(str(path), n_stars=3, use_simbad=False, log=lambda m: None,
+                                 center=(310.2, 45.1))
+    # near with the scale, the whole sky with it (a wrong hint), near without it
+    assert [c is not None for c, _ in calls] == [True, False, True]
+    assert calls[0][1] == pytest.approx(10.31, abs=0.01) and calls[2][1] is None
+    assert "focal length is 24 mm" in out["scale_warning"]
+    assert "⚠ plate scale 20.6" in solve_stack.describe(out)
+
+
+def test_stacker_rejects_a_false_jump(tmp_path, monkeypatch):
+    """A frame whose phase correlation jumps far from the last shift (a false match on a frame
+    with few stars) keeps the last shift instead of smearing the stack."""
+    st = stacker.LiveStacker(lambda raw: raw, str(tmp_path), "cam")
+    calls = iter([(1.0, 0.5, 0.5), (-830.0, -535.0, 0.5)])
+    monkeypatch.setattr(stacker, "measure_shift", lambda *a: next(calls))
+    st.begin(4)
+    img = np.zeros((200, 300), np.float32)
+    for _ in range(3):                                      # reference, good, false jump
+        st._add(img, None, {})
+    assert st.unaligned == 1 and st.shift == (1.0, 0.5)

@@ -113,25 +113,50 @@ def solve_stack(image: np.ndarray, header: dict, n_stars: int = 5, workdir: str 
     from .solve import uses_local_solver
     local = uses_local_solver(cfg['astrometry'])
 
-    def solve(near):
+    def solve(near, sc=scale):
         # near the expected position a local solve takes seconds when the field is there, but
         # minutes to give up when it is not (a stale hint): give up early, then the whole sky
         return solve_astrometry_net(
             img, workdir=str(Path(workdir) / '.wcs-work'), log=log, cancel=cancel,
             timeout=NEAR_TIMEOUT_S if (near is not None and local) else timeout,
-            scale_arcsec=scale, scale_err_pct=float(cfg['astrometry']['scale_err_pct']),
+            scale_arcsec=sc, scale_err_pct=float(cfg['astrometry']['scale_err_pct']),
             center=near, radius_deg=radius_deg, dest=dest, return_job=True,
             downsample=2 if shape[1] > DOWNSAMPLE_ABOVE_PX else None)
+
+    def failed(e):
+        if cancel is not None and cancel.is_set():
+            raise e
+    path = None
     if center is not None:
         log(f'searching within {radius_deg:g} deg of RA {center[0]:.3f} Dec {center[1]:+.3f}')
         try:
             path, job = solve(center)
         except Exception as e:
-            if cancel is not None and cancel.is_set():
-                raise
-            log(f'not solved near the expected position ({e}); trying the whole sky')
-            path, job = solve(None)
-    else:
+            failed(e)
+            log(f'not solved near the expected position ({e})')
+        if path is None and scale and local:
+            # a wrong hint (a parked or bumped mount): the whole sky at the right scale takes
+            # seconds; a wrong focal length (another telescope, a reducer) fails everywhere at
+            # that scale: then near the hint without it, which takes seconds too
+            log('trying the whole sky at that scale')
+            try:
+                path, job = solve_astrometry_net(
+                    img, workdir=str(Path(workdir) / '.wcs-work'), log=log, cancel=cancel,
+                    timeout=NEAR_TIMEOUT_S, scale_arcsec=scale,
+                    scale_err_pct=float(cfg['astrometry']['scale_err_pct']), center=None,
+                    radius_deg=radius_deg, dest=dest, return_job=True,
+                    downsample=2 if shape[1] > DOWNSAMPLE_ABOVE_PX else None)
+            except Exception as e:
+                failed(e)
+                log(f'not solved at that scale ({e}); trying near the expected position without it')
+                try:
+                    path, job = solve(center, None)
+                except Exception as e:
+                    failed(e)
+                    log(f'not solved there without the scale either ({e})')
+        if path is None:
+            log('trying the whole sky')
+    if path is None:
         path, job = solve(None)
     wcs = load_wcs(path)
     o = orientation(wcs, shape)
@@ -142,6 +167,14 @@ def solve_stack(image: np.ndarray, header: dict, n_stars: int = 5, workdir: str 
            'scale_arcsec': o.scale_arcsec, 'north_deg': o.north_deg, 'mirrored': o.mirrored,
            'field_deg': [fw, fh], 'time': header.get('DATE-OBS'), 'altaz': None, 'site': None}
     log(f'centre RA {ra_s}  Dec {dec_s}, field {fw:.2f} x {fh:.2f} deg')
+    if scale and abs(o.scale_arcsec / scale - 1) * 100 > float(cfg['astrometry']['scale_err_pct']):
+        pix = header.get('XPIXSZ')
+        out['scale_warning'] = (
+            f'plate scale {o.scale_arcsec:.3f}"/px, not the {scale:.2f}"/px of the header'
+            + (f' (FOCALLEN {header.get("FOCALLEN")} mm): the focal length is '
+               f'{206.265 * float(pix) / o.scale_arcsec:.0f} mm' if pix else '')
+            + ': set it, or every solve takes the slow way')
+        log('WARNING: ' + out['scale_warning'])
     st = _site(header, cfg.get('observer'))
     if st and st['source'] != 'GPS':
         log(f"WARNING: the stack carries no GPS position: alt/az for {st['source']} (fallback)")
@@ -197,6 +230,8 @@ def describe(out: dict) -> str:
     if out.get('altaz'):
         lines.append(f"Pointing  alt {out['altaz']['alt']:.1f}  az {out['altaz']['az']:.1f} deg "
                      f"({out['site']['source']}, {out['time']} UTC)")
+    if out.get('scale_warning'):
+        lines.append("⚠ " + out['scale_warning'])
     for i, s in enumerate(out.get('stars', []), 1):
         v = f" V={s['vmag']:.2f}" if s.get('vmag') is not None else ""
         lines.append(f"{i}. {s['name'] or '?'}{v}  {s['ra_hms']} {s['dec_dms']}  "

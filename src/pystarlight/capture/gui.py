@@ -56,6 +56,7 @@ from .widgets import (  # noqa: F401
 )
 
 EXP_STEPS = 1000            # exposure slider resolution (log scale)
+PHOTO_MAX_US = 60e6         # longest photo: frames of the camera's longest exposure, summed
 # exposure slider ranges (us): short up to 2 s; typing a longer exposure switches it to 0.5 .. 60 s
 # (or the camera's limit), typing one below 1 s back
 EXP_SHORT_MAX_US = 2e6
@@ -1060,6 +1061,13 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:                  # e.g. not writable
             QtWidgets.QMessageBox.warning(self, "Station & equipment", f"could not save {path}: {e}")
             return False
+        try:                                    # one focal length: the stack's (FOCALLEN, solve scale) too
+            focal = float(dlg.values().get("focal_length_mm") or 0)
+        except (TypeError, ValueError):
+            focal = 0.0
+        if focal > 0 and abs(focal - self.focal_spin.value()) > 0.05:
+            print(f"focal length {self.focal_spin.value():g} -> {focal:g} mm (Station & equipment)")
+            self.focal_spin.setValue(focal)     # on_focal: c.focal_mm, the setting, the scale label
         self.show_station()
         return True
 
@@ -1205,6 +1213,7 @@ class MainWindow(QtWidgets.QMainWindow):
         c = self.c
         now = time.monotonic()
         self.update_body()
+        self.focal_from_solution()
         mode = self.mode()
         rec = c.recorder
 
@@ -1243,6 +1252,14 @@ class MainWindow(QtWidgets.QMainWindow):
         if c.controller.reconfigs != self.roi_seen:
             self.roi_seen = c.controller.reconfigs
             self.after_reconfigure()
+        if c.controller.restarts != getattr(self, "restarts_seen", 0):
+            # a camera reboot (VEYE hang) starts from its defaults and was set to the values read
+            # back last, which may already be those: the exposure and gain asked for, again
+            self.restarts_seen = c.controller.restarts
+            print(f"camera restarted: exposure {self.target['exposure'] / 1000:g} ms, "
+                  f"gain {self.target['gain']:g} dB again")
+            c.controller.request("exposure", self.target["exposure"])
+            c.controller.request("gain", self.target["gain"])
 
         # exposure changed -> new frame period -> new pulse-to-frame lag
         stamper = c.grabber.stamper
@@ -1577,7 +1594,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.photo = None                   # a photo being taken: its exposure, the old one
         self.photo_msg = ""
         self.photo_spin = QtWidgets.QDoubleSpinBox(decimals=3, suffix=" ms", keyboardTracking=False)
-        self.photo_spin.setRange(self.c.exp_min / 1000, self.c.exp_max / 1000)
+        # longer than the camera's longest exposure (VEYE: 10 s): frames of at most that, summed
+        self.photo_spin.setRange(self.c.exp_min / 1000, max(self.c.exp_max, PHOTO_MAX_US) / 1000)
         self.photo_spin.setValue(self.settings.value("photo_exposure_ms", 1000.0, type=float))
         self.photo_spin.setToolTip("exposure of a single photo (the live exposure comes back after it)")
         self.photo_spin.valueChanged.connect(lambda ms: self.settings.setValue("photo_exposure_ms", ms))
@@ -1596,7 +1614,8 @@ class MainWindow(QtWidgets.QMainWindow):
     # ---- single photo ----
     def on_photo(self):
         """Photo button: the photo exposure, the first frame fully exposed with it is kept, the
-        live exposure back; pressed again while waiting: cancelled."""
+        live exposure back; pressed again while waiting: cancelled. Longer than the camera's
+        longest exposure: n equal frames of at most that, summed (EXPTIME the total)."""
         c = self.c
         if self.photo is not None:
             self.end_photo("photo cancelled")
@@ -1604,7 +1623,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if c.recorder.state != "idle" or self.pending_rec is not None:
             self.photo_msg = "no photo while recording (it would change the recording's exposure)"
             return
-        us = self.photo_spin.value() * 1000
+        total = self.photo_spin.value() * 1000
+        n = max(1, math.ceil(total / c.exp_max - 1e-9))
+        us = total / n
         if self.mode() == "gps":
             longest = max_exposure_us(float(self.gps_rate()), c.trigger_delay_ns(),
                                       c.timing if c.is_veye else None)
@@ -1613,9 +1634,10 @@ class MainWindow(QtWidgets.QMainWindow):
                                   f"{rate_str(self.gps_rate())} allows ({longest / 1000:.0f} ms): "
                                   "free run for a long photo")
                 return
-        self.photo = {"us": us, "old": self.target["exposure"], "applied": None,
-                      "since": time.monotonic()}
-        self.photo_msg = f"photo: {us / 1000:g} ms ..."
+        self.photo = {"us": us, "n": n, "sum": None, "count": 0, "first_ns": None,
+                      "old": self.target["exposure"], "applied": None, "since": time.monotonic()}
+        self.photo_msg = (f"photo: {total / 1000:g} ms ..." if n == 1 else
+                          f"photo: {n} x {us / 1e6:g} s = {total / 1e6:g} s, summed ...")
         self.photo_button.setText("Cancel photo")
         self.set_exposure(us)
 
@@ -1626,21 +1648,30 @@ class MainWindow(QtWidgets.QMainWindow):
         if p["applied"] is None:
             if not c.controller.busy and abs(c.controller.exposure_us - p["us"]) <= max(5, 0.02 * p["us"]):
                 p["applied"] = self.now_ns()
-                # the countdown: at worst the frame under way, then the photo frame
-                p["end"] = time.monotonic() + 2 * p["us"] / 1e6
+                # the countdown: at worst the frame under way, then the photo frame(s)
+                p["end"] = time.monotonic() + (1 + p["n"]) * p["us"] / 1e6
             return
         if exp_ns is None or exp_ns < p["applied"] + 50_000_000 or self.img is None:
-            p["end"] = time.monotonic() + p["us"] / 1e6     # not this one: the photo frame starts now
+            p["end"] = time.monotonic() + p["n"] * p["us"] / 1e6   # not this one: the photo starts now
             return
-        img, exposure_s = self.img.copy(), c.controller.exposure_us / 1e6
+        img = self.img.astype(np.float64)
+        p["sum"] = img if p["sum"] is None else p["sum"] + img
+        p["count"] += 1
+        if p["first_ns"] is None:
+            p["first_ns"] = exp_ns
+        if p["count"] < p["n"]:
+            p["end"] = time.monotonic() + (p["n"] - p["count"]) * p["us"] / 1e6
+            return
+        img, n, first = p["sum"], p["n"], p["first_ns"]
+        exposure_s = n * c.controller.exposure_us / 1e6
         self.end_photo("")
-        threading.Thread(target=self.save_photo, args=(img, exp_ns, exposure_s), daemon=True).start()
+        threading.Thread(target=self.save_photo, args=(img, first, exposure_s, n), daemon=True).start()
 
     def photo_left(self):
         """The photo button's countdown for a long photo (> 1 s): ' 23 s' until the photo frame is
         read, '' for short ones."""
         p = self.photo
-        if p is None or p["us"] <= 1e6:
+        if p is None or p["us"] * p.get("n", 1) <= 1e6:
             return ""
         if p.get("end") is None:
             return " (setting)"
@@ -1655,8 +1686,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if msg:
             self.photo_msg = msg
 
-    def save_photo(self, img, exp_ns, exposure_s):
-        """FITS with the camera's header values and, once solved, the WCS moved onto this frame."""
+    def save_photo(self, img, exp_ns, exposure_s, n=1):
+        """FITS with the camera's header values and, once solved, the WCS moved onto this frame;
+        n > 1: the sum of n frames (no alignment: the mount tracks)."""
         c = self.c
         try:
             info = dict(c.stacker.header_info())
@@ -1675,6 +1707,8 @@ class MainWindow(QtWidgets.QMainWindow):
             target = ((name, *self.target_radec) if self.target_radec else (name, None, None)) \
                 if name else None
             cards = photo.header(info, exp_ns, exposure_s, wcs, stars, target, CAMERA_VERSION)
+            if n > 1:
+                cards.insert(4, ("NCOMBINE", int(n), "frames summed"))
             path = photo.save(c.stacker.out_dir, c.stacker.name, img, cards, exp_ns)
             self.photo_msg = (f"photo saved: {os.path.basename(path)}"
                               + (" (with WCS)" if wcs else " (no plate solution: no WCS)"))
@@ -1807,6 +1841,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.target_radec, self.target_found = (ra, dec), (text, name)
         return True
 
+    def focal_from_solution(self):
+        """A new plate solution: the Focal length box from its scale (206.265 x pixel um /
+        arcsec per px) when that differs by more than 0.5 %, so the next solves have the right
+        scale hint (another telescope, a reducer, a focuser that moved the focal plane)."""
+        sol = self.solution
+        if sol is None or sol is getattr(self, "focal_sol", None):
+            return
+        self.focal_sol = sol
+        pix, scale = self.c.pixel_um, sol.get("scale_arcsec")
+        if not pix or not scale:
+            return
+        focal = round(206.265 * float(pix) / float(scale), 1)
+        old = self.focal_spin.value()
+        if not old or abs(focal / old - 1) > 0.005:
+            print(f"focal length {old:g} -> {focal:g} mm (plate solution, {scale:.4f}\"/px)")
+            self.focal_spin.setValue(focal)     # on_focal: c.focal_mm, the setting, the scale label
+            self.solve_log = f"focal length set to {focal:g} mm from the plate solution (was {old:g})"
+
     def solve_hint(self):
         """Where the field probably is: where the mount points (Mount panel connected), else the
         last solution's centre (this run or the last one), else the target's position (from the
@@ -1814,7 +1866,8 @@ class MainWindow(QtWidgets.QMainWindow):
         dock = getattr(self, "mount_dock", None)
         if dock is not None and dock.mount is not None and dock.client is not None and dock.client.connected:
             try:
-                pos = dock.mount.position()
+                # parked: the AM5 keeps reporting where it was, wherever the scope points
+                pos = None if dock.mount.parked() else dock.mount.position()
                 if pos is not None:
                     return pos
             except Exception:
