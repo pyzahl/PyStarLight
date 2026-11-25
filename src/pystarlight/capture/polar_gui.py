@@ -5,12 +5,14 @@ and guides the Alt / Az knobs with an arrow on the live image (capture/polar.py 
 NEW CODE. Measure: (optionally a goto near Polaris / sigma Oct first) stack + plate-solve, sync
 the mount, turn the RA axis by the step (a goto at the mount's own Dec: only the RA axis moves;
 direction auto / west / east within the allowed range: the path above the minimum altitude, not
-across the meridian), solve again (and once more for three points). Adjust: a star near the
-centre (or one clicked) is followed on the live frames; its position gives the knob turns made
-so far; the window shows what is left (Alt raise / lower, Az east / west) and the image an arrow
-from the star along the Az leg, then the Alt leg, to where it has to go. Refresh: a new solve at
-the same position re-bases the model (checks the turns). Uses the Mount panel's INDI connection
-and the camera window's stack and plate solve. Config [polar_align].
+across the meridian; auto turns back the other way on the next Measure, so repeated measurements
+go +30, -30, ... and do not run into the mount's limits), solve again (and once more for three
+points). Adjust: a star near the centre (or one clicked) is followed on the live frames; its
+position gives the knob turns made so far; the window shows what is left (Alt raise / lower, Az
+east / west) and the image an arrow from the star along the Az leg, then the Alt leg, to where
+it has to go. Refresh: a new solve at the same position re-bases the model (checks the turns).
+Uses the Mount panel's INDI connection and the camera window's stack and plate solve. Config
+[polar_align].
 """
 import math
 import threading
@@ -82,6 +84,7 @@ class PolarWindow(QtWidgets.QWidget):
         self.cfg = {**DEFAULTS, **localconfig.section("polar_align")}
         self.action = None
         self.job = None              # the measuring / refresh steps, polled
+        self.last_sign = None        # the last Measure's RA turn: the next one turns back (auto)
         self.points = []             # pa.Point of this measurement
         self.alignment = None        # pa.Alignment once measured
         self.info = {}               # what went into the axis
@@ -286,6 +289,12 @@ class PolarWindow(QtWidgets.QWidget):
         self.error = ""
 
     def stop(self):
+        if self.job is not None:                      # a measure / refresh running: its stack and solve too
+            main = self.main
+            if main.solve_thread is not None and main.solve_cancel is not None:
+                main.solve_cancel.set()               # ends solve-field (poor sky: no endless solve)
+            if self.job.get("phase") == "stack" and main.c.stacker.state == "stacking":
+                main.c.stacker.cancel()
         self.job = None
         self.alignment = None
         if self.follower is not None and self.follower.state != "idle":
@@ -379,11 +388,12 @@ class PolarWindow(QtWidgets.QWidget):
             try:
                 sign, _, low = pa.plan_moves(site, ra, dec, jd_now(), self.cfg["step_deg"], moves,
                                              self.cfg["direction"], self.cfg["min_alt_deg"],
-                                             self.cfg["cross_meridian"])
+                                             self.cfg["cross_meridian"],
+                                             prefer=-self.last_sign if self.last_sign else None)
             except ValueError as e:
                 self.fail(str(e))
                 return
-            self.job["sign"] = sign
+            self.job["sign"] = self.last_sign = sign
             print(f"polar: turning {'west' if sign > 0 else 'east'} by {self.cfg['step_deg']:g}° "
                   f"x {moves} (lowest {low:.0f}°)")
         target = ((ra - self.job["sign"] * self.cfg["step_deg"]) % 360.0, dec)

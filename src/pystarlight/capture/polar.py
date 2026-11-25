@@ -376,12 +376,14 @@ class Alignment:
 
 # ---- where the RA axis may turn ----
 def plan_moves(site, mount_ra, mount_dec, jd, step_deg, moves, direction="auto", min_alt=20.0,
-               cross_meridian=False):
+               cross_meridian=False, prefer=None):
     """The RA turns for the next points from the mount's position now (JNow): (sign, [(ra, dec)
     JNow targets], lowest altitude on the way), sign +1 west (hour angle up), -1 east. The path
     (a circle at the mount's Dec) must stay above min_alt and, unless cross_meridian, on its
-    side of the meridian (a German mount would flip: the Dec axis moves). ValueError with the
-    reason when neither direction fits."""
+    side of the meridian (a German mount would flip: the Dec axis moves). With direction "auto",
+    prefer (+1 / -1) is taken when it fits (repeated measurements turn back and forth, so the
+    mount does not creep towards its limits), else the direction with the higher lowest altitude.
+    ValueError with the reason when neither direction fits."""
     ha0 = site.hour_angle(mount_ra, jd)
     total = step_deg * moves
     signs = {"west": [1], "east": [-1]}.get(direction, [1, -1])
@@ -398,9 +400,11 @@ def plan_moves(site, mount_ra, mount_dec, jd, step_deg, moves, direction="auto",
         if crosses and not cross_meridian:
             tried.append(f"{name}: crosses the meridian")
             continue
-        if best is None or low > best[2]:
+        if best is None or low > best[2] or (direction == "auto" and sign == prefer):
             targets = [((mount_ra - sign * step_deg * (i + 1)) % 360.0, mount_dec) for i in range(moves)]
             best = (sign, targets, low)
+            if direction == "auto" and sign == prefer:
+                break
     if best is None:
         raise ValueError("no room to turn the RA axis by " + f"{total:g} deg: " + "; ".join(tried)
                          + ". A smaller step, a lower minimum altitude, or another field.")

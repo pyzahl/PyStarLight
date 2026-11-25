@@ -188,6 +188,18 @@ def test_plan_moves_respects_horizon_and_meridian():
         pa.plan_moves(SITE, ra, 20.0, JD, 60.0, 1, direction="east", min_alt=30.0)
 
 
+def test_plan_moves_prefers_turning_back():
+    """Repeated measurements go back and forth: prefer is taken when it fits, else ignored."""
+    ra = (SITE.lst(JD) + 150.0) % 360.0               # near the pole: both ways fit
+    best, _, _ = pa.plan_moves(SITE, ra, 85.0, JD, 30.0, 1)
+    for prefer in (1, -1):
+        assert pa.plan_moves(SITE, ra, 85.0, JD, 30.0, 1, prefer=prefer)[0] == prefer
+    assert pa.plan_moves(SITE, ra, 85.0, JD, 30.0, 1, direction="west", prefer=-1)[0] == 1
+    ra = (SITE.lst(JD) + 30.0) % 360.0                # west crosses the meridian
+    assert pa.plan_moves(SITE, ra, 20.0, JD, 30.0, 1, prefer=1)[0] == -1
+    assert best in (1, -1)
+
+
 # ---- the window, on a fake mount and a fake stack / solve ----
 class IndiMount:
     """The Mount panel's mount over FakeMount: reports as an aligned mount would (offsets from a
