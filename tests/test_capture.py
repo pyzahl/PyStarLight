@@ -812,3 +812,75 @@ def test_long_photo_sums_frames(monkeypatch):
     img, first, exposure_s, n = saved[0]
     assert n == 3 and exposure_s == 30.0 and first == 2_000_000_000 and img.max() == 3.0
     assert w.photo is None
+
+
+def test_lost_camera_settings_are_sent_again(monkeypatch):
+    """After a reboot the camera may run its defaults (0 dB, 5 ms): sent again every 3 s, 5 x."""
+    from types import SimpleNamespace
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    try:
+        from pystarlight.capture import gui
+    except ImportError as e:
+        pytest.skip(f"no Qt: {e}")
+    sent = []
+    ctl = SimpleNamespace(busy=False, gain_db=0.0, exposure_us=5000.0,
+                          request=lambda k, v: sent.append((k, v)))
+    w = SimpleNamespace(c=SimpleNamespace(controller=ctl), photo=None,
+                        target={"gain": 19.3, "exposure": 63667.0})
+    check = lambda t: gui.MainWindow.check_camera_settings(w, t)     # noqa: E731
+    check(0.0)
+    check(2.0)
+    assert sent == []                                                # seen, not yet 3 s
+    check(3.5)
+    assert sent == [("exposure", 63667.0), ("gain", 19.3)]
+    for t in range(1, 10):
+        check(3.5 + 3.1 * t)
+    assert len(sent) == 10                                           # 5 tries
+    ctl.gain_db, ctl.exposure_us = 19.3, 60000.0                     # back (exposure clamped a bit)
+    check(100.0)
+    assert w.settings_tries == 0
+
+
+def test_recover_sets_manual_exposure_and_gain():
+    """A rebooted camera comes back with its power-up settings (maybe auto exposure / gain,
+    which ignore the manual values): recover() sets manual mode, then exposure and gain."""
+    import threading
+    from types import SimpleNamespace
+
+    from pystarlight.capture import cameras
+
+    class Cam:
+        def __init__(self):
+            self.auto, self.exp, self.gain, self.log = True, 5000.0, 0.0, []
+
+        def reboot(self):
+            self.auto = True                       # power-up settings
+            return True
+
+        def set_manual(self):
+            self.auto = False
+
+        def set_exposure_time(self, us):
+            if not self.auto:
+                self.exp = us
+
+        def set_gain(self, db):
+            if not self.auto:
+                self.gain = db
+
+        def clear_triggers(self):
+            self.log.append("free")
+
+        def __getattr__(self, name):               # stream / format / region calls: no-ops
+            return lambda *a, **k: None
+
+    s = cameras.CameraSession.__new__(cameras.CameraSession)
+    s.camera = cam = Cam()
+    s.grabber = SimpleNamespace(pause=lambda: None, take=lambda: None, resume=lambda st: None,
+                                stream=None)
+    s.stream_lock, s.stream, s.n_buffers = threading.Lock(), None, 4
+    s.pixel_format, s.region = "Y12", (0, 0, 8, 8)
+    s.controller = SimpleNamespace(exposure_us=63667.0, gain_db=19.3)
+    s._refresh = lambda: None
+    assert s.recover()
+    assert not cam.auto and cam.exp == 63667.0 and cam.gain == 19.3 and cam.log == ["free"]

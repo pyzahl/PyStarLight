@@ -31,6 +31,46 @@ def detect_text(img, scale_arcsec, x, y, half=15):
             f"({sep:.1f}\") from the catalogue position")
 
 
+BODY_ARCSEC = 45.0          # a star this close to a planet's / the Moon's computed position is it
+                            # (the built-in ephemeris: up to ~22" off; the fit of a bright disk)
+
+
+def bodies_in_field(sol):
+    """{index into sol['stars']: body name}: the solved star nearest to each planet / the Moon
+    within BODY_ARCSEC (its position at the solution's time, from its site when known)."""
+    from datetime import datetime, timezone
+
+    from . import bodies
+    stars = sol.get("stars") or []
+    if not stars or not sol.get("time"):
+        return {}
+    when = datetime.fromisoformat(sol["time"]).replace(tzinfo=timezone.utc)
+    site = sol.get("site") or {}
+    site = (site["lat"], site["lon"], site.get("ele") or 0.0) if site.get("lat") is not None else None
+    c = sol["center"]
+    reach = max(sol.get("field_deg") or [1.0]) + BODY_ARCSEC / 3600
+    found = {}
+    for name in bodies.BODIES:
+        try:
+            _, ra, dec = bodies.position(name, site, when)
+        except Exception:
+            continue
+        if _sep_deg(c["ra"], c["dec"], ra, dec) > reach:
+            continue
+        seps = [(_sep_deg(ra, dec, s["ra"], s["dec"]) * 3600, i) for i, s in enumerate(stars)]
+        sep, i = min(seps)
+        if sep <= BODY_ARCSEC and i not in found:
+            found[i] = name
+    return found
+
+
+def _sep_deg(ra1, dec1, ra2, dec2):
+    r = np.radians
+    return float(np.degrees(np.arccos(np.clip(
+        np.sin(r(dec1)) * np.sin(r(dec2)) + np.cos(r(dec1)) * np.cos(r(dec2)) * np.cos(r(ra1 - ra2)),
+        -1.0, 1.0))))
+
+
 def solution_marks(sol, n, target="", verify="", log=print, image=None, offset=(0, 0)):
     """Markers of a solution (solve_stack's dict, its 'wcs' file): the n brightest stars with
     catalogue names and magnitudes, the target (T; a name to look up, or {'name', 'ra', 'dec'}
@@ -48,7 +88,17 @@ def solution_marks(sol, n, target="", verify="", log=print, image=None, offset=(
     marks, notes, found = [], [], {}
     epoch = decimal_year(sol["time"]) if sol.get("time") else None
     radius = max(5.0, 3.0 * sol["scale_arcsec"])
+    try:
+        planets = bodies_in_field(sol)
+    except Exception as e:
+        planets = {}
+        notes.append(f"planets: {e}")
     for i, s in enumerate(sol.get("stars", [])[:n], 1):
+        if i - 1 in planets:                # the Moon / a planet: no catalogue has it
+            marks.append({"x": s["x"], "y": s["y"], "r": max(4.0, 1.5 * (s.get("fwhm") or 3)),
+                          "label": f"{i} {planets[i - 1]}", "kind": "star", "name": planets[i - 1],
+                          "ra": s["ra"], "dec": s["dec"]})
+            continue
         log(f"naming star {i}")
         hit = catalog_name(s["ra"], s["dec"], radius, epoch, log=log)
         name = hit["name"] if hit else (s.get("name") or s.get("ra_hms", ""))

@@ -350,6 +350,12 @@ class CameraSession:
             print("Camera rebooted (firmware hang)" if ok else "Camera reboot: no answer")
             camera.set_pixel_format_from_string(self.pixel_format)
             camera.set_region(*self.region)
+            # as configure(): it comes back with its power-up settings, which may be auto
+            # exposure / gain: then it ignores the manual values (seen: 5 ms, 0 dB, no change
+            # at any setting until the app was restarted)
+            try_call(lambda: camera.set_manual())
+            if getattr(camera, "fixed_fps", None):
+                try_call(lambda: camera.set_frame_rate(camera.fixed_fps))
             self.stream = camera.create_stream(self.n_buffers)
             self.apply_trigger("free")
             if self.controller is not None:

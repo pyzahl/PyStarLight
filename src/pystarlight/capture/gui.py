@@ -1252,6 +1252,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if c.controller.reconfigs != self.roi_seen:
             self.roi_seen = c.controller.reconfigs
             self.after_reconfigure()
+        self.check_camera_settings(now)
         if c.controller.restarts != getattr(self, "restarts_seen", 0):
             # a camera reboot (VEYE hang) starts from its defaults and was set to the values read
             # back last, which may already be those: the exposure and gain asked for, again
@@ -1840,6 +1841,31 @@ class MainWindow(QtWidgets.QMainWindow):
             return True
         self.target_radec, self.target_found = (ra, dec), (text, name)
         return True
+
+    def check_camera_settings(self, now):
+        """The camera lost the gain / exposure asked for (seen after a reboot: 0 dB, 5 ms, its
+        defaults, when the writes came before it was ready): send them again, every 3 s, up to 5
+        times. Only gross misses count for the exposure (half of it), as a GPS rate may clamp it."""
+        c, t = self.c, self.target
+        ctl = c.controller
+        if ctl.busy or self.photo is not None:
+            self.settings_since = None
+            return
+        lost = abs(ctl.gain_db - t["gain"]) > 0.3 or ctl.exposure_us < 0.5 * t["exposure"]
+        if not lost:
+            self.settings_since, self.settings_tries = None, 0
+            return
+        if getattr(self, "settings_since", None) is None:
+            self.settings_since = now
+            return
+        tries = getattr(self, "settings_tries", 0)
+        if now - self.settings_since < 3.0 or tries >= 5:
+            return
+        self.settings_since, self.settings_tries = now, tries + 1
+        print(f"camera runs gain {ctl.gain_db:g} dB, exposure {ctl.exposure_us / 1000:g} ms, not "
+              f"{t['gain']:g} dB, {t['exposure'] / 1000:g} ms: set again ({tries + 1}/5)")
+        ctl.request("exposure", t["exposure"])
+        ctl.request("gain", t["gain"])
 
     def update_star_name(self):
         """A star's proper name as the target (Polaris, Atlas, alf UMi): its position now from the

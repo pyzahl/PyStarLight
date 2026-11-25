@@ -45,3 +45,17 @@ def test_moon_from_a_site_matches_horizons():
     assert separation(ra0, dec0, ra, dec) > 0.5
     tol = 1.0 if bodies.ephemeris() == "de440s" else BUILTIN_TOL["Moon"]
     assert separation(ra, dec, *MOON_GREENWICH) * 3600 < tol
+
+
+def test_planet_named_among_solved_stars():
+    """The 2026-11-25 Uranus stack: the brightest solved 'star' is Uranus (no catalogue has it);
+    a star 2' away is left to the catalogues."""
+    from pystarlight.capture.marks import bodies_in_field
+    sol = {"time": "2026-11-25T05:44:42.910", "center": {"ra": 61.32217, "dec": 20.66877},
+           "field_deg": [0.544, 0.410], "site": None,
+           "stars": [{"ra": 61.235620, "dec": 20.856182},             # a star
+                     {"ra": 61.322245, "dec": 20.671183},             # Uranus, measured
+                     {"ra": 61.322245, "dec": 20.704516}]}            # 2' north
+    assert bodies_in_field(sol) == {1: "Uranus"}
+    sol["time"] = "2026-06-01T00:00:00.000"                          # Uranus elsewhere
+    assert bodies_in_field(sol) == {}
