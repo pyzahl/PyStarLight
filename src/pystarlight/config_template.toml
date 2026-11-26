@@ -265,6 +265,19 @@ auto_send = false          # hand over after every Run
 stack_image = true
 stack_max_frames = 300     # evenly spaced subset for long runs (0 = all)
 stack_formats = ["svg", "png", "pdf"]
+# Tangra 3 light-curve file <movie>.lc after each run: target + up to 3 references / check stars
+# (Tangra holds 4), the 35x35 pixel box around each per frame, so Tangra can open it without
+# the video and re-measure (other aperture, background, PSF photometry).
+tangra_lc = false
+# Compressed copy of the movie after each run: "" (none), "mp4" (H.264, 8 bit, asinh stretch,
+# spatial denoise, frame number and time burnt in: to look at, lossy, not for photometry) or
+# "mkv" (FFV1, lossless, the recorded 16-bit pixels, ~1/4 of raw). Needs ffmpeg.
+# Also: pystarlight movie FILE [--lossless] [--bin N].
+movie = ""
+movie_crf = 23             # H.264 quality: lower = better and larger
+movie_bin = 2              # MP4: bin 2x2 (sky noise is what costs: 1 is ~4x larger)
+movie_target = true        # MP4: the target's open cross and name on each frame (as the player)
+movie_curve = true         # MP4: its light curve below the frame, step fit, D / R, time cursor
 
 [plot]
 formats = ["pdf", "png"]

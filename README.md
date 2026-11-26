@@ -25,7 +25,12 @@ programs behind it:
     1 sigma error;
   - magnitude histograms;
   - an `event.json` with every detail of the event, which can go straight to PySyzygos'
-    observation report.
+    observation report;
+  - optionally a **Tangra `.lc` file** (config `[output] tangra_lc`): target and up to three
+    reference / check stars with the 35×35 pixel box around each in every frame, so Tangra 3
+    opens it without the video and can re-measure the light curve; and a compressed copy of the
+    movie (`[output] movie`: H.264 `.mp4` to look at, with the target marked and its light curve
+    running below, or lossless 16-bit FFV1 `.mkv`).
 - **`pystarlight camera`, capture on a Raspberry Pi 5 (experimental)** (camera 1.5.0). It
   records frames GPS-triggered and stamped in UTC (VEYE MIPI and Aravis cameras, u-blox GPS)
   to RAVF or SER; ZWO ASI cameras and any `/dev/video` device (e.g. an analog grabber)
@@ -264,6 +269,7 @@ extras shown); `pystarlight --help` lists the tools, `pystarlight <tool> --help`
 | `pystarlight analyze FILE` | the analysis: mark target / reference / check stars (or Auto ap, `--auto`), plate-solve, photometry, event timing, `event.json`, export for PyOTE (see [Getting started](#getting-started)) | `uv sync --extra all`<br>`uv run pystarlight analyze FILE` |
 | `pystarlight player FILE` | play a recording with its time: UTC and GPS status per frame, dropped / irregular frames, stack & plate-solve a frame range | `uv sync --extra all --extra camera`<br>`uv run pystarlight player FILE` |
 | `pystarlight camera` | capture on the Raspberry Pi 5: live view, GPS-timed RAVF / SER recording, live stack + plate solve, mount panel and focuser window with focus curve (INDI) | `uv sync --extra all --extra camera --extra aravis`<br>`uv run pystarlight camera` |
+| `pystarlight movie FILE` | compressed copy of a recording: H.264 MP4 (asinh stretch, binned 2×2, frame number and UTC burnt in; lossy, to look at) or `--lossless` FFV1 MKV (the recorded 16-bit pixels, ~¼ of raw); `--start/--stop`, `--bin 1` full size; after an analysis `--target` marks the target (open cross + name) and `--curve` adds its light curve below the frame with a time cursor, step fit and D/R, as the player shows them | needs `ffmpeg`<br>`uv run pystarlight movie FILE` |
 | `pystarlight config` | the private config: `init`, `path`, `show`, `sites` | `uv run pystarlight config path` |
 
 `FILE` is any supported recording (`.ravf .ser .adv .aav .avi .mov` or a FITS folder).
@@ -501,7 +507,8 @@ only (solving first only offline): type the target in the star field at the top,
   noise), not star-shaped (FWHM outside 0.6–1.6 × the field's median: doubles, galaxies, hot
   pixels), at the edge (the box leaves the frame or touches a timestamp now or by the end of the
   drift), a neighbour in its box (spoils the local background), next to the target.
-- `--batch` writes what **Run** writes (CSVs, figures, `event.json`, the field stack) and exits
+- `--batch` writes what **Run** writes (CSVs, figures, `event.json`, the field stack, the Tangra
+  `.lc` and the movie copy when configured) and exits
   with 1 when no target or references were found.
 
 On the test recording near Deneb the five automatic references gave the target a normalised

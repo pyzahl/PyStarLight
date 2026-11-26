@@ -3,6 +3,7 @@
     pystarlight analyze FILE    analyse a recording: photometry, event timing, report (also: analyse)
     pystarlight player FILE     play a recording with its GPS / time stamps, frame status, stack & solve
     pystarlight camera          record on the Raspberry Pi 5 (GPS-timed frames)
+    pystarlight movie FILE      compressed copy: H.264 MP4 (to look at) or --lossless FFV1 MKV
     pystarlight config ...      the private config: init, path, show, sites
     pystarlight doctor          check the installation: what is missing and how to fix it
     pystarlight FILE            = pystarlight analyze FILE
@@ -23,6 +24,8 @@ TOOLS = {
     "player": ("play a recording: GPS / time stamps, dropped frames, stack & plate solve",
                "pystarlight.capture.player"),
     "camera": ("record on the Raspberry Pi 5: live view, GPS-timed RAVF / SER", "pystarlight.capture.app"),
+    "movie": ("compressed copy of a recording: H.264 MP4 to look at, or --lossless FFV1 MKV",
+              "pystarlight.tangra"),
     "config": ("the private config: init, path, show, sites", "pystarlight.config"),
     "doctor": ("check the installation: what is missing and how to fix it", "pystarlight.doctor"),
     # TEMPORARY (VEYE IMX265 word slips; remove with slip_repair.py)

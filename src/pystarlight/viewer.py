@@ -2090,6 +2090,7 @@ class Viewer:
         print(self.step_summary())
         if self.cfg.get('output', {}).get('stack_image'):
             self.start_stack(lc)
+        self.start_exports(lc)
         if (self.cfg.get('pysyzygos_observations') or {}).get('auto_send'):
             self.send_event()
 
@@ -2127,7 +2128,57 @@ class Viewer:
         wait('_send_job', lambda: None)
         if getattr(self, '_send_job', None) is not None:
             self._poll_send()
+        self.finish_jobs()                          # Tangra .lc, movie copy
         return 0
+
+    # ---------------------------------------------------------------- Tangra .lc, movie copy
+
+    def start_exports(self, lc):
+        """[output] tangra_lc / movie: <movie>.lc (Tangra 3, re-measurable) and a compressed
+        copy of the movie (.mp4 / .mkv), each in the background (both read the whole movie)."""
+        from . import tangra
+        oc = self.cfg.get('output', {})
+        frames = lc[lc.names[0]]['frame']
+        start, stop = int(frames[0]), int(frames[-1])
+        if oc.get('tangra_lc'):
+            out = self.path.with_suffix('.lc')
+            level = (getattr(self, '_saturation', None) or {}).get('level')
+
+            def work_lc():
+                from .station import movie_format, station_of
+                eq = station_of(lc.metadata or {}, movie_format(self.path)).get('equipment', {})
+                with open_movie(str(self.path)) as mv:
+                    return tangra.write_lc(lc, mv, out, camera=str(eq.get('camera') or ''),
+                                           full_scale=level)
+
+            def done_lc(res, err):
+                msg = (f'Tangra .lc failed: {err}' if err else
+                       f'wrote {out.name} for Tangra ({", ".join(res["objects"])}; {res["frames"]} frames)')
+                print(msg)
+                self.say(msg)
+            self._background('tangra_lc', work_lc, done_lc)
+        kind = str(oc.get('movie') or '').lower().lstrip('.')
+        if kind in ('mp4', 'mkv'):
+            out_mv = self.path.with_suffix('.' + kind)
+            if out_mv.resolve() == self.path.resolve():
+                return
+
+            def work_movie():
+                with open_movie(str(self.path)) as mv:
+                    return tangra.write_movie(mv, out_mv, start, stop, lossless=kind == 'mkv',
+                                              crf=int(oc.get('movie_crf', 23)),
+                                              bin_factor=int(oc.get('movie_bin', 2)),
+                                              target=bool(oc.get('movie_target', True)),
+                                              curve=bool(oc.get('movie_curve', True)))
+
+            def done_movie(res, err):
+                msg = (f'movie copy failed: {err}' if err else
+                       f'wrote {out_mv.name} ({res["frames"]} frames, {res["bytes"] / 1e6:.1f} MB)')
+                print(msg)
+                self.say(msg)
+            self._background('movie', work_movie, done_movie)
+        elif kind:
+            print(f'[output] movie = "{kind}": use "mp4", "mkv" or ""')
 
     # ---------------------------------------------------------------- stacked field image
 

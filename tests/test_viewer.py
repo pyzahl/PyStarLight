@@ -235,6 +235,35 @@ def test_live_zoom_during_run(movie):
     assert 'faded' in readout_text({'signal': 1.0, 'fwhm': 3.0, 'peak_snr': 4, 'dimmed': 1, 'used': 0}, 3)
 
 
+def test_run_writes_tangra_lc_and_movie_copy(movie):
+    import shutil
+
+    from pystarlight import tangra
+    v = Viewer(str(movie))
+    (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
+    click(v, c0, r0)
+    key(v, 't', c0, r0)
+    click(v, c1, r1)
+    key(v, 'r', c1, r1)
+    v.cfg['output'].update(stack_image=False, tangra_lc=True,
+                           movie='mp4' if shutil.which('ffmpeg') else '')
+    key(v, 'home')
+    v.run()
+    v._job.join()
+    v.poll()
+    v.finish_jobs()
+    lc = tangra.read_lc(movie.with_suffix('.lc'), pixels=False)
+    assert lc['header']['objects'] == 2 and lc['header']['measured_frames'] == 40
+    assert [o['tracking'] for o in lc['footer']['objects']] == [2, 0]    # target, reference
+    if shutil.which('ffmpeg'):
+        import cv2
+        assert movie.with_suffix('.mp4').stat().st_size > 0
+        ok, frame = cv2.VideoCapture(str(movie.with_suffix('.mp4'))).read()
+        h = movie_shape(str(movie))[0] // 2                   # binned 2 x 2 ...
+        assert ok and frame.shape[0] > h                       # ... and the light curve below
+        assert 'shake.mp4' in v.status.get_text() or 'shake.lc' in v.status.get_text()
+
+
 def test_stack_export_runs_on_main_thread(movie, monkeypatch):
     import threading
 
