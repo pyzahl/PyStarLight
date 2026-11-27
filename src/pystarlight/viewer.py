@@ -24,7 +24,8 @@ Keys    left / right   previous / next frame      page up / down  -/+ 25 frames
         e              send <movie>.event.json to PySyzygos' observation report (also Send)
         s / l          save / load apertures (<movie>.apertures.json)
         p              plate-solve again (cached as <movie>.wcs.fit; automatic on opening when cached
-                       or solved offline with solve-field, uploads to nova.astrometry.net only on p or --auto)
+                       or solved offline with ASTAP or solve-field; uploads to nova.astrometry.net only
+                       on p or --auto)
         i              identify the stars in the apertures (local Gaia catalogue, SIMBAD); also automatic
         N              star names on the image on / off (also the Names button)
         Esc            stop plate solving / star identification (Run then skips the names)
@@ -490,14 +491,14 @@ class Viewer:
         self._solve_job = None
         self._solve_msg = ''
         self._auto = None             # request_auto: automatic apertures once solved
-        # never uploads on its own: a cached solution is loaded, an offline solver (solve-field +
-        # index files) solves right away, an upload to nova.astrometry.net needs key p
+        # never uploads on its own: a cached solution is loaded, an offline solver (ASTAP + a star
+        # database, or solve-field + index files) solves right away, an upload to nova needs key p
         from .wcs.solve import solution_path
         if self.cfg['astrometry'].get('auto_solve') and (solution_path(self.path).exists()
                                                          or self.local_solver):
             self.start_solve()
         elif self.local_solver:
-            self.say_job('no plate solution yet: press p to solve (offline, solve-field)')
+            self.say_job('no plate solution yet: press p to solve (offline, ASTAP / solve-field)')
         else:
             self.say_job('no plate solution yet: press p to solve (uploads the stacked frames to '
                          'nova.astrometry.net, private)')

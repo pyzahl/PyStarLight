@@ -15,6 +15,7 @@ import math
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import warnings
@@ -134,10 +135,28 @@ def solve_astrometry_net(image: np.ndarray, api_key: Optional[str] = None, workd
     from ..config import load
     acfg = load()['astrometry']
     timeout = timeout or acfg['timeout_s']
-    if uses_local_solver({**acfg, 'solver': solver or acfg.get('solver', 'auto')}):
-        path = solve_local(image, workdir, frame_num, timeout, log, cancel, scale_arcsec,
-                           scale_err_pct, center, radius_deg, dest, downsample)
-        return (path, None) if return_job else path
+    order = solver_order({**acfg, 'solver': solver or acfg.get('solver', 'auto')}, center, scale_arcsec)
+    errors = []
+    for name in order:
+        if name == 'nova':
+            break
+        try:
+            if name == 'astap':
+                path = solve_astap(image, workdir, frame_num, timeout, log, cancel, scale_arcsec,
+                                   center, radius_deg, dest, downsample, acfg)
+            else:
+                path = solve_local(image, workdir, frame_num, timeout, log, cancel, scale_arcsec,
+                                   scale_err_pct, center, radius_deg, dest, downsample)
+            return (path, None) if return_job else path
+        except InterruptedError:
+            raise
+        except Exception as e:                  # the next offline solver, if there is one
+            errors.append(f'{name}: {e}')
+            if name != order[-1]:
+                log(f'{"ASTAP" if name == "astap" else "astrometry.net"} did not solve it ({e}); '
+                    'trying the next solver')
+    if errors:
+        raise RuntimeError('; '.join(errors))
     api_key = api_key or acfg['api_key']
     public = acfg.get('public', False) if public is None else public
     if not api_key:
@@ -241,9 +260,30 @@ def local_solver_available() -> bool:
 
 
 def uses_local_solver(acfg: dict) -> bool:
-    """[astrometry] solver is 'local', or 'auto' with solve-field and index files installed."""
+    """Plate solving works offline: [astrometry] solver is 'local' (astrometry.net) or 'astap', or
+    'auto' with either installed (solve-field + index files, or ASTAP + a star database)."""
     solver = acfg.get('solver', 'auto')
-    return solver == 'local' or (solver == 'auto' and local_solver_available())
+    return solver in ('local', 'astrometry', 'astap') or (
+        solver == 'auto' and (local_solver_available() or astap_available(acfg)))
+
+
+def solver_order(acfg: dict, center=None, scale=None) -> list[str]:
+    """The solvers to try, in order: 'astap', 'local' (astrometry.net), 'nova'.
+
+    An explicit [astrometry] solver is used alone ('astrometry' = 'local'). 'auto': the offline
+    solvers that are installed, ASTAP first when the position and the plate scale are roughly known
+    (it searches around them, in seconds), else astrometry.net first (blind solving is its
+    strength; ASTAP then tries a series of field sizes); the second one when the first fails. nova
+    only when neither is installed (it uploads the frame)."""
+    solver = acfg.get('solver', 'auto')
+    if solver == 'astrometry':
+        solver = 'local'
+    if solver in ('local', 'astap', 'nova'):
+        return [solver]
+    local = ['local'] if local_solver_available() else []
+    astap = ['astap'] if astap_available(acfg) else []
+    order = astap + local if (center is not None and scale) else local + astap
+    return order or ['nova']
 
 
 def solve_local(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0,
@@ -266,8 +306,9 @@ def solve_local(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0,
            '--wcs', dest, '--new-fits', 'none', '--corr', 'none', '--match', 'none',
            '--rdls', 'none', '--index-xyls', 'none', '--temp-axy', '--crpix-center',
            '--cpulimit', str(int(timeout))]
-    import tempfile                         # solve-field's own temp files (tmp.axy.*, tmp.ppm.*): in a folder
-    tmpdir = tempfile.mkdtemp(prefix='pystarlight-solve-')   # of ours, removed after (killed runs left them in /tmp)
+    # solve-field's own temp files (tmp.axy.*, tmp.ppm.*): in a folder of ours, removed after
+    # (killed runs left them in /tmp)
+    tmpdir = tempfile.mkdtemp(prefix='pystarlight-solve-')
     cmd += ['--temp-dir', tmpdir]
     if scale_arcsec:
         err = scale_err_pct / 100.0
@@ -320,6 +361,15 @@ def solve_local(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0,
 
 def _end_group(proc):
     """Terminate (then kill) a process and everything it started in its session."""
+    if not hasattr(os, 'killpg'):                # Windows: no process groups / SIGKILL here
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(2)
+        return
     import signal
     try:
         pgid = os.getpgid(proc.pid)
@@ -342,6 +392,201 @@ def _end_group(proc):
             continue
         except (ProcessLookupError, OSError):
             return
+
+
+# ---------------------------------------------------------------------------- ASTAP
+
+ASTAP_NAMES = ('astap_cli', 'astap')
+ASTAP_DIRS = (r'C:\Program Files\astap', r'C:\Program Files (x86)\astap', '/opt/astap',
+              '/usr/share/astap/data', '/usr/local/opt/astap', '/opt/homebrew/opt/astap',
+              '/Applications/ASTAP.app/Contents/MacOS', '/usr/local/bin', '/usr/bin')
+_ASTAP_DB_FILE = r'^([a-z]\d\d)_\d{4}\.\d+$'      # e.g. d50_0101.1476, w08_0101.001
+
+
+def astap_executable(acfg: Optional[dict] = None) -> Optional[str]:
+    """ASTAP's command-line solver: [astrometry] astap (a path), else astap_cli / astap on PATH or
+    in its install folders (Windows C:\\Program Files\\astap, Linux /opt/astap, macOS ...)."""
+    acfg = acfg or {}
+    given = str(acfg.get('astap') or '').strip()
+    if given:
+        return given if os.path.isfile(given) else shutil.which(given)
+    for name in ASTAP_NAMES:
+        found = shutil.which(name)
+        if found:
+            return found
+    exe = '.exe' if os.name == 'nt' else ''
+    for d in ASTAP_DIRS:
+        for name in ASTAP_NAMES:
+            p = os.path.join(d, name + exe)
+            if os.path.isfile(p):
+                return p
+    return None
+
+
+def astap_database_dirs(acfg: Optional[dict] = None) -> list[str]:
+    """Folders that may hold ASTAP's star databases: [astrometry] astap_db, the program's own
+    folder and ASTAP's default places."""
+    acfg = acfg or {}
+    dirs = [str(acfg.get('astap_db') or '').strip()]
+    exe = astap_executable(acfg)
+    if exe:
+        dirs.append(os.path.dirname(os.path.realpath(exe)))
+    dirs += list(ASTAP_DIRS[:6])
+    out = []
+    for d in dirs:
+        if d and os.path.isdir(d) and d not in out:
+            out.append(d)
+    return out
+
+
+def astap_databases(acfg: Optional[dict] = None) -> dict[str, str]:
+    """{database name ('d50', 'd80', 'w08', ...): folder} of the ASTAP star databases found."""
+    import re
+    found: dict[str, str] = {}
+    for d in astap_database_dirs(acfg):
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for n in names:
+            m = re.match(_ASTAP_DB_FILE, n.lower())
+            if m and m.group(1) not in found:
+                found[m.group(1)] = d
+    return found
+
+
+def astap_available(acfg: Optional[dict] = None) -> bool:
+    """ASTAP installed with at least one star database."""
+    return astap_executable(acfg) is not None and bool(astap_databases(acfg))
+
+
+def solve_astap(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0, timeout: float = 300.0,
+                log: Callable[[str], None] = print, cancel: Optional[threading.Event] = None,
+                scale_arcsec: Optional[float] = None, center: Optional[tuple[float, float]] = None,
+                radius_deg: float = 2.0, dest: Optional[str] = None, downsample: Optional[int] = None,
+                acfg: Optional[dict] = None) -> str:
+    """Plate-solve with ASTAP (www.hnsky.org; Windows, Linux, macOS; offline with one of its star
+    databases, D05..D80 for fields from ~0.3 deg, W08 / G05 for wide fields). The field height from
+    the plate scale (else ASTAP finds it), the search around `center` (else the whole sky: slow).
+    Writes a WCS FITS header file like solve_local (`dest`) and returns its path."""
+    from astropy.io import fits
+    from astropy.wcs import WCS
+    acfg = acfg or {}
+    exe = astap_executable(acfg)
+    if exe is None:
+        raise RuntimeError('ASTAP not found (www.hnsky.org; or set [astrometry] astap)')
+    dbs = astap_databases(acfg)
+    if not dbs:
+        raise RuntimeError('no ASTAP star database found (www.hnsky.org; or set [astrometry] astap_db)')
+    os.makedirs(workdir, exist_ok=True)
+    img = np.asarray(image, dtype=np.float64)
+    lo, hi = np.nanpercentile(img, [0.5, 99.95])
+    data = np.clip((img - lo) / max(hi - lo, 1e-9), 0, 1) * 65000
+    base = os.path.join(workdir, f'frame-{frame_num}-astap')
+    img_path = base + '.fit'
+    fits.writeto(img_path, np.nan_to_num(data).astype(np.uint16), overwrite=True)
+    for ext in ('.wcs', '.ini'):
+        if os.path.exists(base + ext):
+            os.remove(base + ext)              # a stale solution must not pass for a new one
+    h, w = img.shape[:2]
+    # ASTAP needs the field height (it does not search scales as astrometry.net does): from the
+    # plate scale, else a series of field heights tried in turn (the one that solved is logged)
+    fovs = [scale_arcsec * h / 3600.0] if scale_arcsec else list(ASTAP_FOV_SCAN)
+    common = ['-wcs', '-z', str(int(downsample or 0))]
+    if center is not None:
+        common += ['-ra', f'{center[0] / 15.0:.6f}', '-spd', f'{center[1] + 90.0:.6f}',
+                   '-r', f'{radius_deg:g}']
+    else:
+        common += ['-r', '180']
+    db = str(acfg.get('astap_database') or '').strip().lower()
+    if db:
+        common += ['-D', db]
+        if db in dbs:
+            common += ['-d', dbs[db]]
+    elif str(acfg.get('astap_db') or '').strip():
+        common += ['-d', str(acfg['astap_db'])]
+    tried = ", ".join(f"{f:g}" for f in fovs)
+    log(f'Solving locally (ASTAP, star databases {", ".join(sorted(dbs))}, field '
+        + (f'{fovs[0]:.2f} deg)' if scale_arcsec else f'height unknown: trying {tried} deg)'))
+    t0 = time.monotonic()
+    why = ''
+    for fov in fovs:
+        left = timeout - (time.monotonic() - t0)
+        if left <= 0:
+            raise TimeoutError('ASTAP did not finish in time')
+        for ext in ('.wcs', '.ini'):
+            if os.path.exists(base + ext):
+                os.remove(base + ext)
+        rc = _run_astap([exe, '-f', img_path, '-o', base, '-fov', f'{fov:.4f}', *common], workdir, left,
+                        cancel)
+        ini = _read_astap_ini(base + '.ini')
+        if rc == 0 and ini.get('PLTSOLVD', 'F').upper() == 'T' and os.path.exists(base + '.wcs'):
+            if not scale_arcsec:
+                log(f'ASTAP solved with a field height of {fov:g} deg')
+            break
+        why = ini.get('ERROR') or ASTAP_EXIT.get(rc, f'exit code {rc}')
+        if rc in (16, 32, 33):                  # image / database errors: other fields will not help
+            break
+    else:
+        scan = '' if scale_arcsec else f'; field heights {fovs[0]:g}-{fovs[-1]:g} deg tried'
+        raise RuntimeError(f'ASTAP could not solve the image ({why}{scan})')
+    if not os.path.exists(base + '.wcs'):
+        raise RuntimeError(f'ASTAP could not solve the image ({why})')
+    with open(base + '.wcs', 'rb') as f:
+        raw = f.read().decode('ascii', errors='replace').replace('\r', '').replace('\n', '')
+    hdr = fits.Header.fromstring(raw)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        wcs = WCS(hdr, relax=True)
+    out_hdr = wcs.to_header(relax=True)
+    out_hdr['IMAGEW'] = (w, 'image width (as astrometry.net writes it)')
+    out_hdr['IMAGEH'] = (h, 'image height')
+    out_hdr['SOLVER'] = ('ASTAP', 'plate solution by ASTAP (www.hnsky.org)')
+    dest = dest or os.path.join(workdir, f'wcs-{frame_num}.fit')
+    fits.PrimaryHDU(header=out_hdr).writeto(dest, overwrite=True)
+    log(f'Wrote WCS solution to {dest} ({time.monotonic() - t0:.1f} s, ASTAP)')
+    return dest
+
+
+ASTAP_EXIT = {1: 'no solution', 2: 'not enough stars', 16: 'error reading the image',
+              32: 'no star database found', 33: 'error reading the star database'}
+ASTAP_FOV_SCAN = (0.1, 0.15, 0.2, 0.3, 0.45, 0.65, 0.9, 1.3, 2.0, 3.0, 5.0)  # deg, tried without a scale
+
+
+def _run_astap(cmd: list[str], workdir: str, timeout: float, cancel: Optional[threading.Event]) -> int:
+    """One ASTAP run with cancel and timeout; its exit code."""
+    t0 = time.monotonic()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            start_new_session=True, cwd=workdir)
+    out: list[str] = []
+    th = threading.Thread(target=lambda: out.extend(proc.stdout), daemon=True)
+    th.start()
+    try:
+        while proc.poll() is None:
+            if cancel is not None and cancel.wait(0.2):
+                raise InterruptedError('cancelled')
+            if cancel is None:
+                time.sleep(0.2)
+            if time.monotonic() - t0 > timeout:
+                raise TimeoutError('ASTAP did not finish in time')
+    finally:
+        _end_group(proc)
+        th.join(2)
+    return proc.returncode
+
+
+def _read_astap_ini(path: str) -> dict:
+    """KEY=value lines of ASTAP's .ini result file (PLTSOLVD, CRVAL1, ..., ERROR, WARNING)."""
+    out = {}
+    try:
+        with open(path, encoding='ascii', errors='replace') as f:
+            for line in f:
+                if '=' in line:
+                    k, v = line.split('=', 1)
+                    out[k.strip().upper()] = v.strip()
+    except OSError:
+        pass
+    return out
 
 
 def load_wcs(path: str):

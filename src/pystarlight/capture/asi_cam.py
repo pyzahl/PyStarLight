@@ -24,14 +24,19 @@ import collections
 import ctypes
 import ctypes.util
 import os
+import platform
+import sys
 import threading
 import time
 
 import numpy as np
 
 SUCCESS = "success"
-LIB_NAMES = ("/usr/local/lib/libASICamera2.so", "/usr/lib/libASICamera2.so",
-             f"/usr/lib/{os.uname().machine}-linux-gnu/libASICamera2.so")   # Debian / INDI's libasi
+if sys.platform == "win32":         # ZWO's Windows SDK: ASICamera2.dll on PATH, or ZWO_ASI_LIB
+    LIB_NAMES = ("ASICamera2.dll",)
+else:
+    LIB_NAMES = ("/usr/local/lib/libASICamera2.so", "/usr/lib/libASICamera2.so",
+                 f"/usr/lib/{platform.machine()}-linux-gnu/libASICamera2.so")   # Debian / INDI's libasi
 
 # ASI_IMG_TYPE, ASI_BAYER_PATTERN, ASI_CONTROL_TYPE (ASICamera2.h)
 IMG_RAW8, IMG_RGB24, IMG_RAW16, IMG_Y8, IMG_END = 0, 1, 2, 3, -1
@@ -271,7 +276,8 @@ class Camera:
         self.info = info
         self.lib = lib or library()
         if self.lib is None:
-            raise RuntimeError("ZWO's libASICamera2 not found (set ZWO_ASI_LIB)")
+            raise RuntimeError("ZWO's camera library not found (ASICamera2.dll on Windows, libASICamera2.so "
+                               "on Linux; set ZWO_ASI_LIB)")
         props = camera_info(self.lib, info.get("index", 0))
         self.cam_id = props.CameraID
         self.name = props.Name.decode(errors="replace")

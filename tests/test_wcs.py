@@ -247,3 +247,110 @@ def test_astrometry_cfg_next_to_solve_field(tmp_path, monkeypatch):
     (tmp_path / 'etc' / 'astrometry.cfg').write_text('add_path /x\n')
     assert solve.astrometry_cfg() == str(tmp_path / 'etc' / 'astrometry.cfg')
     assert solve.local_index_dirs() == ['/x']
+
+
+def fake_astap(tmp_path, monkeypatch, wcs=None, exit_code=0):
+    """An 'astap_cli' in a fake ASTAP folder with one star database file: records its arguments
+    and writes <-o>.ini (PLTSOLVD) and <-o>.wcs (80-byte cards, no line ends, as ASTAP does) from
+    `wcs`; without `wcs` it fails as ASTAP does (exit 1, PLTSOLVD=F, ERROR=...)."""
+    import sys
+    d = tmp_path / 'astap'
+    d.mkdir()
+    (d / 'd50_0101.1476').write_bytes(b'')
+    args_file = tmp_path / 'astap_args.txt'
+    hdr_text = '' if wcs is None else ''.join(c.image for c in wcs.to_header().cards) + 'END'.ljust(80)
+    script = d / 'astap_cli'
+    script.write_text(f'''#!{sys.executable}
+import sys
+a = sys.argv[1:]
+open({str(args_file)!r}, 'w').write(' '.join(a))
+base = a[a.index('-o') + 1]
+ok = {wcs is not None!r}
+with open(base + '.ini', 'w') as f:
+    f.write('PLTSOLVD=T\\n' if ok else 'PLTSOLVD=F\\nERROR=No solution found!\\n')
+if ok:
+    open(base + '.wcs', 'w').write({hdr_text!r})
+sys.exit(0 if ok else 1)
+''')
+    script.chmod(0o755)
+    from pystarlight.wcs import solve
+    monkeypatch.setattr(solve, 'ASTAP_NAMES', ('astap_cli',))
+    monkeypatch.setattr(solve, 'ASTAP_DIRS', (str(d),))
+    return args_file
+
+
+def test_astap_found_with_its_database(tmp_path, monkeypatch):
+    from pystarlight.wcs import solve
+    assert not solve.astap_available()                         # conftest: no real ASTAP here
+    fake_astap(tmp_path, monkeypatch, make_wcs())
+    assert solve.astap_executable().endswith('astap_cli')
+    assert solve.astap_databases() == {'d50': str(tmp_path / 'astap')}
+    assert solve.astap_available() and solve.uses_local_solver({'solver': 'auto'})
+
+
+def test_solver_order_auto_and_explicit(tmp_path, monkeypatch):
+    from pystarlight.wcs import solve
+    monkeypatch.setattr(solve, 'local_solver_available', lambda: False)   # (this computer may have one)
+    assert solve.solver_order({'solver': 'auto'}) == ['nova']                   # nothing installed
+    fake_astap(tmp_path, monkeypatch, make_wcs())
+    assert solve.solver_order({'solver': 'auto'}) == ['astap']
+    monkeypatch.setattr(solve, 'local_solver_available', lambda: True)
+    assert solve.solver_order({'solver': 'auto'}, center=(1.0, 2.0), scale=2.0) == ['astap', 'local']
+    assert solve.solver_order({'solver': 'auto'}, center=(1.0, 2.0)) == ['local', 'astap']   # no scale
+    assert solve.solver_order({'solver': 'auto'}) == ['local', 'astap']         # blind: astrometry.net
+    assert solve.solver_order({'solver': 'astap'}) == ['astap']
+    assert solve.solver_order({'solver': 'astrometry'}) == ['local']
+    assert solve.solver_order({'solver': 'nova'}) == ['nova']
+
+
+def test_astap_used_with_hints_and_wcs_read(tmp_path, monkeypatch):
+    from pystarlight.wcs import solve
+    truth = make_wcs(scale_arcsec=2.07, crval=(310.36, 45.1))
+    args_file = fake_astap(tmp_path, monkeypatch, truth)
+    logs = []
+    path = solve.solve_astrometry_net(np.random.default_rng(1).normal(100, 5, (240, 320)).astype(np.float32),
+                                      workdir=str(tmp_path / 'w'), scale_arcsec=2.07, center=(310.36, 45.1),
+                                      radius_deg=3.0, log=logs.append)
+    args = args_file.read_text().split()
+    assert args[args.index('-ra') + 1] == f'{310.36 / 15:.6f}'                # hours
+    assert args[args.index('-spd') + 1] == f'{45.1 + 90:.6f}'                 # south pole distance
+    assert float(args[args.index('-fov') + 1]) == pytest.approx(2.07 * 240 / 3600, abs=1e-4)   # height
+    assert args[args.index('-r') + 1] == '3' and '-wcs' in args
+    w = solve.load_wcs(path)
+    ra, dec = w.wcs_pix2world([[360, 240]], 0)[0]
+    tra, tdec = truth.wcs_pix2world([[360, 240]], 0)[0]
+    assert ra == pytest.approx(tra, abs=1e-6) and dec == pytest.approx(tdec, abs=1e-6)
+    from astropy.io import fits
+    h = fits.getheader(path)
+    assert h['SOLVER'] == 'ASTAP' and (h['IMAGEW'], h['IMAGEH']) == (320, 240)   # as astrometry.net's
+    assert any('ASTAP' in m for m in logs)
+
+
+def test_astap_failure_falls_back_to_astrometry_net(tmp_path, monkeypatch):
+    from astropy.io import fits
+
+    from pystarlight.wcs import solve
+    fake_astap(tmp_path, monkeypatch, None)                                  # ASTAP: no solution
+    truth = tmp_path / 'truth.wcs'
+    fits.PrimaryHDU(header=make_wcs().to_header()).writeto(truth)
+    fake_solve_field(tmp_path, monkeypatch, truth)
+    logs = []
+    path = solve.solve_astrometry_net(np.ones((48, 64), np.float32), workdir=str(tmp_path / 'w'),
+                                      center=(273.0, 22.0), scale_arcsec=2.0, log=logs.append)
+    assert Path(path).exists()
+    assert any('ASTAP did not solve it' in m and 'No solution' in m for m in logs)
+    with pytest.raises(RuntimeError, match='ASTAP could not solve.*field heights'):
+        solve.solve_astap(np.ones((48, 64), np.float32), workdir=str(tmp_path / 'w2'))
+
+
+def test_astap_scans_field_heights_without_a_scale(tmp_path, monkeypatch):
+    from pystarlight.wcs import solve
+    fake_astap(tmp_path, monkeypatch, make_wcs())
+    script = tmp_path / 'astap' / 'astap_cli'          # solves only at a field height of 0.9 deg
+    text = script.read_text().replace("ok = True", "ok = a[a.index('-fov') + 1] == '0.9000'")
+    script.write_text(text)
+    logs = []
+    path = solve.solve_astap(np.ones((48, 64), np.float32), workdir=str(tmp_path / 'w'), center=(273.0, 22.0),
+                             log=logs.append)
+    assert Path(path).exists()
+    assert any('field height of 0.9 deg' in m for m in logs)

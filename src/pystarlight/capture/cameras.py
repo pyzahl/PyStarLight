@@ -21,6 +21,7 @@ All offer the subset of Aravis.Camera that the capture app uses, plus:
 CameraSession holds the open camera with its stream, region, pixel format and trigger
 settings; the app attaches its threads and the GPS to it, and the GUI works from it.
 """
+import sys
 import threading
 
 from . import asi_cam, v4l2_cam, veye_mvcam
@@ -93,8 +94,12 @@ def find_cameras():
         cams += asi
         lib = asi_cam.library()
         if lib is None:
-            print("ZWO ASI: libASICamera2 not found, no ASI camera listed (CAPTURE.md, "
-                  "\"ZWO ASI cameras\"; or set ZWO_ASI_LIB)")
+            if sys.platform == "win32":
+                print("ZWO ASI: ASICamera2.dll not found, no ASI camera listed (install ZWO's camera "
+                      "driver / SDK and put ASICamera2.dll on PATH, or set ZWO_ASI_LIB to its full path)")
+            else:
+                print("ZWO ASI: libASICamera2 not found, no ASI camera listed (CAPTURE.md, "
+                      "\"ZWO ASI cameras\"; or set ZWO_ASI_LIB)")
         elif not asi:
             version = lib.ASIGetSDKVersion().decode(errors="replace").replace(", ", ".")
             print(f"ZWO ASI: SDK {version} loaded, no camera connected (lsusb lists ZWO as "

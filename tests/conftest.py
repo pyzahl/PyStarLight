@@ -28,3 +28,12 @@ def simbad_reachable(monkeypatch):
     """A failed SIMBAD lookup pauses SIMBAD for minutes (module state): start each test fresh."""
     from pystarlight.wcs import identify
     monkeypatch.setattr(identify, '_simbad_down_until', 0.0)
+
+
+@pytest.fixture(autouse=True)
+def no_installed_astap(monkeypatch):
+    """An ASTAP installed on this computer must not take part in the tests (solver 'auto' would pick
+    it): only a fake one a test sets up (ASTAP_NAMES / ASTAP_DIRS / [astrometry] astap)."""
+    from pystarlight.wcs import solve
+    monkeypatch.setattr(solve, 'ASTAP_NAMES', ())
+    monkeypatch.setattr(solve, 'ASTAP_DIRS', ())

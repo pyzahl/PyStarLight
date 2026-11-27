@@ -8,7 +8,6 @@ Only the subset of Aravis.Camera / Aravis.Stream / Aravis.Buffer used by the cap
 implemented, plus the backend extras described in cameras.py.
 """
 import ctypes
-import fcntl
 import glob
 import math
 import mmap
@@ -17,10 +16,16 @@ import re
 import select
 import struct
 import subprocess
+import sys
 import threading
 import time
 
 import numpy as np
+
+try:
+    import fcntl  # Linux device ioctls; the module only lists no cameras on Windows
+except ImportError:
+    fcntl = None
 
 SUCCESS = "success"     # buffer status of a complete frame (compare with Grabber's success)
 
@@ -179,7 +184,8 @@ class _Buffer(ctypes.Structure):
                 ("request_fd", ctypes.c_int32)]
 
 
-assert ctypes.sizeof(_Format) == 208 and ctypes.sizeof(_Buffer) == 88, "expects 64-bit Linux"
+if sys.platform.startswith("linux"):     # the kernel's layouts; elsewhere the module finds no devices
+    assert ctypes.sizeof(_Format) == 208 and ctypes.sizeof(_Buffer) == 88, "expects 64-bit Linux"
 
 VIDIOC_S_FMT = _iowr(5, ctypes.sizeof(_Format))
 VIDIOC_REQBUFS = _iowr(8, ctypes.sizeof(_RequestBuffers))

@@ -1,11 +1,19 @@
-# Publishes to PyPI when a GitHub release is published.
-# One-time setup: add a "trusted publisher" for this repo/workflow on pypi.org
-# (environment name: pypi). No API token is needed.
+# Release: push a tag vX.Y.Z (the version in pyproject.toml / src/pystarlight/__init__.py).
+#   1. build: wheel + sdist (uv build), PyStarLight-Setup.cmd + constraints.txt
+#      (scripts/build_windows_setup.py)
+#   2. windows: the setup run on a real Windows from these files (install, check, Start menu,
+#      uninstall)
+#   3. release: a GitHub release of the tag with all files; the Windows setup downloads its wheel and
+#      constraints from the latest release
+#   4. pypi (optional): only when the repository variable PUBLISH_PYPI is "true" (trusted publisher
+#      for this workflow on pypi.org, environment "pypi")
+# Run by hand (Actions -> Release -> Run workflow): steps 1 and 2 only, as a test.
 name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags: ['v*']
+  workflow_dispatch:
 
 jobs:
   build:
@@ -13,14 +21,80 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      - name: version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          v=$(sed -nE 's/^__version__ = "([^"]*)".*/\1/p' src/pystarlight/__init__.py)
+          test "v$v" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} but __version__ $v"; exit 1; }
       - run: uv build
+      - run: python3 scripts/build_windows_setup.py --dist dist
+      - run: uvx twine check --strict dist/*.whl dist/*.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
 
-  publish:
+  windows:
     needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: setup from the built files
+        shell: powershell
+        run: |
+          $whl = (Get-ChildItem dist\*.whl | Select-Object -First 1).FullName
+          powershell -NoProfile -ExecutionPolicy Bypass -File windows\setup.ps1 -Wheel $whl -Constraints dist\constraints.txt -NoDesktop
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $bin = Join-Path $env:LOCALAPPDATA 'PyStarLight\bin'
+          & (Join-Path $bin 'pystarlight.exe') --version
+          & (Join-Path $bin 'pystarlight.exe') doctor --extras desktop
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $start = Join-Path ([Environment]::GetFolderPath('Programs')) 'PyStarLight'
+          foreach ($n in 'PyStarLight Analyze', 'PyStarLight Player', 'PyStarLight Camera', 'Settings', 'Uninstall PyStarLight') {
+            if (-not (Test-Path (Join-Path $start "$n.lnk"))) { throw "missing shortcut $n" }
+          }
+          foreach ($e in 'pystarlight-analyze-gui', 'pystarlight-player-gui', 'pystarlight-camera-gui', 'pystarlight-settings-gui') {
+            if (-not (Test-Path (Join-Path $bin "$e.exe"))) { throw "missing $e.exe" }
+          }
+          $prog = (Get-ItemProperty 'HKCU:\Software\Classes\.ravf\OpenWithProgids')
+          if ($null -eq $prog.'PyStarLight.Player') { throw 'player not registered for .ravf' }
+          $py = Join-Path $env:LOCALAPPDATA 'PyStarLight\tools\starlight-photometry\Scripts\python.exe'
+          & $py -c "import pystarlight.viewer, pystarlight.capture.player, pystarlight.capture.app, tkinter; print('imports ok')"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: uninstall
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File windows\setup.ps1 -Uninstall -Purge
+          if (Test-Path (Join-Path $env:LOCALAPPDATA 'PyStarLight\bin')) { throw 'bin folder still there' }
+          if (Test-Path (Join-Path ([Environment]::GetFolderPath('Programs')) 'PyStarLight')) { throw 'Start menu folder still there' }
+
+  release:
+    needs: [build, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body: |
+            **Windows:** download **PyStarLight-Setup.cmd** below and double-click it (installs for your user,
+            no administrator rights; Start menu folder PyStarLight). Run it again, or the Start menu's
+            "Update PyStarLight", to update.
+            Linux / macOS / the Raspberry Pi: see the README (`./install.sh`). Changes: CHANGELOG.md.
+
+  pypi:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v') && vars.PUBLISH_PYPI == 'true'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -30,4 +104,7 @@ jobs:
         with:
           name: dist
           path: dist/
+      - run: mkdir pypi && mv dist/*.whl dist/*.tar.gz pypi/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: pypi/

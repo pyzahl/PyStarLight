@@ -38,6 +38,15 @@ def test_doctor_knows_what_all_contains():
     assert all_ == [f"starlight-photometry[{','.join(doctor.EXTRAS_IN['all'])}]"]
 
 
+def test_doctor_desktop_is_all_plus_the_camera_packages():
+    ex = pyproject_extras()
+    assert ex["desktop"][0] == "starlight-photometry[all]"
+    camera_pkgs = {r.split(">")[0].split(";")[0].strip() for r in ex["camera"] if "starlight" not in r}
+    desktop_pkgs = {r.split(">")[0].split(";")[0].strip() for r in ex["desktop"][1:]}
+    assert desktop_pkgs <= camera_pkgs | {"PySide6-Essentials"}
+    assert doctor.expand(["desktop"]) >= {"all", "camera", "plot", "adv", "ravf", "catalog"}
+
+
 def test_expand_and_resolve(inst):
     table = inst.known_extras()
     assert inst.expand(["all", "camera"], table) == {"all", "adv", "ravf", "catalog", "plot", "camera"}

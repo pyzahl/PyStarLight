@@ -69,22 +69,25 @@ slides with the formulas the code uses: [docs/math](docs/math) (LaTeX source; `m
 builds `pystarlight_math.pdf`). The PDF is attached to each
 [GitHub release](https://github.com/pyzahl/PyStarLight/releases).
 
+Diffraction at the shadow edges, the star's size and double stars: [docs/diffraction.md](docs/diffraction.md). For
+fun, the same model applied to a satellite: [What if a Starlink satellite occults a star?](docs/starlink_occultation.md)
+(0.4 to 4 ms, almost total for every star, full Fresnel fringes, and nearly invisible in a 30 fps video).
+
 Supported recordings: RAVF (ASTRID), SER, ADV/AAV, AVI/MOV, FITS folders. Timestamps come from
 the file or are read from a VTI overlay. MIT licence.
 
 ## Contents
 
 - [Install](#install)
-  - [1. Prerequisites (once)](#1-prerequisites-once)
-  - [2. Install uv](#2-install-uv)
-  - [3. Get PyStarLight](#3-get-pystarlight)
-  - [4. Check it](#4-check-it)
+  - [Windows](#windows)
+  - [Linux, macOS and the Raspberry Pi](#linux-macos-and-the-raspberry-pi)
+  - [Check the installation](#check-the-installation)
   - [Extras](#extras)
 - [The tools](#the-tools)
 - [Getting started](#getting-started)
   - [1. Configure (once)](#1-configure-once)
   - [2. Mark the stars](#2-mark-the-stars)
-  - [Fully automatic (`--auto`)](#fully-automatic-auto)
+  - [Fully automatic (`--auto`)](#fully-automatic---auto)
   - [3. Run](#3-run)
   - [Event timing: the automatic step fit](#event-timing-the-automatic-step-fit)
   - [4. Open in PyOTE](#4-open-in-pyote)
@@ -101,17 +104,76 @@ the file or are read from a VTI overlay. MIT licence.
 
 ## Install
 
-PyStarLight runs on Linux, macOS and Windows with Python 3.10 or newer. The capture program
-(`pystarlight camera`) is for a Raspberry Pi 5: see [CAPTURE.md](CAPTURE.md). The steps below
-install the analysis (`pystarlight analyze`) and the player (`pystarlight player`).
+Pick your system:
+
+- **Windows:** [one file, double-click](#windows): no Python, no git, no command line.
+- **Linux, macOS, the Raspberry Pi:** [from source with uv](#linux-macos-and-the-raspberry-pi), four
+  steps.
+- The capture program for the Raspberry Pi 5 (`pystarlight camera`, GPS timing): [CAPTURE.md](CAPTURE.md).
+
+Then [check the installation](#check-the-installation) and, for offline plate solving, install
+[ASTAP or astrometry.net](#optional-offline-plate-solving-astap-or-a-local-astrometrynet).
+
+### Windows
+
+Download **[PyStarLight-Setup.cmd](https://github.com/pyzahl/PyStarLight/releases/latest/download/PyStarLight-Setup.cmd)**
+from the latest release and double-click it. Windows asks once whether to run a downloaded file:
+click **Run**.
+
+- **For your user:** no administrator rights, no Python, no git needed. It brings its own copy of
+  [uv](https://docs.astral.sh/uv/) and a Python with Tk, then PyStarLight with the package
+  versions it was tested with (extra `desktop`). It goes into `%LOCALAPPDATA%\PyStarLight` and
+  changes neither PATH nor other Python installations.
+- **Start menu folder PyStarLight:** Analyze, Player, Camera, Settings, Check installation, Logs,
+  Update PyStarLight, Uninstall PyStarLight.
+- **Desktop icons:** Analyze, Player, Camera.
+- **Open with:** `.ravf` `.ser` `.adv` `.aav` open in the player when double-clicked, if no other
+  program owns them. The player and the analyzer are also offered under *Open with* (`.avi` too).
+- **No console windows:** the programs keep their output in `%LOCALAPPDATA%\PyStarLight\logs`.
+  If one cannot start, a message box says why.
+- **Settings:** Start menu → *Settings* opens `%APPDATA%\pystarlight\config.toml` in Notepad
+  (created from the template the first time).
+- **Update:** run the file again, or *Update PyStarLight*. **Uninstall:** *Uninstall PyStarLight*.
+  It keeps your settings (`-Purge` removes them too). Close the PyStarLight programs first: Windows
+  does not let a running program's files be replaced; the setup says so and offers to end them.
+- **Plate solving** offline: install **ASTAP** and its **D80** star database from www.hnsky.org
+  ([details](#optional-offline-plate-solving-astap-or-a-local-astrometrynet)); PyStarLight finds
+  them. Otherwise solving goes online, to nova.astrometry.net: put your free API key into
+  *Settings* (`[astrometry] api_key`).
+- **The camera on Windows:** for a ZWO ASI camera with ZWO's Windows driver (`ASICamera2.dll` on
+  PATH, or `ZWO_ASI_LIB`); the Raspberry Pi is the tested capture setup.
+
+**Windows from source (developers).**
+1. Install the prerequisites:
+   - Python from [python.org](https://www.python.org/downloads/windows/): keep **"tcl/tk and
+     IDLE"** ticked and tick **"Add python.exe to PATH"**;
+   - git from [git-scm.com](https://git-scm.com/download/win);
+   - uv: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`, then
+     open a new terminal.
+2. Run, in PowerShell:
+
+   ```powershell
+   git clone https://github.com/pyzahl/PyStarLight.git
+   cd PyStarLight
+   .\install.cmd                           # first time: extras all + camera; later: update
+   uv run pystarlight
+   ```
+
+`install.cmd` takes the same options as `./install.sh` below.
+
+### Linux, macOS and the Raspberry Pi
+
+PyStarLight runs with Python 3.10 or newer. These steps install the analysis
+(`pystarlight analyze`) and the player (`pystarlight player`); on the Pi also the capture program
+([CAPTURE.md](CAPTURE.md)).
 
 **The one thing people miss: the viewer needs Tk** (Python's `tkinter`) for its window and file
 dialog. Most Linux distributions ship it as a separate package, so install it first (step 1).
 Without it the viewer stops at start and says what to install. **The player needs Qt**
-(PySide6 or PyQt5), which the viewer does not: `--extra camera` in step 3 brings PySide6 on
-every system. Without Qt the player stops at start and says what to install.
+(PySide6 or PyQt5), which the viewer does not: `--extra camera` in step 3 brings PySide6.
+Without Qt the player stops at start and says what to install.
 
-### 1. Prerequisites (once)
+#### 1. Prerequisites (once)
 
 **Linux**
 
@@ -126,8 +188,6 @@ PyQt5 (`sudo apt install python3-pyqt5`, `dnf install python3-qt5`, `pacman -S p
 serves only the system Python, not the uv / venv environment; it is what the Raspberry Pi's
 capture setup uses ([CAPTURE.md](CAPTURE.md)).
 
-Highly recommended: Install astrometry package and small mas index data. Configure it.
-
 **macOS**
 
 - Python from [python.org](https://www.python.org/downloads/macos/) includes Tk; nothing else
@@ -139,49 +199,33 @@ Highly recommended: Install astrometry package and small mas index data. Configu
   Adv2 is reinstalled.
 - Qt for the player: nothing to do beforehand, `--extra camera` in step 3 installs PySide6
   (Intel and Apple Silicon). Not Homebrew's `pyqt@5`: it belongs to Homebrew's Python only.
-- Highly recommended: Install brew + astrometry + astrometry data (https://data.astrometry.net/4200/)
-  ```
-   Brew: $/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-   Astrometry: $brew install astrometry-net
-   Astrometry data default path OSX: $mkdir /opt/homebrew/Cellar/astrometry-net/0.97_1/data
-   (see data path set in /opt/homebrew/etc/astrometry.cfg)
-   Astrometry data, go to folder just created and $curl -O "http://astrometry.net[00-47].fits"
- ```
- 
-**Windows**
 
-- Python from [python.org](https://www.python.org/downloads/windows/): in the installer, keep
-  **"tcl/tk and IDLE"** ticked (it is by default) and tick **"Add python.exe to PATH"**.
-- git from [git-scm.com](https://git-scm.com/download/win).
-- The commands below run in PowerShell.
-- Qt for the player: nothing to do beforehand, `--extra camera` in step 3 installs PySide6.
+**Both, recommended:** an offline plate solver, ASTAP or astrometry.net:
+[Optional: offline plate solving](#optional-offline-plate-solving-astap-or-a-local-astrometrynet).
 
-**Or let uv bring its own Python**, on any of the three: uv's Python builds include Tk. uv
+**Or let uv bring its own Python**, on Linux and macOS: uv's Python builds include Tk. uv
 otherwise takes the system's Python when it finds one (on Linux usually without Tk). Add
 `--python-preference only-managed` to `uv sync` in step 3. An environment already built on the
 system's Python is not switched by that (nor by `uv python install`): rebuild it, in the
 PyStarLight folder, with `rm -rf .venv && uv sync --python-preference only-managed --extra all`.
 When Tk is missing, the viewer says which Python it runs on and which of the two fixes applies.
 
-### 2. Install uv
+#### 2. Install uv
 
 [uv](https://docs.astral.sh/uv/) sets up the environment and runs the programs.
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh            # Linux, macOS
-```
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"   # Windows
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 Open a new terminal afterwards, so that `uv` is found.
 
-### 3. Get PyStarLight
+#### 3. Get PyStarLight
 
 ```bash
 git clone https://github.com/pyzahl/PyStarLight.git
 cd PyStarLight
-./install.sh                            # Windows: install.cmd   (first time: extras all + camera)
+./install.sh                            # first time: extras all + camera
 uv run pystarlight                      # analyze: opens a file dialog, pick a recording
 uv run pystarlight player               # the player, also with a file dialog
 ```
@@ -208,11 +252,11 @@ The installer (`scripts/install.py`, run by uv, so it works even when `.venv` is
 ./install.sh --check                    # only the check (= uv run pystarlight doctor)
 ```
 
-> **To update, run `./install.sh`** (Windows: `install.cmd`). A bare `git pull` + `uv run`
-> installs only the base packages: new dependencies of an extra stay missing, and when the Python
-> version changed (`.python-version`) uv rebuilds `.venv` without any extras, so the camera stops
-> with `No module named 'serial'` (or `PySide6`, `gi`). By hand it is `uv sync` with all your
-> extras each time, e.g. `uv sync --extra all --extra camera --extra aravis`.
+> **To update, run `./install.sh`**. A bare `git pull` + `uv run` installs only the base
+> packages: new dependencies of an extra stay missing, and when the Python version changed
+> (`.python-version`) uv rebuilds `.venv` without any extras, so the camera stops with
+> `No module named 'serial'` (or `PySide6`, `gi`). By hand it is `uv sync` with all your extras
+> each time, e.g. `uv sync --extra all --extra camera --extra aravis`.
 
 uv uses Python 3.12 (`.python-version`; it downloads it if needed), whatever else is installed: a
 brand-new Python (3.15 in 2026-11) has no ready-made wheels of scikit-image and friends yet, so they
@@ -222,7 +266,7 @@ would be compiled, which needs a C/C++ compiler. A `.venv` made earlier with ano
 Without uv, plain pip works in a virtual environment (Python 3.10+, with Tk as in step 1):
 
 ```bash
-python3 -m venv .venv && . .venv/bin/activate              # Windows: .venv\Scripts\activate
+python3 -m venv .venv && . .venv/bin/activate
 pip install -e ".[all,camera]"                             # in the cloned folder
 pip install "starlight-photometry[all,camera] @ git+https://github.com/pyzahl/PyStarLight"   # or without a clone
 pystarlight
@@ -230,14 +274,21 @@ pystarlight
 
 (Not on PyPI yet; the distribution name will be `starlight-photometry`, import name `pystarlight`.)
 
-### 4. Check it
+#### 4. Start
+
+`uv run pystarlight` (analyze) and `uv run pystarlight player` in the PyStarLight folder; Linux:
+`./install.sh --launcher` adds menu entries and desktop icons.
+
+### Check the installation
 
 ```bash
-uv run pystarlight doctor                # Windows too; the installer runs it at the end
+uv run pystarlight doctor                # Linux / macOS / the Pi; the installers run it at the end
 ```
 
+On Windows (setup): Start menu → PyStarLight → **Check installation**.
+
 It lists every part (Python, Tk for the viewer, Qt for the player, the movie readers, Aravis,
-ZWO, the local plate solver, the Pi's clock helper, the config). Anything missing that your
+ZWO, the offline plate solvers, the Pi's clock helper, the config). Anything missing that your
 extras need is marked `MISSING` with a `fix:` line, and the exit code is then 1. Optional parts
 are only listed. Either Qt binding works; `PYSTARLIGHT_QT=pyqt5` picks PyQt5 when both are there.
 
@@ -251,18 +302,23 @@ are only listed. Either Qt binding works; `PYSTARLIGHT_QT=pyqt5` picks PyQt5 whe
 | `adv` | Adv2 | ADV / AAV recordings (DVTI, OccuRec) |
 | `catalog` | astroquery | star names from SIMBAD and the VO (offline: PySyzygos' Gaia extract) |
 | `camera` | PySide6, pyserial, astroquery | the player (`pystarlight player`, any OS) and the capture program |
+| `desktop` | `all` + PySide6 + pyserial | a desktop computer: analysis, player, camera (the Windows setup installs this) |
 | `aravis` | PyGObject | GenICam (USB3 / GigE) cameras in the capture program: Linux / Pi only, see [CAPTURE.md](CAPTURE.md) |
+| `dslr` | python-gphoto2, rawpy | a DSLR / mirrorless camera beside the video camera (capture program, [CAPTURE.md](CAPTURE.md)) |
 
-Optional, outside Python: **offline plate solving** with a local astrometry.net
-(Linux / macOS, [below](#optional-offline-plate-solving-local-astrometrynet)); on Windows the
-viewer uses nova.astrometry.net (needs a free API key).
+Optional, outside Python: **offline plate solving** with ASTAP (Windows, Linux, macOS) or a local
+astrometry.net (Linux, macOS):
+[below](#optional-offline-plate-solving-astap-or-a-local-astrometrynet). Without either, plate
+solves go online to nova.astrometry.net (needs a free API key).
 
 For development: `uv sync --group dev --extra all`, then `uv run pytest` and `uvx ruff check`.
 
 ## The tools
 
 One command, `pystarlight`, started with `uv run` from the clone (after `uv sync` with the
-extras shown); `pystarlight --help` lists the tools, `pystarlight <tool> --help` their options:
+extras shown); `pystarlight --help` lists the tools, `pystarlight <tool> --help` their options.
+The Windows setup installs all of them; start them from the Start menu, or in a terminal as
+`%LOCALAPPDATA%\PyStarLight\bin\pystarlight.exe` (not on PATH).
 
 | command | what | install, start |
 |---|---|---|
@@ -295,6 +351,9 @@ cd PyStarLight
 uv run pystarlight config init --here    # private config: ./pystarlight.toml (git-ignored)
 ```
 
+On Windows (setup): Start menu → PyStarLight → **Settings** creates and opens
+`%APPDATA%\pystarlight\config.toml`.
+
 Edit the config. The file is only readable by you and is never part of the repository.
 
 - **`[observer]`**: your name, email, station and equipment (aperture and focal length in mm).
@@ -320,12 +379,34 @@ flat's exposure differs) to clip files. Each clip is averaged into a master fram
 median), cached in `~/.cache/pystarlight` and re-stacked only when the clip changes, then applied
 to every aperture box. Record them with the same gain and exposure as the observation.
 
-#### Optional: offline plate solving (local astrometry.net)
+#### Optional: offline plate solving (ASTAP or a local astrometry.net)
 
-With `solve-field` and index files installed, the viewer solves every recording offline as soon
-as it opens (a few seconds with the plate-scale hint); without them it uploads to
-nova.astrometry.net on `p`. `[astrometry] solver = "auto"` (default) picks local when it finds
-`solve-field` and at least one index file; `"local"` or `"nova"` force one.
+With an offline solver installed, the viewer solves every recording as soon as it opens (seconds
+with the plate-scale hint). Without one it uploads to nova.astrometry.net on `p`. Two offline
+solvers are supported; either one is enough:
+
+- **ASTAP** (www.hnsky.org): Windows, Linux (also the Raspberry Pi) and macOS.
+  - Install the program and one **star database**: **D80** (about 1.2 GB) works for all occultation
+    fields. Narrow fields **under 0.5°**, common with long focal lengths (e.g. 16′ × 12′ at
+    1.2″/px), need it: D20 / D05 start at 0.3° / 0.6°. W08 is for wide fields (camera lenses).
+  - ASTAP needs the approximate field size. It comes from the plate scale (the recording's optics,
+    or `[fallback_equipment]`). Without it, PyStarLight tries field heights from 0.1° to 5° in
+    turn, which takes seconds with a position hint.
+  - It is fast with a position hint, which PyStarLight nearly always has (the recording's target,
+    the asteroid).
+  - PyStarLight finds `astap_cli` / `astap` on PATH or in ASTAP's folders (`C:\Program Files\astap`,
+    `/opt/astap`, `/usr/share/astap/data`, macOS `/usr/local/opt/astap`). `[astrometry] astap`,
+    `astap_db` and `astap_database` override that.
+  - **On Windows this is the offline option.**
+- **astrometry.net** (`solve-field` + index files): Linux and macOS, see the steps below. It is the
+  strongest **blind** solver, for fields with no position hint.
+
+`[astrometry] solver = "auto"` (default) uses the offline solvers that are installed. ASTAP goes
+first when the position is roughly known, astrometry.net first for a blind solve, and the other one
+takes over if the first fails. nova is used only when neither is installed. `"astap"`, `"local"`
+(astrometry.net) or `"nova"` use only that one. `pystarlight doctor` shows what it found.
+
+The steps for astrometry.net:
 
 1. **Install the solver.** Debian / Ubuntu / Raspberry Pi OS:
    `sudo apt-get install astrometry.net`. macOS (Homebrew): `brew install astrometry-net` (check
@@ -349,16 +430,25 @@ nova.astrometry.net on `p`. `[astrometry] solver = "auto"` (default) picks local
    Elsewhere (macOS): download the `index-42xx*.fits` files you need from
    <http://data.astrometry.net/4200/> into a folder and add `add_path /that/folder` to the
    `astrometry.cfg` next to `solve-field` (Homebrew: `$(brew --prefix)/etc/astrometry.cfg`).
-   PyStarLight reads that file to see which index files exist.
+   PyStarLight reads that file to see which index files exist. For example, with Homebrew
+   (index 42NN = Debian package `-NN`; the larger-quad sets are single files, the smaller ones
+   are split into numbered parts, as listed on that page):
+
+   ```bash
+   brew install astrometry-net
+   mkdir -p ~/astrometry-index && cd ~/astrometry-index
+   curl -O "http://data.astrometry.net/4200/index-42[08-19].fits"     # 30' and wider quads
+   echo "add_path $HOME/astrometry-index" >> "$(brew --prefix)/etc/astrometry.cfg"
+   ```
 3. **Give the scale.** It comes from the recording's own optics (focal length and sensor, as
    PyStarLight's camera writes them), else from `[fallback_equipment]` with a warning, or set
    `[astrometry] scale_arcsec`. With the scale known a solve takes seconds, blind it can take
    minutes.
    Small fields show few stars: more stacked frames help (`[astrometry] stack_frames`, default
    16), and an ADV file's own RA/Dec is used as the field centre.
-4. **Check:** the viewer's key list says `p plate-solve (offline)` when the local solver is found.
+4. **Check:** the viewer's key list says `p plate-solve (offline)` when an offline solver is found.
 
-Measured times and the owner's Raspberry Pi setup: [CAPTURE.md, Offline plate
+Measured times and the owner's Raspberry Pi setup (astrometry.net): [CAPTURE.md, Offline plate
 solving](CAPTURE.md#offline-plate-solving-local-astrometrynet).
 
 #### Optional: star names offline (PySyzygos' Gaia catalogue)
@@ -389,9 +479,9 @@ uv run pystarlight                                    # no file: a file dialog
 apertures of the current one are not saved on the way (`s` saves them).
 
 The field is **plate-solved** from a median stack of the first frames. With a
-[local astrometry.net](#optional-offline-plate-solving-local-astrometrynet) this happens offline
+[local solver](#optional-offline-plate-solving-astap-or-a-local-astrometrynet) this happens offline
 as soon as the movie opens; otherwise press `p` to upload it to nova.astrometry.net in the
-background (private upload; nothing is uploaded without `p` or [`--auto`](#fully-automatic-auto)). The result is cached as
+background (private upload; nothing is uploaded without `p` or [`--auto`](#fully-automatic---auto)). The result is cached as
 `<movie>.wcs.fit` and loaded when the movie is opened again. Burnt-in timestamp rows are blanked
 first. Hints: the recording's own RA/Dec (ADV) as the field centre, and the plate scale from the
 recording's optics, else `[fallback_equipment]` (not for a recording made more than 20 km from
@@ -467,11 +557,11 @@ All keys:
 | Home / End, buttons `\|<` `>\|` | first / last frame |
 | buttons `-10 s` / `+10 s` | jump 10 s (frame count from the timestamps) |
 | `a`, button **Run** | analyse from the current frame to the end |
-| `A`, button **Auto ap** (next to **Set target**; the **Auto** below the image is the display stretch) | **automatic apertures**: the star typed in the star field is the target (Enter not needed; empty: the recording's target, see [Fully automatic](#fully-automatic-auto)), references picked over the field; replaces the apertures. Then `a` runs |
+| `A`, button **Auto ap** (next to **Set target**; the **Auto** below the image is the display stretch) | **automatic apertures**: the star typed in the star field is the target (Enter not needed; empty: the recording's target, see [Fully automatic](#fully-automatic---auto)), references picked over the field; replaces the apertures. Then `a` runs |
 | button **phot: auto** | photometry of the next run: auto (the better of the two by the references), circle, optimal; see [Run](#3-run) |
 | `e`, button **Send** | send `<movie>.event.json` to PySyzygos' observation report (see [Run](#3-run)) |
 | `s` / `l` | save / load apertures (`<movie>.apertures.json`) |
-| `p` | plate-solve again (offline with a local astrometry.net, else uploads to nova.astrometry.net) |
+| `p` | plate-solve again (offline with ASTAP or a local astrometry.net, else uploads to nova.astrometry.net) |
 | `i` | identify the stars in the apertures (local catalogue, else SIMBAD); stars without a name are tried again automatically |
 | `N`, button **Names** | star names on the image on / off (default `[display] star_names`) |
 | field **star**, button **Set target** | type the target star (Gaia DR3 id, `UCAC4 634-113397` or `UCAC4-634-113397`, `TYC 3574-1718-1`, `HIP ...`, RA Dec, any SIMBAD name, or the **asteroid**: `(476) Hedwig`, `476 Hedwig`, `2003 SB60`) and Enter: found in the local catalogue around the plate solution (offline; also stars too faint to see) and marked with open ticks and its name, following the drift frame by frame. An asteroid's position during the recording comes from JPL Horizons (network; topocentric with the recording's site), and the target is the catalogue star within 15″ of its path (else the asteroid's own position). Lookups run in the background: the window keeps responding while SIMBAD or Horizons think. **Set target** puts the target aperture exactly there (`u` then centres it on the peak) and names it after that star. Kept in `<movie>.target.json`; an empty field removes the marker |
@@ -866,6 +956,8 @@ you publish results obtained with PyStarLight.
 - Lang, D., Hogg, D. W., Mierle, K., Blanton, M., Roweis, S. 2010, *Astrometry.net: Blind
   astrometric calibration of arbitrary astronomical images*, AJ 139, 1782,
   doi:10.1088/0004-6256/139/5/1782 (online at nova.astrometry.net, offline with `solve-field`).
+- Kleijn, H., *ASTAP, Astrometric STAcking Program*, www.hnsky.org (offline plate solver with
+  its own star databases; Windows, Linux, macOS).
 - Skrutskie, M. F., et al. 2006, *The Two Micron All Sky Survey (2MASS)*, AJ 131, 1163
   (the 4200-series astrometry.net index files).
 - Assafin, M., Vieira Martins, R., Camargo, J. I. B., Andrei, A. H., Da Silva Neto, D. N.,

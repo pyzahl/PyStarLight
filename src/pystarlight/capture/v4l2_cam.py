@@ -19,17 +19,22 @@ VIDIOC_S_STD), "input" (VIDIOC_S_INPUT, e.g. composite vs S-video), "size" ((w, 
 """
 import ctypes
 import errno
-import fcntl
 import glob
 import os
 import select
 import struct
+import sys
 import time
 from fractions import Fraction
 
 import numpy as np
 
 from . import veye_mvcam as vm
+
+try:
+    import fcntl  # Linux device ioctls; the module only lists no cameras on Windows
+except ImportError:
+    fcntl = None
 
 SUCCESS = vm.SUCCESS
 SUPPORTED = ("GREY", "Y16", "YUYV", "UYVY", "MJPG")     # in order of preference
@@ -97,8 +102,9 @@ class _Control(ctypes.Structure):
     _fields_ = [("id", ctypes.c_uint32), ("value", ctypes.c_int32)]
 
 
-assert (ctypes.sizeof(_Capability), ctypes.sizeof(_FmtDesc), ctypes.sizeof(_FrmSize),
-        ctypes.sizeof(_StreamParm), ctypes.sizeof(_QueryCtrl)) == (104, 64, 44, 204, 68)
+if sys.platform.startswith("linux"):     # the kernel's layouts; elsewhere the module finds no devices
+    assert (ctypes.sizeof(_Capability), ctypes.sizeof(_FmtDesc), ctypes.sizeof(_FrmSize),
+            ctypes.sizeof(_StreamParm), ctypes.sizeof(_QueryCtrl)) == (104, 64, 44, 204, 68)
 
 VIDIOC_QUERYCAP = _ior(0, ctypes.sizeof(_Capability))
 VIDIOC_ENUM_FMT = vm._iowr(2, ctypes.sizeof(_FmtDesc))

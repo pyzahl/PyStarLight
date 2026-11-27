@@ -386,3 +386,28 @@
   \end{column}
   \end{columns}
 \end{frame}
+
+% ------------------------------------------------------------------------------------------------- satellite
+\begin{frame}{Diffraction taken to the extreme: a Starlink satellite occults a star}
+  \tightdisplays
+  \begin{columns}[T]
+  \begin{column}{0.38\textwidth}
+    \scriptsize
+    \textbf{Same model}, $Z = 550$\,km, $v_\perp = 7.2$\,km/s:\\
+    $F = \sqrt{\lambda Z/2} = 0.42\,\mathrm m$ (58\,$\mu$s)
+    \begin{tightlist}
+      \item body 3\,m: 0.42\,ms; panels + body 30\,m: 4.2\,ms
+      \item 45\,mas $\to$ 12\,cm $\ll F$: every star is a point, full fringes (peaks 1.33; 1.74 in the gaps)
+      \item the exposure spreads the loss: 1\,ms 0.61\,mag, 33\,ms 0.01--0.14\,mag
+      \item G\,10 loses $\sim$17 photons (25\,cm, body); a sunlit satellite (mag 6--7) outshines that
+      \item path 3--30\,m wide, TLEs $\sim$1\,km: not predictable
+    \end{tightlist}
+  \end{column}
+  \begin{column}{0.60\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{starlink_occultation.png}\\[0.2ex]
+    \raggedright\tiny Top: instantaneous, band-averaged, three stars. Bottom: averaged over an exposure.
+    \texttt{docs/starlink\_occultation.md}, script \texttt{docs/starlink\_occultation.py}.
+  \end{column}
+  \end{columns}
+\end{frame}

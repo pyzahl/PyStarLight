@@ -395,7 +395,11 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
   2.4 µm, `--pixel-um` otherwise): 24 mm -> 20.6"/px, a 17.6° x 11.8° field. 0 = blind solve.
 - **Solver**: a local astrometry.net when installed (offline, see "Offline plate solving"), else
   nova.astrometry.net with `[astrometry] api_key` from `pystarlight.toml`
-  (`[astrometry] solver = "auto" | "local" | "nova"`).
+  (`[astrometry] solver = "auto" | "local" | "astap" | "nova"`). ASTAP (README: "Optional: offline
+  plate solving") also runs on the Pi; with it installed, `auto` takes ASTAP first whenever the
+  position and the scale are known (the mount's position) and astrometry.net for blind solves.
+  The capture setup is tested with astrometry.net: to keep it for the camera with ASTAP installed,
+  set `solver = "local"` in the Pi's config.
 - **Alignment** (`capture/stacker.py`): without tracking the sky drifts ~15"/s x cos(dec), i.e.
   ~0.5 px/s at 24 mm (measured: 6 px in a 12.8 s stack). Each frame is aligned to the first by
   phase correlation of "star maps" (2x downsampled, median-filtered against hot pixels, minus a
@@ -646,7 +650,8 @@ The packages download the index files at install time into `/usr/share/astrometr
 installed with `uv run python -c "from pystarlight.wcs.solve import local_index_files as f; print(f())"`.
 
 `solve_astrometry_net` (viewer key `p`, `solve_movie`, the stack solve) uses it automatically
-(`[astrometry] solver = "auto"`): `solve_local` runs `solve-field` with the same hints (scale
+(`[astrometry] solver = "auto"`, together with ASTAP when that is installed, see the README):
+`solve_local` runs `solve-field` with the same hints (scale
 +-`scale_err_pct`, centre, downsampling) and gives the same WCS file. There is no job id, so no
 astrometry.net annotations: star names come from SIMBAD (network) only. The SIMBAD search radius
 is 10", or 2 px on coarse scales (`identify.simbad_radius`).

@@ -140,7 +140,7 @@ def init(path: Optional[str] = None, overwrite: bool = False) -> Path:
     if p.exists() and not overwrite:
         raise FileExistsError(f'{p} exists (use --force to replace it)')
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(TEMPLATE.read_text())
+    p.write_text(TEMPLATE.read_text(encoding='utf-8'), encoding='utf-8')
     p.chmod(stat.S_IRUSR | stat.S_IWUSR)
     return p
 

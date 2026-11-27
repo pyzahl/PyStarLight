@@ -30,7 +30,8 @@ CHECKOUT = (ROOT / "pyproject.toml").is_file()
 WINDOWS = sys.platform == "win32"
 INSTALLER = "install.cmd" if WINDOWS else "./install.sh"
 # extras pulling in others (pyproject.toml's 'all'; tests/test_doctor.py keeps it in step)
-EXTRAS_IN = {"all": ["adv", "ravf", "catalog", "plot"]}
+EXTRAS_IN = {"all": ["adv", "ravf", "catalog", "plot"],
+             "desktop": ["all", "camera"]}      # desktop: all + the camera extra's Qt and pyserial
 SETTIME_HELPER = "/usr/local/sbin/pystarlight-settime"
 
 
@@ -159,15 +160,36 @@ def check_zwo() -> Result:
         lib = asi_cam.library()
     except Exception as e:  # noqa: BLE001
         return Result("info", f"not checked: {e}")
+    name = "ASICamera2.dll" if WINDOWS else "libASICamera2"
     if lib is None:
-        return Result("info", "ZWO's libASICamera2 not installed (only for ZWO ASI cameras; CAPTURE.md)")
-    return Result("ok", f"libASICamera2 {asi_cam.sdk_version(lib)}")
+        where = ("ZWO's camera driver / SDK, the DLL on PATH or ZWO_ASI_LIB" if WINDOWS else "CAPTURE.md")
+        return Result("info", f"ZWO's {name} not installed (only for ZWO ASI cameras; {where})")
+    return Result("ok", f"{name} {asi_cam.sdk_version(lib)}")
 
 
 def check_solver() -> Result:
+    try:
+        from pystarlight.config import load
+        from pystarlight.wcs import solve
+        acfg = load()["astrometry"]
+        astap = solve.astap_executable(acfg)
+        dbs = sorted(solve.astap_databases(acfg)) if astap else []
+    except Exception:  # noqa: BLE001
+        astap, dbs = None, []
+    if astap and dbs:
+        astap_line = f"ASTAP {astap} with star database {', '.join(dbs)}"
+    elif astap:
+        astap_line = "ASTAP found but no star database (www.hnsky.org: e.g. D50, or W08 for wide fields)"
+    else:
+        astap_line = ""
     if not shutil.which("solve-field"):
-        return Result("info", "no local astrometry.net (solve-field): plate solves go online "
-                      "(nova.astrometry.net, needs the API key); README: astrometry")
+        if astap and dbs:
+            return Result("ok", astap_line + " (offline plate solving)")
+        hint = ("install ASTAP + a star database from www.hnsky.org" if WINDOWS
+                else "install ASTAP (www.hnsky.org) or astrometry.net (README: astrometry)")
+        return Result("info", (astap_line + "; " if astap_line else "")
+                      + f"no offline solver: plate solves go online (nova.astrometry.net, needs the "
+                      f"API key); for offline solving {hint}")
     try:
         from pystarlight.wcs.solve import astrometry_cfg, local_index_files
         n = len(local_index_files())
@@ -176,7 +198,7 @@ def check_solver() -> Result:
     if not n:
         return Result("warn", f"solve-field found but no index files (config {astrometry_cfg()})",
                       "install index files, CAPTURE.md 'Offline plate solving'")
-    return Result("ok", f"solve-field, {n} index files")
+    return Result("ok", f"solve-field, {n} index files" + (f"; {astap_line}" if astap_line else ""))
 
 
 def check_settime_helper() -> Result:

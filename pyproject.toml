@@ -42,6 +42,8 @@ ravf = ["ravf>=1.0.1"]
 catalog = ["astroquery>=0.4.6"]
 plot = ["matplotlib>=3.5"]
 all = ["starlight-photometry[adv,ravf,catalog,plot]"]
+# desktop computers (the Windows setup): all + Qt for the player and the camera + the GPS serial port
+desktop = ["starlight-photometry[all]", "PySide6-Essentials>=6.5", "pyserial>=3.5"]
 # capture app (pystarlight-camera, Raspberry Pi 5): Qt GUI (PySide6 has aarch64 wheels, PyQt5
 # has none) and the GPS serial port. VEYE cameras need nothing more.
 # (newer PySide6 aarch64 wheels need glibc 2.39; Raspberry Pi OS bookworm has 2.36)
@@ -63,6 +65,14 @@ pystarlight-player = "pystarlight.capture.player:main"
 pystarlight-review = "pystarlight.capture.player:main"  # its name before
 pystarlight-config = "pystarlight.config:main"
 pystarlight-camera = "pystarlight.capture.app:main"
+
+# windowed launchers (no console window; output to a log, errors in a message box): the Windows
+# setup's Start menu / desktop shortcuts and "Open with" (pystarlight.winlaunch)
+[project.gui-scripts]
+pystarlight-analyze-gui = "pystarlight.winlaunch:analyze"
+pystarlight-player-gui = "pystarlight.winlaunch:player"
+pystarlight-camera-gui = "pystarlight.winlaunch:camera"
+pystarlight-settings-gui = "pystarlight.winlaunch:settings"
 
 [dependency-groups]
 test = ["pytest>=8", "pytest-cov>=5", "matplotlib>=3.5"]

@@ -56,10 +56,18 @@ binning = 1
 # Personal API key from https://nova.astrometry.net (My Profile). Keep it private.
 api_key = ""
 url = "https://nova.astrometry.net/api/"
-# "auto": a local astrometry.net (solve-field + index files) when installed, else nova
-# (needs api_key); "local" or "nova" to force one. Local is offline and needs index files
-# covering quads of ~10-100 % of the field width (apt: astrometry-data-2mass-*)
+# "auto": the offline solvers that are installed, ASTAP first when the position is roughly known
+# (the recording's target, the asteroid), astrometry.net first for a blind solve, the other one when
+# the first fails; nova (online, needs api_key) only when neither is installed.
+# "astap", "local" (= "astrometry", astrometry.net's solve-field) or "nova" to use only that one.
+# astrometry.net (Linux, macOS): solve-field + index files covering quads of ~10-100 % of the field
+# width (apt: astrometry-data-2mass-*). ASTAP (Windows, Linux incl. Raspberry Pi, macOS;
+# www.hnsky.org): the program + a star database (D80 for all occultation fields, needed under 0.5 deg;
+# W08 wide). Without a plate scale ASTAP tries field heights of 0.1 .. 5 deg in turn.
 solver = "auto"
+astap = ""                 # ASTAP's command-line solver; "": astap_cli / astap on PATH or in its folders
+astap_db = ""              # folder of the ASTAP star databases; "": the program's folder / ASTAP's default
+astap_database = ""        # e.g. "d50"; "": ASTAP picks one by the field size
 timeout_s = 900
 auto_solve = true          # on open: load the cached solution (<movie>.wcs.fit), or solve offline
                            # (local solver); uploads to nova only with key p

@@ -18,7 +18,6 @@ module's I2C wires, if they are connected to the Pi's I2C bus 1). The heading is
 magnetic and uncalibrated (no hard/soft-iron correction, no tilt compensation).
 """
 import calendar
-import fcntl
 import math
 import os
 import struct
@@ -30,6 +29,11 @@ from fractions import Fraction
 import serial
 
 from .timing import GpsClock, rate_str
+
+try:
+    import fcntl  # the I2C compass (Raspberry Pi); not on Windows
+except ImportError:
+    fcntl = None
 
 UBX_SYNC = b"\xb5\x62"
 CFG_TP5 = (0x06, 0x31)

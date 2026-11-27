@@ -6,6 +6,59 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Docs: "What if a Starlink satellite occults a star?"** (`docs/starlink_occultation.md`, figure and
+  script `docs/starlink_occultation.py`, linked from the README intro; a slide in the method slides): the
+  diffraction model at 550 km. 0.4 ms (body) to ~4 ms (with the panels), almost total for every star (even a
+  45 mas supergiant is a point source there), full Fresnel fringes, and only a 0.01–0.14 mag dip in a 30 fps
+  video.
+- **Windows setup: one file, double-click** (`PyStarLight-Setup.cmd`, attached to every release;
+  `windows/setup.ps1` behind a small cmd header, built by `scripts/build_windows_setup.py`).
+  - Per user, no administrator rights, no Python, no git: a private uv, uv's Python (with Tk),
+    `uv tool install` of the release wheel with the release's `constraints.txt` (the tested
+    versions).
+  - Start menu folder: Analyze, Player, Camera, Settings, Check installation, Logs, Update,
+    Uninstall. Desktop icons: Analyze, Player, Camera.
+  - "Open with" for recordings: `.ravf` / `.ser` / `.adv` / `.aav` open in the player, and the
+    player and the analyzer are offered for `.avi`.
+  - At the end, `pystarlight doctor`.
+- Windowed launchers (`[project.gui-scripts]`, `pystarlight.winlaunch`): no console window, output
+  in a log file, a message box when a program cannot start; Settings opens the private config
+  (created from the template). Extra `desktop` (all + Qt + pyserial).
+- Release workflow on a `vX.Y.Z` tag:
+  1. build the wheel, the sdist, the setup and the constraints;
+  2. run the setup on a real Windows runner (install, check, shortcuts, file types, uninstall);
+  3. create the GitHub release with all files.
+
+  PyPI only when the repository variable `PUBLISH_PYPI` is `true`.
+
+- **ASTAP as a plate solver** (`wcs/solve.py`: `solve_astap`, `astap_available`, `solver_order`):
+  offline on Windows, Linux (incl. the Raspberry Pi) and macOS, with one of ASTAP's star databases.
+  `[astrometry] solver = "auto"` now tries the installed offline solvers: ASTAP first when the
+  position is roughly known, astrometry.net first for a blind solve, the other one when the first
+  fails; nova only when neither is installed. New settings `astap`, `astap_db`, `astap_database`.
+  `pystarlight doctor` reports both solvers.
+  - ASTAP needs the field size: from the plate scale, else field heights 0.1 to 5 deg are tried in
+    turn. So `auto` puts ASTAP first only when both the position and the scale are known.
+  - Tested on Windows Server 2025 (ASTAP + D20 / D80): the Fringilla ADV (16' x 12' field, no
+    scale in the file) solved offline in 0.9 s; the same solution as astrometry.net's blind solve
+    (15 s) to under 0.5".
+
+### Fixed
+- The player and the camera now start on Windows (tested on Windows Server 2025):
+  - the ZWO module called `os.uname()` at import; it looks for `ASICamera2.dll` there now, and its
+    messages name the Windows DLL;
+  - the GPS, v4l2 and VEYE modules imported the Unix-only `fcntl`;
+  - the v4l2 / VEYE modules asserted Linux kernel struct sizes at import (a C `long` is 4 bytes on
+    Windows).
+
+  `config init` writes the template as UTF-8. Ending a local solver's process used Unix-only
+  calls (`SIGKILL`, process groups) and failed on Windows even after a finished solve.
+- Windows setup: running PyStarLight programs are found before an update or uninstall (Windows
+  locks their files). The user is asked to close them (or types STOP); `-Force` ends them. A
+  native program's error output no longer aborts the script (PowerShell 5.1), and leftovers are
+  reported.
+
 ## [1.1.0] - 2026-11-26
 
 ### Added
