@@ -143,6 +143,13 @@ click **Run**.
   ([details](#optional-offline-plate-solving-astap-or-a-local-astrometrynet)); PyStarLight finds
   them. Otherwise solving goes online, to nova.astrometry.net: put your free API key into
   *Settings* (`[astrometry] api_key`).
+  - **By hand** (the two official downloads that hnsky.org links to; run both, keep the suggested
+    folder `C:\Program Files\astap`):
+    1. the program: [astap_setup.exe](https://sourceforge.net/projects/astap-program/files/windows_installer/astap_setup.exe/download)
+       (6 MB)
+    2. the star database **D80**: [d80_star_database.exe](https://sourceforge.net/projects/astap-program/files/star_databases/d80_star_database.exe/download)
+       (1.2 GB). The program alone cannot solve anything: *Check installation* then says "ASTAP
+       found but no star database".
 - **The camera on Windows:** for a ZWO ASI camera with ZWO's Windows driver (`ASICamera2.dll` on
   PATH, or `ZWO_ASI_LIB`); the Raspberry Pi is the tested capture setup.
 
