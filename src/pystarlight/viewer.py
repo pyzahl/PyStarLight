@@ -242,6 +242,8 @@ def load_aperture_stars(path) -> dict:
 
 STAR_APERTURE_ROLES = ('target', 'reference', 'check')
 PHOT_LABELS = {'auto': 'phot: auto', 'aperture': 'phot: circle', 'optimal': 'phot: optimal'}
+DIFFR_LABELS = {'off': 'diffr: off', 'auto': 'diffr: auto', 'on': 'diffr: on'}
+DIFFR_AUTO_FRACTION = 0.1       # auto: fit when (Fresnel scale + star) / shadow speed >= this x frame
 LIVE_ZOOM_INTERVAL = 0.5        # s between zoom-view updates while analysing
 
 
@@ -328,6 +330,9 @@ class Viewer:
         self._hist_fig = None         # magnitude histograms of the target's levels and references
         self._mag_band = ''           # catalogue band of the magnitude plots ('G', 'V' or '')
         self.step_fit = None          # steps.StepFit of the target in the last result plot
+        self._diffraction = None      # (step fit, DiffractionFit, compare rows, geometry) when enabled
+        self._diffraction_fig = None  # step fit vs diffraction fit figure
+        self._event_args = None       # write_event's arguments of the last result (re-written later)
         self._result = None
         self._error = None
 
@@ -381,6 +386,10 @@ class Viewer:
         self._phot_button = Button(self.fig.add_axes([0.765, 0.172, 0.075, 0.036]),
                                    PHOT_LABELS.get(self.cfg['analysis']['photometry'], 'auto'))
         self._phot_button.on_clicked(lambda e: self.cycle_photometry())
+        # diffraction-aware event fit after the step fit: off / auto (when it matters) / on
+        self._diffr_button = Button(self.fig.add_axes([0.74, 0.951, 0.07, 0.032]),
+                                    DIFFR_LABELS[self.diffraction_mode()])
+        self._diffr_button.on_clicked(lambda e: self.cycle_diffraction())
 
         self.slider = Slider(self.fig.add_axes([0.2, 0.115, 0.6, 0.025]), 'frame', 0, self.n - 1,
                              valinit=0, valstep=1, valfmt='%d')
@@ -666,6 +675,32 @@ class Viewer:
                                    'aperture': 'circular aperture',
                                    'optimal': 'optimal extraction (Naylor), Gaussian weights of the seeing'
                                    }[a['photometry']])
+
+    def diffraction_mode(self) -> str:
+        """'off', 'auto' or 'on' from [diffraction] mode (an older enabled = true counts as 'on')."""
+        dc = self.cfg.setdefault('diffraction', {})
+        mode = dc.get('mode')
+        if isinstance(mode, bool):
+            mode = 'on' if mode else 'off'
+        mode = str(mode or '').strip().lower()
+        if mode not in DIFFR_LABELS:
+            mode = 'on' if dc.get('enabled') else 'off'
+        return mode
+
+    def cycle_diffraction(self):
+        """Diffraction button: off -> auto -> on. With a result on screen the new mode applies at once
+        (the fit runs in the background)."""
+        order = list(DIFFR_LABELS)
+        mode = order[(order.index(self.diffraction_mode()) + 1) % len(order)]
+        self.cfg['diffraction']['mode'] = mode
+        self._diffr_button.label.set_text(DIFFR_LABELS[mode])
+        self.say('diffraction fit: ' + {
+            'off': 'off (step fit only)',
+            'auto': 'auto: when it matters (double-star steps, or Fresnel scale + star >= '
+                    f'{DIFFR_AUTO_FRACTION:.0%} of a frame)',
+            'on': 'on: after every step fit (Fresnel diffraction, finite star, band, exposure)'}[mode])
+        if mode != 'off' and self.step_fit is not None and self._event_args is not None:
+            self.start_diffraction()
 
     def show(self, i):
         self.index = i
@@ -2422,7 +2457,125 @@ class Viewer:
                 warnings.simplefilter('ignore')
                 fig.show()
         self._hist_fig = fig
+        self._diffraction = None
+        self._event_args = (lc, target, refs, checks, steps)
         self.write_event(lc, target, refs, checks, steps)
+        self.start_diffraction()
+
+    def start_diffraction(self):
+        """[diffraction] enabled: the diffraction-aware fit (diffraction.from_steps) of the step fit's
+        main event, in the background (JPL Horizons gives distance and shadow speed unless the config
+        does); then the <movie>-diffraction figure (step fit vs diffraction fit), event.json
+        "diffraction_fit" and a status line with the time differences."""
+        dc = self.cfg.get('diffraction', {}) or {}
+        mode = self.diffraction_mode()
+        fit = self.step_fit
+        if mode == 'off' or fit is None:
+            return
+        kinds = [tr.kind for tr in fit.transitions]
+        if 'D' not in kinds or 'R' not in kinds:
+            if mode == 'on':
+                self.say_job('diffraction fit: the step fit found no D / R event')
+            return
+        double_pattern = kinds.count('D') >= 2 and kinds.count('R') >= 2
+        from .station import movie_format, station_of
+        lc = self._lc
+        meta = getattr(lc, 'metadata', {}) or {}
+        site = station_of(meta, movie_format(self.path))['site']
+        site = site if 'lat' in site else None
+        asteroid = self.recorded_target()[2] or str(meta.get('OBJNAME') or meta.get('OBJECT') or '').strip()
+        date = next((d for d in lc.date if d), '')
+        d0 = next(tr.time for tr in fit.transitions if tr.kind == 'D')
+        r1 = [tr.time for tr in fit.transitions if tr.kind == 'R'][-1]
+        mid = (d0 + r1) / 2
+        double = dc.get('double_star', 'auto')
+        double = 'auto' if str(double).lower() == 'auto' else str(double).lower() in ('true', '1', 'yes')
+
+        def work():
+            from . import diffraction as dif
+            dist = float(dc.get('distance_au') or 0)
+            speed = float(dc.get('shadow_speed_km_s') or 0)
+            geo = {'source': 'config'}
+            if dist <= 0 or speed <= 0:
+                from .wcs.asteroid import julian_day, parse_asteroid, shadow_geometry
+                body = parse_asteroid(asteroid) if asteroid else None
+                if body is None:
+                    raise ValueError('no asteroid named in the recording: set [diffraction] distance_au '
+                                     'and shadow_speed_km_s')
+                jd = julian_day(date, plot.hms(mid))
+                if jd is None:
+                    raise ValueError('no recording date for JPL Horizons: set [diffraction] distance_au '
+                                     'and shadow_speed_km_s')
+                geo = shadow_geometry(body, jd, site)
+                dist = dist if dist > 0 else geo['distance_au']
+                speed = speed if speed > 0 else geo['speed_km_s']
+            wl = float(dc.get('wavelength_nm') or 600.0)
+            qe = str(dc.get('qe_table') or '').strip()
+            teff = float(dc.get('star_teff') or 0) or None
+            band = dif.Band.from_table(Path(qe).expanduser(), teff=teff) if qe else dif.Band.monochromatic(wl)
+            dia = dif.star_diameter_km(float(dc.get('star_diameter_mas') or 0), dist)
+            geo.update({'distance_au': dist, 'shadow_speed_km_s': speed})
+            scale_s = (dif.fresnel_scale_km(band.effective_nm, dist) + dia) / speed
+            geo['diffraction_scale_s'] = scale_s
+            if mode == 'auto' and not double_pattern and scale_s < DIFFR_AUTO_FRACTION * fit.dt:
+                return None, None, geo                  # auto: a sharp step is good enough here
+            dfit = dif.from_steps(fit, dist, speed, band=band, double=double, diameter_km=dia,
+                                  limb=float(dc.get('limb_darkening', 0.6)),
+                                  fit_diameter=bool(dc.get('fit_star_diameter', False)))
+            trials = int(dc.get('mc_trials', 100) or 0)
+            if trials > 0:
+                dif.monte_carlo(dfit, trials)
+            return dfit, dif.compare(fit, dfit), geo
+
+        def done(res, err):
+            if err is not None:
+                self.say_job(f'diffraction fit: {err}')
+                return
+            if self.step_fit is not fit:            # a newer result plot superseded this one
+                return
+            dfit, rows, geo = res
+            if dfit is None:
+                self._diffraction = None
+                self.say_job(f"diffraction auto: not needed, Fresnel scale + star last "
+                             f"{1000 * geo['diffraction_scale_s']:.1f} ms < {DIFFR_AUTO_FRACTION:.0%} of the "
+                             f"{1000 * fit.dt:.0f} ms frame ({geo['distance_au']:.2f} au, "
+                             f"{geo['shadow_speed_km_s']:.1f} km/s); 'diffr: on' fits anyway")
+                return
+            self._diffraction = (fit, dfit, rows, geo)
+            fig = self._diffraction_fig
+            reuse = fig is not None and plt.fignum_exists(fig.number)
+            pc = self.cfg['plot']
+            target = self._event_args[1] if self._event_args else ''
+            with plot.style(**{'savefig.dpi': pc['dpi']}):
+                title = self._result_title(target) + ': step fit vs diffraction fit'
+                fig = plot.diffraction_compare(lc, fit, dfit, rows, title=title, fig=fig if reuse else None)
+                plot.save(fig, str(self.path.with_name(self.path.stem + '-diffraction')), pc['formats'])
+            if reuse:
+                fig.canvas.draw_idle()
+            else:
+                with warnings.catch_warnings():
+                    warnings.simplefilter('ignore')
+                    fig.show()
+            self._diffraction_fig = fig
+            if self._event_args:
+                self.write_event(*self._event_args)
+            self.say_job(self.diffraction_summary())
+        self._background('diffraction', work, done)
+
+    def diffraction_summary(self) -> str:
+        """'diffraction fit: D +12.3 ms, R -8.1 ms vs the step fit (...)' of the last result."""
+        if not self._diffraction:
+            return ''
+        _, dfit, rows, geo = self._diffraction
+        diffs = ', '.join(f"{r['kind']} {1000 * r['difference']:+.1f} ms" for r in rows)
+        extra = f"; primary's share {dfit.flux_ratio[0]:.2f}" if dfit.flux_ratio else ''
+        if dfit.flux_ratio is not None and dfit.components()[0]['ambiguous']:
+            extra += ' (D-R pairing ambiguous, see figure)'
+        if dfit.mc:
+            extra += f"; MC {dfit.mc['trials']} trials"
+        return (f"diffraction fit: {diffs} vs the step fit ({geo['distance_au']:.2f} au, "
+                f"{geo['shadow_speed_km_s']:.2f} km/s from {geo['source']}{extra}; chi2/dof "
+                f"{dfit.chi2 / max(dfit.dof, 1):.2f})")
 
     def event_path(self) -> Path:
         return self.path.with_name(self.path.stem + '.event.json')
@@ -2507,6 +2660,8 @@ class Viewer:
                            **({'choice': self._lc.photometry} if getattr(self._lc, 'photometry', None)
                               else {})},
             'step_fit': report,
+            **({'diffraction_fit': self._diffraction_report(date)}
+               if self._diffraction and self._diffraction[0] is fit else {}),
             'notes': ['times are mid-exposure: the time stamps as recorded, shifted by '
                       'step_fit.time_base.shift_to_mid_exposure_s (from timestamp_reference; the '
                       'CSV files keep the recorded stamps); the step fit takes the exposure as the '
@@ -2523,6 +2678,33 @@ class Viewer:
         except OSError as e:
             self.say_job(f'could not write {self.event_path().name}: {e}')
         return rec
+
+    def _diffraction_report(self, date: str) -> dict:
+        """event.json "diffraction_fit": times (UTC) of the diffraction-aware fit with 1 sigma and their
+        difference to the step fit, levels, double-star share, settings and geometry."""
+        _, dfit, rows, geo = self._diffraction
+        return {
+            'model': 'Fresnel diffraction (bar model, incoherent band sum), limb-darkened star, box '
+                     'exposure; double star: two components with own D/R (diffraction.py)',
+            'events': [{'kind': r['kind'], 'utc': plot.hms(r['diffraction']), 'date': date,
+                        'sigma_s': r['diffraction_sigma'], 'sigma_fit_s': r['diffraction_sigma_fit'],
+                        'sigma_mc_s': r['diffraction_sigma_mc'], 'step_fit_utc': plot.hms(r['step']),
+                        'step_fit_sigma_s': r['step_sigma'], 'difference_s': r['difference']}
+                       for r in rows],
+            'components': dfit.components(),
+            'monte_carlo': dfit.mc,
+            'baseline_flux': list(dfit.baseline), 'bottom_flux': list(dfit.bottom),
+            'primary_light_share': list(dfit.flux_ratio) if dfit.flux_ratio else None,
+            'star_diameter_km': list(dfit.diameter_km) if dfit.diameter_km else None,
+            'chi2_per_dof': dfit.chi2 / max(dfit.dof, 1),
+            'settings': dfit.settings,
+            'geometry': geo,
+            'notes': 'times mid-exposure as the step fit; sigma_s = max(sigma_fit_s: covariance scaled by '
+                     'max(1, chi2/dof), sigma_mc_s: 16-84 % half width of refits of the model plus AR(1) '
+                     'noise like the residuals); edges assumed perpendicular to the path (shadow speed = '
+                     'v_perp); components: chord = duration x shadow speed; ambiguous: the light share is '
+                     'too close to 0.5 to tell which R belongs to which D (alternative pairing given)',
+        }
 
     def _result_title(self, target) -> str:
         """'<movie> - candidate TYC 3574-1718-1': the identified star in the target aperture."""

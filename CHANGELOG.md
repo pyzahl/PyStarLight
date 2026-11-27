@@ -6,7 +6,28 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-26
+
 ### Added
+- **Diffraction-aware event fit** (`diffraction.py`, docs/diffraction.md): Fresnel diffraction at the
+  shadow edges (1-D bar model, exact in Fresnel integrals; several strips add in the field),
+  finite limb-darkened star, **double stars** (each component its own D and R, the primary's
+  share of the light), the camera band (one wavelength, 600 nm, or an optional QE table and star
+  temperature; wavelengths summed incoherently), the exposure. Least-squares fit of the D / R
+  times started from the step fit; **Monte-Carlo errors** (the model plus AR(1) noise like the
+  residuals, refitted; sigma = the larger of covariance and MC); per component the D-R pairing,
+  duration and chord, flagged **ambiguous** when the light share is close to 0.5 (both pairings
+  given). A 2-D sinc engine (E = W S W) ported from Bob Anderson's notebooks with his
+  permission (Cubillos & Jimenez 2022) for any silhouette.
+- Analyzer: button **diffr: off / auto / on** (top row; default `[diffraction] mode`, off). After
+  the step fit the diffraction fit runs in the background ("auto": when the step fit shows
+  double-star steps or the Fresnel scale plus the star takes >= 10 % of a frame); distance and
+  shadow speed from JPL Horizons for the recording's asteroid (`wcs.asteroid.shadow_geometry`)
+  or the config. Shows the differences: `<movie>-diffraction` figure (both models, a close-up of
+  every D / R, a table of step vs diffraction times, sigma from fit and MC, components and
+  chords), `event.json` `diffraction_fit`, a status line.
+- Method slides: "Event timing, parts 3 and 4" (diffraction, the fit, double stars, sinc method)
+  with references.
 - Player 1.1.0: a recording **dragged from a file manager** (Thunar, Nautilus, Dolphin ...) onto
   the window opens (a FITS frame: its folder); a file that does not open leaves the one shown
   as it was (also from the dialog: the new file is opened before the old one is closed).

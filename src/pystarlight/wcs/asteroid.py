@@ -115,6 +115,27 @@ def path(body: Body, jd_first: float, jd_last: float, site: Optional[dict] = Non
     return str(eph['targetname'][0]), pts
 
 
+def shadow_geometry(body: Body, jd: float, site: Optional[dict] = None) -> dict:
+    """Distance and shadow speed at jd for diffraction modelling (diffraction.py): JPL Horizons'
+    distance (au) and apparent motion (arcsec/h, RA rate incl. cos Dec), topocentric when the site
+    is known. The shadow moves over the observer at distance x angular rate (km/s) in the
+    fundamental plane; motion_pa_deg is the direction of the asteroid's motion (N through E)."""
+    from astroquery.jplhorizons import Horizons
+    loc = '500'
+    if site:
+        loc = {'lon': float(site['lon']), 'lat': float(site['lat']),
+               'elevation': float(site.get('alt_m') or 0) / 1000}
+    eph = Horizons(id=body.horizons_id, id_type=body.id_type, location=loc, epochs=[jd]).ephemerides(
+        quantities='3,20')
+    ra_rate, dec_rate = float(eph['RA_rate'][0]), float(eph['DEC_rate'][0])     # arcsec/h
+    delta = float(eph['delta'][0])                                               # au
+    rate = math.hypot(ra_rate, dec_rate) / 3600.0                                # arcsec/s
+    speed = delta * 1.495978707e8 * rate * math.pi / 648000.0
+    return {'name': str(eph['targetname'][0]), 'distance_au': delta, 'rate_arcsec_s': rate,
+            'speed_km_s': speed, 'motion_pa_deg': math.degrees(math.atan2(ra_rate, dec_rate)) % 360,
+            'topocentric': bool(site), 'source': 'JPL Horizons'}
+
+
 def _offset_arcsec(ra, dec, points) -> float:
     """Distance of (ra, dec) from the path through `points` (straight in the tangent plane), arcsec."""
     ra0, dec0 = points[len(points) // 2][1:]

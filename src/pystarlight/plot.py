@@ -281,6 +281,105 @@ def stepzoom(ax, lc, fit, k: int, color: str = 'k', data_color: str = TARGET_COL
     return ax
 
 
+DIFFRACTION_COLOR = '#1f77b4'
+
+
+def diffraction_compare(lc, stepfit, dfit, rows, title: str = '', fig=None, frames: int = 8):
+    """Step fit vs diffraction fit (diffraction.compare rows): the event with both models, a close
+    up of each D / R (rows, the sharp step, the diffraction model, both times with 1 sigma), and a
+    table of the times, their differences and the model's settings."""
+    import matplotlib.pyplot as plt
+    t0 = np.nanmin(seconds(lc))
+    n = max(len(rows), 1)
+    if fig is None:
+        fig = plt.figure(figsize=(max(8.0, 2.6 * n), 8.2))
+    else:
+        fig.clf()
+    gs = fig.add_gridspec(3, n, height_ratios=[1.0, 1.15, 0.75], hspace=0.55, wspace=0.3)
+    top = max(dfit.baseline[0], 1e-12)
+    # event overview
+    ax = fig.add_subplot(gs[0, :])
+    t = np.asarray(stepfit.t, dtype=float)
+    first = min(r['step'] for r in rows) if rows else t[0]
+    last = max(r['step'] for r in rows) if rows else t[-1]
+    pad = max(10 * stepfit.dt, 0.15 * (last - first))
+    near = (t >= first - pad) & (t <= last + pad)
+    ax.plot(t[near] - t0, np.asarray(stepfit.y)[near] / top, 'o', ms=2, color=TARGET_COLOR, label='target')
+    tf = np.linspace(first - pad, last + pad, 4000)
+    ax.plot(tf - t0, stepfit.model(tf) / top, '--', color='k', lw=1.1, label='step fit')
+    ax.plot(tf - t0, dfit.curve(tf) / top, '-', color=DIFFRACTION_COLOR, lw=1.3, label='diffraction fit')
+    ax.set_xlim(first - pad - t0, last + pad - t0)
+    ax.set_ylabel('Relative flux')
+    ax.set_xlabel('Time in s')
+    _legend(ax, fontsize=7)
+    if title:
+        ax.set_title(title, fontsize=9)
+    # close ups
+    for k, r in enumerate(rows):
+        ax = fig.add_subplot(gs[1, k])
+        sig = max(r['step_sigma'], r['diffraction_sigma'] if np.isfinite(r['diffraction_sigma']) else 0)
+        half = max(frames * stepfit.dt, 4 * sig, 1.5 * abs(r['difference']))
+        c = r['step']
+        sel = np.abs(t - c) <= half
+        ax.plot(t[sel] - t0, np.asarray(stepfit.y)[sel] / top, 'o', ms=2.5, color=TARGET_COLOR, zorder=3)
+        tz = np.linspace(c - half, c + half, 1500)
+        ax.plot(tz - t0, stepfit.model(tz) / top, '--', color='k', lw=1.1, zorder=4)
+        ax.plot(tz - t0, dfit.curve(tz) / top, '-', color=DIFFRACTION_COLOR, lw=1.4, zorder=5)
+        for x, s, col in ((r['step'], r['step_sigma'], 'k'), (r['diffraction'], r['diffraction_sigma'],
+                                                                DIFFRACTION_COLOR)):
+            ax.axvline(x - t0, color=col, lw=0.9, zorder=2)
+            if np.isfinite(s):
+                ax.axvspan(x - s - t0, x + s - t0, color=col, alpha=0.12, lw=0, zorder=1)
+        ax.set_xlim(c - half - t0, c + half - t0)
+        ax.set_title(f"{r['kind']}  {hms(r['diffraction'])} UTC\n"
+                     f"diffraction − step = {1000 * r['difference']:+.1f} ms", fontsize=8)
+        ax.set_xlabel('Time in s')
+        if k == 0:
+            ax.set_ylabel('Relative flux')
+    # table
+    ax = fig.add_subplot(gs[2, :])
+    ax.axis('off')
+    pm = '± s'
+    head = (f"{'':4s}{'step fit (UTC)':>16s}{pm:>7s}{'diffraction fit (UTC)':>23s}{pm:>7s}"
+            f"{'(fit':>7s}{'MC)':>7s}{'diff ms':>9s}")
+    lines = [head]
+    for r in rows:
+        mc = r.get('diffraction_sigma_mc', float('nan'))
+        lines.append(f"{r['kind']:4s}{hms(r['step']):>16s}{r['step_sigma']:7.3f}{hms(r['diffraction']):>23s}"
+                     f"{r['diffraction_sigma']:7.3f}{r.get('diffraction_sigma_fit', float('nan')):7.3f}"
+                     f"{mc:7.3f}{1000 * r['difference']:+9.1f}")
+    s = dfit.settings
+    fz = s.get('fresnel_scale_km', float('nan'))
+    nb = s.get('band_points', 1)
+    vp = dfit.v_perp[0]
+    extra = [f"distance {s.get('distance_au', float('nan')):.3f} au, shadow speed {vp:.2f} km/s, Fresnel "
+             f"scale {fz:.3f} km = {fz / vp:.3f} s, exposure {s.get('exposure_s', 0):.3f} s, band "
+             f"{s.get('band_effective_nm', 0):.0f} nm ({nb} wavelength{'s' if nb != 1 else ''})",
+             f"star {s.get('star_diameter_km', 0):.3f} km (limb u = {s.get('limb_darkening', 0):.2f})"
+             + (f", fitted {dfit.diameter_km[0]:.3f} ± {dfit.diameter_km[1]:.3f} km"
+                if dfit.diameter_km else '')
+             + f"; chi²/dof {dfit.chi2 / max(dfit.dof, 1):.2f}"
+             + (f"; MC: {dfit.mc['trials']} trials, noise correlation phi {dfit.mc['phi']:+.2f}" if dfit.mc
+                else '; no MC')]
+    comps = dfit.components()
+    if dfit.flux_ratio is not None:
+        for c in comps:
+            extra.append(f"{c['name']} ({100 * c['share']:.1f} % of the light): {c['D']}-{c['R']} "
+                         f"{c['duration_s']:.3f} s = {c['chord_km']:.1f} km")
+        if comps[0]['ambiguous']:
+            alt = ', '.join(f"{c['D']}-{c['alternative']['R']} {c['alternative']['duration_s']:.3f} s = "
+                            f"{c['alternative']['chord_km']:.1f} km" for c in comps)
+            f, fs = dfit.flux_ratio
+            extra.append(f"pairing AMBIGUOUS (share {f:.3f} ± {fs:.3f} ~ 0.5: same light curve); "
+                         f"the other pairing: {alt}")
+    else:
+        c = comps[0]
+        extra.append(f"chord: D-R {c['duration_s']:.3f} s = {c['chord_km']:.1f} km")
+    ax.text(0.0, 1.0, '\n'.join(lines + [''] + extra), family='monospace', fontsize=7.5, va='top',
+            transform=ax.transAxes)
+    return fig
+
+
 REGION_COLORS = ['#d62728', '#9467bd', '#8c564b', '#e377c2', '#bcbd22', '#ff7f0e']   # target levels
 
 

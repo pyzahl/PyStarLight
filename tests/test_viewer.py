@@ -936,3 +936,94 @@ def test_auto_after_a_run_and_a_run_without_references(movie):
     v._job.join()
     v.poll()
     assert 'no reference stars' in v.status.get_text()
+
+
+def test_diffraction_option(movie):
+    """[diffraction] mode on (geometry from the config, no network): after the result plot the
+    diffraction fit of the step fit's event runs in the background; figure, event.json, status."""
+    from pystarlight import diffraction as dif
+    from pystarlight import steps
+    v = Viewer(str(movie))
+    (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
+    click(v, c0, r0)
+    key(v, 't', c0, r0)
+    click(v, c1, r1)
+    key(v, 'r', c1, r1)
+    v.run()
+    v._job.join()
+    v.poll()
+    assert v._diffraction is None and not movie.with_name('shake-diffraction.pdf').exists()  # off by default
+    t0 = float(np.nanmin(plot.seconds(v._lc)))
+    t = t0 + np.arange(0, 20, 0.1)                 # a synthetic event on the recording's time axis
+    tr = dif.transmission(t, [dif.Component([(t0 + 10.03, t0 + 12.37)])], 2.33, 5.0, exposure=0.1)
+    y = 0.05 + 0.95 * tr + np.random.default_rng(2).normal(0, 0.02, t.size)
+    v.step_fit = steps.fit_steps(t, y)
+    lc, target, refs, checks, (_, m0) = v._event_args
+    v._event_args = (lc, target, refs, checks, (v.step_fit, m0))
+    v.cfg['diffraction'].update(mode='on', distance_au=2.33, shadow_speed_km_s=5.0, mc_trials=8)
+    v.start_diffraction()
+    v.finish_jobs()
+    assert v._diffraction is not None
+    assert movie.with_name('shake-diffraction.pdf').exists()
+    assert 'diffraction fit: D' in v.job_status.get_text()        # background jobs' line
+    ev = json.loads(movie.with_name('shake.event.json').read_text())
+    d = ev['diffraction_fit']
+    assert [e['kind'] for e in d['events']] == ['D', 'R']
+    assert all(abs(e['difference_s']) < 0.1 for e in d['events'])
+    assert d['geometry']['source'] == 'config' and d['settings']['distance_au'] == 2.33
+    assert d['monte_carlo']['trials'] >= 6 and all(e['sigma_s'] >= e['sigma_fit_s'] for e in d['events'])
+    assert len(d['components']) == 1 and d['components'][0]['chord_km'] > 0
+
+
+def _viewer_with_event(movie, comps):
+    """A run (for lc / event.json), then a synthetic event as the step fit."""
+    from pystarlight import diffraction as dif
+    from pystarlight import steps
+    v = Viewer(str(movie))
+    (r0, c0, _), (r1, c1, _) = STARS[0], STARS[1]
+    click(v, c0, r0)
+    key(v, 't', c0, r0)
+    click(v, c1, r1)
+    key(v, 'r', c1, r1)
+    v.run()
+    v._job.join()
+    v.poll()
+    t0 = float(np.nanmin(plot.seconds(v._lc)))
+    t = t0 + np.arange(0, 24, 0.1)
+    comps = [dif.Component([(t0 + d, t0 + r)], f) for d, r, f in comps]
+    tr = dif.transmission(t, comps, 2.33, 5.0, exposure=0.1)
+    y = 0.05 + 0.95 * tr + np.random.default_rng(4).normal(0, 0.01, t.size)
+    v.step_fit = steps.fit_steps(t, y)
+    lc, target, refs, checks, (_, m0) = v._event_args
+    v._event_args = (lc, target, refs, checks, (v.step_fit, m0))
+    return v
+
+
+def test_diffraction_button_cycles_and_applies(movie):
+    v = _viewer_with_event(movie, [(10.03, 12.37, 1.0)])
+    assert v.diffraction_mode() == 'off' and v._diffr_button.label.get_text() == 'diffr: off'
+    v.cfg['diffraction'].update(distance_au=2.33, shadow_speed_km_s=5.0, mc_trials=0)
+    v._diffr_button._observers.process('clicked', None)          # -> auto: 60 ms diffraction, 100 ms frames
+    assert v.cfg['diffraction']['mode'] == 'auto' and v._diffr_button.label.get_text() == 'diffr: auto'
+    v.finish_jobs()
+    assert v._diffraction is not None and 'diffraction fit: D' in v.job_status.get_text()
+    v._diffr_button._observers.process('clicked', None)          # -> on
+    assert v.cfg['diffraction']['mode'] == 'on'
+    v._diffr_button._observers.process('clicked', None)          # -> off
+    assert v.diffraction_mode() == 'off' and v._diffr_button.label.get_text() == 'diffr: off'
+    v.cfg['diffraction'].pop('mode')
+    v.cfg['diffraction']['enabled'] = True                       # an older config
+    assert v.diffraction_mode() == 'on'
+
+
+def test_diffraction_auto_skips_fast_events_but_not_doubles(movie):
+    v = _viewer_with_event(movie, [(10.03, 12.37, 1.0)])
+    v.cfg['diffraction'].update(mode='auto', distance_au=2.33, shadow_speed_km_s=100.0, mc_trials=0)  # 3 ms
+    v.start_diffraction()
+    v.finish_jobs()
+    assert v._diffraction is None and 'diffraction auto: not needed' in v.job_status.get_text()
+    v = _viewer_with_event(movie, [(10.02, 13.74, 0.7), (10.63, 13.11, 0.3)])
+    v.cfg['diffraction'].update(mode='auto', distance_au=2.33, shadow_speed_km_s=100.0, mc_trials=0)
+    v.start_diffraction()
+    v.finish_jobs()
+    assert v._diffraction is not None and v._diffraction[1].flux_ratio is not None    # double: fitted

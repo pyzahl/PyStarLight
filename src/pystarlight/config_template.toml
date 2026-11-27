@@ -156,6 +156,27 @@ photometry = "auto"        # "auto": both measured, kept is the one whose refere
 optimal_radius_fwhm = 3.0  # optimal: weights out to this many FWHM
 seeing_frames = 5          # optimal: running median of the reference stars' FWHM over these frames
 
+[diffraction]
+# Diffraction-aware event fit (diffraction.py) after the step fit: Fresnel diffraction at the shadow
+# edges, finite limb-darkened star, double star, camera band, exposure. Shows the differences to the
+# step fit in <movie>-diffraction (pdf/png) and writes event.json "diffraction_fit". Needs the
+# asteroid's distance and the shadow speed: from JPL Horizons for the recording's asteroid (network,
+# extra "catalog"; distance x topocentric motion) unless given here. docs/diffraction.md
+mode = "off"               # "off"; "auto": only when it matters (the step fit shows double-star steps,
+                           # or Fresnel scale + star diameter take >= 10 % of a frame); "on": always.
+                           # Viewer button "diffr: ..."
+distance_au = 0.0          # asteroid distance; 0: from Horizons
+shadow_speed_km_s = 0.0    # 0: from Horizons; the edges are taken perpendicular to the path
+star_diameter_mas = 0.0    # angular diameter of the occulted star; 0: a point
+limb_darkening = 0.6       # linear limb-darkening coefficient u
+fit_star_diameter = false  # fit the projected star diameter as well (needs a good SNR)
+double_star = "auto"       # "auto": when the step fit shows two D and two R steps; true; false
+wavelength_nm = 600.0      # effective wavelength when there is no QE table (unfiltered mono CMOS)
+qe_table = ""              # optional sensor QE curve: text rows "wavelength_nm QE" (digitised plot)
+star_teff = 0.0            # optional star temperature in K to weight the band; 0: flat spectrum
+mc_trials = 100            # Monte-Carlo error trials (refits of the model plus noise like the residuals,
+                           # incl. their frame-to-frame correlation); 0: covariance errors only
+
 [pymovie]
 # Used when analysis.mode = "pymovie"
 default_mask_radius = 3.2

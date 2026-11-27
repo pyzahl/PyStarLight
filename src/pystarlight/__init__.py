@@ -11,7 +11,7 @@ from .photometry import Measurement, PhotometryConfig, measure_aperture, robust_
 from .pipeline import LightCurves, analyze
 from .tracking import Aperture, Tracker, TrackPath
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
     "Aperture",

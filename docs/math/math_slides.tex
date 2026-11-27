@@ -1,7 +1,7 @@
 % PyStarLight: how it works (the method slides, single source). Built on their own by pystarlight_math.tex
 % (make), and \input by the author's private PySyzygos talk. Formulas follow the code (src/pystarlight):
 % globaltrack.py (alignment, optimal extraction), wcs/reduce.py (astrometry, G zero point),
-% normalize.py (ensemble magnitudes), steps.py (step fit).
+% normalize.py (ensemble magnitudes), steps.py (step fit), diffraction.py (diffraction fit).
 
 % compact lists for these slides
 \providecommand{\tightlist}{}\renewenvironment{tightlist}{\begin{itemize}\setlength{\itemsep}{0.1ex}\setlength{\topsep}{0.1ex}\setlength{\parsep}{0pt}}{\end{itemize}}
@@ -299,9 +299,90 @@
     \scriptsize
     \begin{tightlist}
       \item Fringilla 2025: 4 contacts, $\sigma$ 0.025--0.034\,s
-      \item not modelled: diffraction, star diameter, grazes
+      \item diffraction, star diameter, double stars: next slides
       \item for a report: compare with PyOTE
     \end{tightlist}
+  \end{column}
+  \end{columns}
+\end{frame}
+
+% ------------------------------------------------------------------------------------------------- diffraction 1
+\begin{frame}{Event timing, part 3: diffraction at the shadow edge}
+  \tightdisplays
+  \begin{columns}[T]
+  \begin{column}{0.58\textwidth}
+    \scriptsize
+    \textbf{Fresnel scale} $F = \sqrt{\lambda Z/2}$: 0.3\,km at 2.3\,au, 1.4\,km at 40\,au
+    \begin{tightenum}
+      \item \textbf{Bar model}: opaque strip $a < x' < b$ (D, R edges), observer at $x = v_\perp t$,
+        $v = (x' - x)\sqrt{2/\lambda Z}$, $\mathcal F = C + i S$ (Fresnel integrals)
+        \[ E_\mathrm{ap} = \tfrac{1-i}{2}\bigl[\mathcal F(v_b) - \mathcal F(v_a)\bigr],\quad
+           E = 1 - \textstyle\sum_k E_{\mathrm{ap},k} \]
+        \sub{Babinet: strips add in the field; knife edge $|E|^2 = \tfrac14$ at the edge, first fringe 1.37}
+      \item \textbf{Band}: intensities add (wavelengths do not interfere)
+        \[ I = \textstyle\sum_j w_j |E_{\lambda_j}|^2,\quad w_j \propto \mathrm{QE}(\lambda_j)\,\lambda_j B_{\lambda_j}(T_\mathrm{eff}) \]
+      \item \textbf{Star} $R = \theta_\star Z/2$, limb $1 - u(1-\mu)$, summed along the edge:
+        \[ P(s) \propto (1-u)\,2\sqrt{R^2-s^2} + u\,\tfrac{\pi}{2}(R^2-s^2)/R \]
+      \item \textbf{Exposure}: box $\Pi$ of $v_\perp \Delta t$; \quad transmission $T = I * P * \Pi$
+    \end{tightenum}
+  \end{column}
+  \begin{column}{0.40\textwidth}
+    \centering
+    \begin{tikzpicture}[font=\scriptsize, xscale=0.6, yscale=1.0]
+      % monochromatic knife edge: shadow for x > 0, fringes outside
+      \fill[black!8] (0,0) rectangle (4.6,1.55);
+      \draw[black!30] (-4.4,0) -- (4.6,0);
+      \draw[black!30, dashed] (-4.4,1) -- (4.6,1);
+      \draw[syzaccent, thick, domain=-4.4:-0.02, samples=220, smooth]
+        plot (\x, {1 + 0.37*cos(deg(1.6*(\x*\x) + 0.8))/(1 + 0.55*abs(\x))});
+      \draw[syzaccent, thick, domain=0:4.4, samples=60, smooth] plot (\x, {0.25*exp(-1.6*\x*\x)});
+      \draw[syzblue, very thick] (-4.4,1) -- (0,1) -- (0,0) -- (4.4,0);
+      \node[syzblue, anchor=south] at (2.5,0.1) {shadow};
+      \node[black!60, anchor=north] at (0,-0.05) {edge};
+      \node[syzaccent, anchor=south west] at (-4.3,1.36) {$|E|^2$, one $\lambda$};
+    \end{tikzpicture}\\[0.3ex]
+    \raggedright\scriptsize
+    \begin{tightlist}
+      \item band, star and exposure smooth the fringes: the transition is gradual and \emph{asymmetric}
+      \item a sharp step misplaces D and R by up to $\sim F/v_\perp$
+      \item QE curve optional (else one $\lambda$, 600\,nm)
+    \end{tightlist}
+  \end{column}
+  \end{columns}
+\end{frame}
+
+% ------------------------------------------------------------------------------------------------- diffraction 2
+\begin{frame}{Event timing, part 4: the diffraction fit, double stars}
+  \tightdisplays
+  \begin{columns}[T]
+  \begin{column}{0.53\textwidth}
+    \scriptsize
+    \begin{tightenum}
+      \item \textbf{Model}: levels $A$ (all light), $B$ (star hidden)
+        \[ \mu(t) = B + (A - B)\bigl[f\,T_1(t) + (1-f)\,T_2(t)\bigr] \]
+        \sub{double star: own D, R per component (the separation projects differently on the two edges)}
+      \item \textbf{Least squares} (SciPy): $A, B$, $\mathrm D_k, \mathrm R_k$, $f$; optionally star size, $v_\perp$
+        \sub{started from the step fit; steps paired into components by the light they change}
+      \item \textbf{$1\sigma$}: the larger of $\mathrm{diag}\,(J^\mathsf T J)^{-1}\max(1, \chi^2/\nu)$ and
+        Monte Carlo (model + AR(1) noise like the residuals, 100 refits, 16--84\,\% half width)
+        \sub{equal components ($f \approx \tfrac12$): which R goes with which D is not in the light curve (flagged, both chords given)}
+      \item \textbf{Geometry}: $Z$, shadow speed $= Z\cdot$topocentric motion (JPL Horizons), or config
+    \end{tightenum}
+  \end{column}
+  \begin{column}{0.45\textwidth}
+    \scriptsize
+    \textbf{2-D shapes: the sinc method} (Cubillos \& Jimenez 2022; B.~Anderson's code)
+    \[ E_\mathrm{obs} = W\,S\,W, \qquad W_{mn} = w_{|m-n|} \]
+    \begin{tightlist}
+      \item $S$: silhouette, $N\times N$ grid of free width and resolution (FFT: fixed by $\lambda Z$)
+      \item $W$: symmetric Toeplitz, Fresnel integrals; one row; an observation row costs $O(N^2)$
+      \item sharp edges: 3--5\,\% at $\Delta x = F/10$, 0.5\,\% at $F/30$ (vs the bar model)
+      \item fringes only within $\sim\lambda Z/(2\Delta x)$ of an edge (band limit)
+    \end{tightlist}
+    \vspace{0.5ex}
+    \textbf{Synthetic double} (70/30\,\%, 2.33\,au, 5\,km/s, 0.1\,s frames): diffraction fit within 2\,ms of the
+    truth, step fit off by up to 17\,ms; $f = 0.690 \pm 0.006$\\[0.4ex]
+    Viewer button \texttt{diffr: off/auto/on}: figure \texttt{-diffraction}, \texttt{event.json} \texttt{diffraction\_fit}
   \end{column}
   \end{columns}
 \end{frame}

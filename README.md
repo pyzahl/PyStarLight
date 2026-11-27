@@ -10,7 +10,7 @@ classic, more hands-on analysis.
 PyStarLight is a Python library with one command on top of it, `pystarlight`, and three
 programs behind it:
 
-- **`pystarlight analyze`, the analysis** (PyStarLight 1.0.0). It opens a recording in any
+- **`pystarlight analyze`, the analysis** (PyStarLight 1.1.0). It opens a recording in any
   common format and plate-solves the field (online or offline). It finds the target by name
   (Gaia DR3, UCAC4, TYC, SIMBAD) or as the star on an asteroid's path (JPL Horizons, e.g.
   `(476) Hedwig`), even when the star is too faint to see. **Auto ap** (or `--auto`, also
