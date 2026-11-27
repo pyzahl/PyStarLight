@@ -511,13 +511,28 @@ class Viewer:
 
     batch = False                     # --batch: no window, messages to the terminal
 
+    STATUS_CHARS = 400          # a status line in the window: one line (the full text to the console)
+
+    @classmethod
+    def one_line(cls, msg) -> str:
+        """The message as one line for the status rows (anchored at the bottom: more lines would
+        grow upwards over the sliders), shortened with '...' to STATUS_CHARS."""
+        text = ' '.join(line.strip() for line in str(msg or '').splitlines() if line.strip())
+        return text if len(text) <= cls.STATUS_CHARS else text[:cls.STATUS_CHARS - 3].rstrip() + '...'
+
     def say(self, msg):
-        self.status.set_text(msg)
+        self.status.set_text(self.one_line(msg))
         self.fig.canvas.draw_idle()
         self._print(msg)
 
     def _print(self, msg):
-        """--batch: each new message once; running counters (elapsed time, frame) left out."""
+        """--batch: each new message once; running counters (elapsed time, frame) left out. A
+        message the status row had to shorten: always (console; on Windows the launcher's log)."""
+        shortened = msg and self.one_line(msg) != str(msg).strip()
+        if not self.batch and shortened and msg != getattr(self, '_printed', None):
+            self._printed = msg
+            print(msg, flush=True)
+            return
         if self.batch and msg and msg != getattr(self, '_printed', None) and not msg.startswith(
                 ('analysing ...', 'plate solving (', 'naming stars (', 'identifying:', 'starting ...')):
             self._printed = msg
@@ -525,7 +540,7 @@ class Viewer:
 
     def say_job(self, msg):
         """Background jobs (plate solve, identification, stacking): line below the status line."""
-        self.job_status.set_text(msg)
+        self.job_status.set_text(self.one_line(msg))
         self.fig.canvas.draw_idle()
         self._print(msg)
 
@@ -1595,7 +1610,8 @@ class Viewer:
     def marker_label(self) -> str:
         m = self.marker or {}
         mag = (f"  G {m['gmag']:.1f}" if m.get('gmag') is not None
-               else f"  V {m['vmag']:.1f}" if m.get('vmag') is not None else '')
+               else f"  V {m['vmag']:.1f}" if m.get('vmag') is not None
+               else f"  {m.get('band') or 'mag'} {m['mag']:.1f}" if m.get('mag') is not None else '')
         return f"{m.get('name', '')}{mag}"
 
     def _inside(self, x, y) -> bool:

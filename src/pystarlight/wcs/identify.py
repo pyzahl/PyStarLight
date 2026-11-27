@@ -30,13 +30,41 @@ _simbad_down_until = 0.0
 
 
 SIMBAD_URL = 'https://simbad.cds.unistra.fr/simbad/'
+# SIMBAD at CDS and its mirror at CfA (Harvard): when one fails (CDS answered every request with
+# 404 for a while in Nov 2026) the other is asked; the one that answered is asked first from then on
+SIMBAD_SERVERS = ['simbad.cds.unistra.fr', 'simbad.harvard.edu']
 
 
 def _require_simbad():
-    """ConnectionError at once when SIMBAD's host cannot be reached (no waiting per star)."""
+    """ConnectionError at once when no SIMBAD host can be reached (no waiting per star)."""
     from .catnames import online
-    if not online(SIMBAD_URL):
+    if not any(online(f'https://{h}/simbad/') for h in SIMBAD_SERVERS):
         raise ConnectionError('no network: SIMBAD not reachable')
+
+
+def _simbad_ask(query):
+    """query(client) with an astroquery Simbad client per SIMBAD server in turn, until one answers
+    (a None result is an answer); the error of each server otherwise."""
+    from astroquery.simbad import Simbad
+
+    from .catnames import online
+    errors = []
+    for host in list(SIMBAD_SERVERS):
+        if not online(f'https://{host}/simbad/'):
+            errors.append(f'{host}: not reachable')
+            continue
+        q = Simbad()
+        q.server = host
+        try:
+            result = query(q)
+        except Exception as e:
+            errors.append(f'{host}: {str(e).splitlines()[0] if str(e) else type(e).__name__}')
+            continue
+        if host != SIMBAD_SERVERS[0]:               # ask the one that answered first next time
+            SIMBAD_SERVERS.remove(host)
+            SIMBAD_SERVERS.insert(0, host)
+        return result
+    raise ConnectionError('SIMBAD unavailable (' + '; '.join(errors) + ')')
 
 
 def radec_text(ra: float, dec: float) -> str:
@@ -150,11 +178,12 @@ def simbad_lookup(ra: float, dec: float, radius_arcsec: float = 10.0,
 def _simbad_query(ra: float, dec: float, radius_arcsec: float) -> Optional[dict]:
     import astropy.units as u
     from astropy.coordinates import SkyCoord
-    from astroquery.simbad import Simbad
-    s = Simbad()
-    s.add_votable_fields('V', 'ids')
     c = SkyCoord(ra, dec, unit='deg')
-    r = s.query_region(c, radius=radius_arcsec * u.arcsec)
+
+    def query(s):
+        s.add_votable_fields('V', 'ids')
+        return s.query_region(c, radius=radius_arcsec * u.arcsec)
+    r = _simbad_ask(query)
     if r is None or len(r) == 0:
         return None
     sep = c.separation(SkyCoord(r['ra'], r['dec'], unit='deg')).arcsec
@@ -242,10 +271,10 @@ def simbad_object(name: str, timeout: float = SIMBAD_TIMEOUT_S) -> Optional[dict
 
     def work():
         try:
-            from astroquery.simbad import Simbad
-            q = Simbad()
-            q.add_votable_fields('V', 'ids')
-            r = q.query_object(name)
+            def query(q):
+                q.add_votable_fields('V', 'ids')
+                return q.query_object(name)
+            r = _simbad_ask(query)
             if r is not None and len(r):
                 ids = {}
                 for ident in str(r['ids'][0]).split('|'):
@@ -295,7 +324,8 @@ def find_star(text: str, wcs, shape: tuple, catalog=None, epoch: Optional[float]
     """A star given by name or position for marking it on the image: {'name', 'ids', 'gmag',
     'vmag', 'ra', 'dec', 'source'} or None.
     Gaia DR3 / UCAC4 / TYC / HIP names are looked for in the local catalogue in the solved field
-    (offline, also stars too faint to show); RA/Dec text is named after the catalogue star within
+    (offline, also stars too faint to show), without one at the VO services (GAVO / ESA, as the
+    camera's target; simbad=True allows the network); RA/Dec text is named after the catalogue star within
     5"; an asteroid ('(476) Hedwig', '2003 SB60') gives the star on its path during the recording
     (times: first and last JD; site: {'lat', 'lon', 'alt_m'}; wcs.asteroid, JPL Horizons) with
     'asteroid' set; anything else (HD 197161, ...) is asked from SIMBAD (simbad=True), and a name
@@ -312,6 +342,10 @@ def find_star(text: str, wcs, shape: tuple, catalog=None, epoch: Optional[float]
         if out is None:                     # the catalogue has the field: SIMBAD would not help
             log(f'not in the local catalogue within {radius / 60:.0f}\' of the field centre')
             return None
+    elif simbad and parse_star_id(text) is not None:
+        hit = _vo_star(text, epoch, log)    # no local catalogue: GAVO / ESA (SIMBAD lacks most UCAC4)
+        if hit is not None:
+            return hit
     pos = parse_radec(text) if out is None else None
     if pos is not None:
         hit = catalog.cone(*pos, 5.0, epoch) if catalog is not None else []
@@ -336,6 +370,23 @@ def find_star(text: str, wcs, shape: tuple, catalog=None, epoch: Optional[float]
         if times is not None and parse_star_id(text) is None and re.search(r'[A-Za-z]{3}', text):
             return asteroid.target(asteroid.body_by_name(text), catalog, epoch, times, site, log)
     return None
+
+
+def _vo_star(text: str, epoch: Optional[float], log) -> Optional[dict]:
+    """A catalogue name (UCAC4 / TYC / Gaia DR3) from the VO services (catnames.resolve_target,
+    as the camera does) in find_star's layout; None when not found there (SIMBAD is asked next)."""
+    from . import catnames
+    try:
+        st = catnames.resolve_target(text, epoch, catalog=None, log=lambda m: None)
+    except Exception as e:                      # not a name it knows (HIP), not found, no network
+        log(f'{text}: {e}')
+        return None
+    mag, band = st.get('mag'), st.get('band', '')
+    known = mag is not None and math.isfinite(mag)
+    return {'name': st['name'], 'ids': st.get('ids', {}), 'ra': st['ra'], 'dec': st['dec'],
+            'gmag': mag if known and band == 'G' else None,
+            'vmag': mag if known and band in ('V', 'VT') else None,
+            'mag': mag if known else None, 'band': band, 'source': st.get('source', 'VO')}
 
 
 def simbad_radius(wcs) -> float:

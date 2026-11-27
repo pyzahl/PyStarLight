@@ -53,6 +53,13 @@ uses [Semantic Versioning](https://semver.org/).
     (15 s) to under 0.5".
 
 ### Fixed
+- **SIMBAD at CDS down (every request 404, Nov 2026):** look-ups now fall back to SIMBAD's CfA mirror
+  (`simbad.harvard.edu`); the server that answered is asked first from then on (`identify._simbad_ask`).
+- **Star box without a local catalogue** (Windows): UCAC4 / TYC / Gaia DR3 names are resolved at the
+  VO services (GAVO / ESA, as the camera's target) before SIMBAD, which lists few UCAC4 stars.
+- **Analyzer status lines stay one line:** a multi-line message (astroquery's SIMBAD error) grew upwards
+  over the sliders; lines are joined, very long text is shortened, and the full text goes to the
+  console (on Windows the launcher's log).
 - The player and the camera now start on Windows (tested on Windows Server 2025):
   - the ZWO module called `os.uname()` at import; it looks for `ASICamera2.dll` there now, and its
     messages name the Windows DLL;

@@ -189,3 +189,53 @@ def test_simbad_lookup_gives_up(monkeypatch):
     with pytest.raises(ConnectionError):
         ident.simbad_lookup(310.0, 45.0)
     assert time.monotonic() - t0 < 0.1
+
+
+def test_simbad_falls_back_to_the_mirror(monkeypatch):
+    """CDS answering 404 (Nov 2026): the CfA mirror is asked, then first from then on."""
+    import astroquery.simbad
+
+    from pystarlight.wcs import catnames, identify
+    asked = []
+
+    class FakeSimbad:
+        server = 'simbad.cds.unistra.fr'
+
+        def query_object(self, name):
+            asked.append(self.server)
+            if self.server == 'simbad.cds.unistra.fr':
+                raise ValueError('Unable to access the capabilities endpoint at:\n- ...: 404 Not Found')
+            return 'answer'
+
+    monkeypatch.setattr(astroquery.simbad, 'Simbad', FakeSimbad)
+    monkeypatch.setattr(catnames, 'online', lambda url: True)
+    monkeypatch.setattr(identify, 'SIMBAD_SERVERS', ['simbad.cds.unistra.fr', 'simbad.harvard.edu'])
+    assert identify._simbad_ask(lambda q: q.query_object('Vega')) == 'answer'
+    assert asked == ['simbad.cds.unistra.fr', 'simbad.harvard.edu']
+    assert identify._simbad_ask(lambda q: q.query_object('Vega')) == 'answer'
+    assert asked[2:] == ['simbad.harvard.edu']                     # the mirror first now
+    monkeypatch.setattr(FakeSimbad, 'query_object', lambda self, n: (_ for _ in ()).throw(OSError('down')))
+    import pytest
+    with pytest.raises(ConnectionError, match='simbad.harvard.edu: down; simbad.cds.unistra.fr: down'):
+        identify._simbad_ask(lambda q: q.query_object('Vega'))
+
+
+def test_find_star_asks_the_vo_without_a_local_catalogue(monkeypatch):
+    """No local catalogue (Windows): a UCAC4 name goes to catnames.resolve_target (GAVO / ESA) first;
+    SIMBAD does not list most UCAC4 stars."""
+    from pystarlight.wcs import catnames, identify
+    from test_wcs import make_wcs
+    seen = []
+
+    def resolve(text, epoch=None, catalog='auto', log=print):
+        seen.append((text, catalog))
+        return {'name': 'UCAC4 644-038283', 'ids': {'UCAC4': 'UCAC4 644-038283'}, 'ra': 273.0, 'dec': 22.0,
+                'mag': 12.7, 'band': 'UCAC', 'source': 'UCAC4 (GAVO)'}
+    monkeypatch.setattr(catnames, 'resolve_target', resolve)
+    monkeypatch.setattr(identify, 'simbad_object', lambda *a, **k: pytest.fail('SIMBAD asked'))
+    st = identify.find_star('UCAC4 644-038283', make_wcs(), (480, 720), None, 2025.0, log=lambda m: None)
+    assert seen == [('UCAC4 644-038283', None)]
+    assert st['source'] == 'UCAC4 (GAVO)' and st['mag'] == 12.7 and st['gmag'] is None
+    assert identify.find_star('UCAC4 644-038283', make_wcs(), (480, 720), None, 2025.0, simbad=False,
+                              log=lambda m: None) is None                       # offline: never asked
+    assert len(seen) == 1

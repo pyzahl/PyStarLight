@@ -1027,3 +1027,13 @@ def test_diffraction_auto_skips_fast_events_but_not_doubles(movie):
     v.start_diffraction()
     v.finish_jobs()
     assert v._diffraction is not None and v._diffraction[1].flux_ratio is not None    # double: fitted
+
+
+def test_status_line_stays_one_line():
+    """A long multi-line message (astroquery's SIMBAD error) must not grow over the sliders."""
+    from pystarlight.viewer import Viewer
+    msg = 'SIMBAD: Unable to access the endpoint at:\n- https://x/capabilities: 404\n' + 'y' * 400
+    line = Viewer.one_line(msg)
+    assert '\n' not in line and len(line) <= Viewer.STATUS_CHARS and line.endswith('...')
+    assert Viewer.one_line('short\n  message') == 'short message'
+    assert Viewer.one_line('TYC 3574-1718-1  G 9.9') == 'TYC 3574-1718-1  G 9.9'      # spaces kept
