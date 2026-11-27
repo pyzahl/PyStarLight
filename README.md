@@ -392,8 +392,10 @@ solvers are supported; either one is enough:
   - ASTAP needs the approximate field size. It comes from the plate scale (the recording's optics,
     or `[fallback_equipment]`). Without it, PyStarLight tries field heights from 0.1° to 5° in
     turn, which takes seconds with a position hint.
-  - It is fast with a position hint, which PyStarLight nearly always has (the recording's target,
-    the asteroid).
+  - ASTAP needs a **position hint** (the recording's target, the asteroid), which PyStarLight
+    nearly always has; with it, a solve takes seconds. A blind solve (no position) is
+    astrometry.net's job. Without a position and without a scale PyStarLight never runs ASTAP:
+    on test recordings its search then found false solutions.
   - PyStarLight finds `astap_cli` / `astap` on PATH or in ASTAP's folders (`C:\Program Files\astap`,
     `/opt/astap`, `/usr/share/astap/data`, macOS `/usr/local/opt/astap`). `[astrometry] astap`,
     `astap_db` and `astap_database` override that.
@@ -403,7 +405,8 @@ solvers are supported; either one is enough:
 
 `[astrometry] solver = "auto"` (default) uses the offline solvers that are installed. ASTAP goes
 first when the position is roughly known, astrometry.net first for a blind solve, and the other one
-takes over if the first fails. nova is used only when neither is installed. `"astap"`, `"local"`
+takes over if the first fails (ASTAP only with the plate scale then). nova is used only when no
+offline solver can solve it. `"astap"`, `"local"`
 (astrometry.net) or `"nova"` use only that one. `pystarlight doctor` shows what it found.
 
 The steps for astrometry.net:

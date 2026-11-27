@@ -397,7 +397,7 @@ FITS and plate-solves it on nova.astrometry.net with PyStarLight's solver
   nova.astrometry.net with `[astrometry] api_key` from `pystarlight.toml`
   (`[astrometry] solver = "auto" | "local" | "astap" | "nova"`). ASTAP (README: "Optional: offline
   plate solving") also runs on the Pi; with it installed, `auto` takes ASTAP first whenever the
-  position and the scale are known (the mount's position) and astrometry.net for blind solves.
+  position is known (the mount's position) and astrometry.net for blind solves.
   The capture setup is tested with astrometry.net: to keep it for the camera with ASTAP installed,
   set `solver = "local"` in the Pi's config.
 - **Alignment** (`capture/stacker.py`): without tracking the sky drifts ~15"/s x cos(dec), i.e.

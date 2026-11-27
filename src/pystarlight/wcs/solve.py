@@ -271,19 +271,20 @@ def solver_order(acfg: dict, center=None, scale=None) -> list[str]:
     """The solvers to try, in order: 'astap', 'local' (astrometry.net), 'nova'.
 
     An explicit [astrometry] solver is used alone ('astrometry' = 'local'). 'auto': the offline
-    solvers that are installed, ASTAP first when the position and the plate scale are roughly known
-    (it searches around them, in seconds), else astrometry.net first (blind solving is its
-    strength; ASTAP then tries a series of field sizes); the second one when the first fails. nova
-    only when neither is installed (it uploads the frame)."""
+    solvers that are installed. With the position known: ASTAP first (seconds; without a scale it
+    tries a series of field heights), astrometry.net when it fails. Without the position:
+    astrometry.net first (blind solving is its strength; ASTAP's whole-sky search took over 90 s
+    on 0.2 deg fields), ASTAP after it only with a plate scale (its blind scan over field heights
+    found false solutions on the owner's recordings). nova when no offline solver can (it uploads
+    the frame)."""
     solver = acfg.get('solver', 'auto')
     if solver == 'astrometry':
         solver = 'local'
     if solver in ('local', 'astap', 'nova'):
         return [solver]
     local = ['local'] if local_solver_available() else []
-    astap = ['astap'] if astap_available(acfg) else []
-    order = astap + local if (center is not None and scale) else local + astap
-    return order or ['nova']
+    astap = ['astap'] if astap_available(acfg) and (center is not None or scale) else []
+    return (astap + local if center is not None else local + astap) or ['nova']
 
 
 def solve_local(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0,
@@ -478,6 +479,11 @@ def solve_astap(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0, tim
     dbs = astap_databases(acfg)
     if not dbs:
         raise RuntimeError('no ASTAP star database found (www.hnsky.org; or set [astrometry] astap_db)')
+    if center is None and not scale_arcsec:
+        # whole sky and every field height: on the owner's recordings this either timed out or gave
+        # a false solution (both times it "solved"); astrometry.net handles the blind case
+        raise RuntimeError('ASTAP needs the position or the plate scale (a blind search over field '
+                           'heights finds false solutions)')
     os.makedirs(workdir, exist_ok=True)
     img = np.asarray(image, dtype=np.float64)
     lo, hi = np.nanpercentile(img, [0.5, 99.95])
@@ -510,6 +516,7 @@ def solve_astap(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0, tim
         + (f'{fovs[0]:.2f} deg)' if scale_arcsec else f'height unknown: trying {tried} deg)'))
     t0 = time.monotonic()
     why = ''
+    rejected: list[str] = []
     for fov in fovs:
         left = timeout - (time.monotonic() - t0)
         if left <= 0:
@@ -521,14 +528,22 @@ def solve_astap(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0, tim
                         cancel)
         ini = _read_astap_ini(base + '.ini')
         if rc == 0 and ini.get('PLTSOLVD', 'F').upper() == 'T' and os.path.exists(base + '.wcs'):
-            if not scale_arcsec:
+            if scale_arcsec:
+                break
+            height = _astap_height(base + '.wcs', h)
+            if height is not None and abs(height / fov - 1) <= ASTAP_HEIGHT_TOL:
                 log(f'ASTAP solved with a field height of {fov:g} deg')
-            break
+                break
+            # a match at a scale other than the one tried: a false solution
+            rejected.append(f'{height:.3f} deg at {fov:g}' if height else f'no scale at {fov:g}')
+            continue
         why = ini.get('ERROR') or ASTAP_EXIT.get(rc, f'exit code {rc}')
         if rc in (16, 32, 33):                  # image / database errors: other fields will not help
             break
     else:
         scan = '' if scale_arcsec else f'; field heights {fovs[0]:g}-{fovs[-1]:g} deg tried'
+        if rejected:
+            scan += f'; solutions at another field height rejected: {", ".join(rejected)}'
         raise RuntimeError(f'ASTAP could not solve the image ({why}{scan})')
     if not os.path.exists(base + '.wcs'):
         raise RuntimeError(f'ASTAP could not solve the image ({why})')
@@ -551,6 +566,24 @@ def solve_astap(image: np.ndarray, workdir: str = 'wcs', frame_num: int = 0, tim
 ASTAP_EXIT = {1: 'no solution', 2: 'not enough stars', 16: 'error reading the image',
               32: 'no star database found', 33: 'error reading the star database'}
 ASTAP_FOV_SCAN = (0.1, 0.15, 0.2, 0.3, 0.45, 0.65, 0.9, 1.3, 2.0, 3.0, 5.0)  # deg, tried without a scale
+ASTAP_HEIGHT_TOL = 0.25     # a scan solution's own field height within 25 % of the height tried
+
+
+def _astap_height(wcs_path: str, height_px: int) -> Optional[float]:
+    """Field height (deg) of ASTAP's .wcs solution: pixel scale times the image height."""
+    from astropy.io import fits
+    from astropy.wcs import WCS
+    from astropy.wcs.utils import proj_plane_pixel_scales
+    try:
+        with open(wcs_path, 'rb') as f:
+            hdr = fits.Header.fromstring(f.read().decode('ascii', errors='replace')
+                                         .replace('\r', '').replace('\n', ''))
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            scale = float(np.sqrt(np.prod(proj_plane_pixel_scales(WCS(hdr, relax=True).celestial))))
+        return scale * height_px if scale > 0 else None
+    except Exception:                           # unreadable header: no height
+        return None
 
 
 def _run_astap(cmd: list[str], workdir: str, timeout: float, cancel: Optional[threading.Event]) -> int:

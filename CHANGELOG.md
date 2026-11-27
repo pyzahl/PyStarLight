@@ -39,7 +39,15 @@ uses [Semantic Versioning](https://semver.org/).
   fails; nova only when neither is installed. New settings `astap`, `astap_db`, `astap_database`.
   `pystarlight doctor` reports both solvers.
   - ASTAP needs the field size: from the plate scale, else field heights 0.1 to 5 deg are tried in
-    turn. So `auto` puts ASTAP first only when both the position and the scale are known.
+    turn (a scan solution whose own field height is more than 25 % off the one tried is rejected).
+    `auto` puts ASTAP first when the position is known; without it astrometry.net goes first, and
+    ASTAP follows only with a plate scale. With neither, ASTAP is never run (`solve_astap` refuses):
+    its blind scan gave false solutions on two of the owner's recordings.
+  - Benchmark on 11 of the owner's recordings (ASTRID RAVF, ADV 816x620 / 408x310, offline, D80
+    vs 2MASS 4202-4219), with a position hint: ASTAP solved 7/8 (median 2.2 s), astrometry.net 5/8
+    (3.8 s); ASTAP solved two that astrometry.net could not. Where both solved they agree to a
+    median of 1.6" (max 7.8"). Blind: astrometry.net 9/11 (median 8 s); ASTAP 4/11, two of them
+    false.
   - Tested on Windows Server 2025 (ASTAP + D20 / D80): the Fringilla ADV (16' x 12' field, no
     scale in the file) solved offline in 0.9 s; the same solution as astrometry.net's blind solve
     (15 s) to under 0.5".

@@ -293,11 +293,13 @@ def test_solver_order_auto_and_explicit(tmp_path, monkeypatch):
     monkeypatch.setattr(solve, 'local_solver_available', lambda: False)   # (this computer may have one)
     assert solve.solver_order({'solver': 'auto'}) == ['nova']                   # nothing installed
     fake_astap(tmp_path, monkeypatch, make_wcs())
-    assert solve.solver_order({'solver': 'auto'}) == ['astap']
+    assert solve.solver_order({'solver': 'auto'}, scale=2.0) == ['astap']
+    assert solve.solver_order({'solver': 'auto'}) == ['nova']                   # blind: never ASTAP
     monkeypatch.setattr(solve, 'local_solver_available', lambda: True)
     assert solve.solver_order({'solver': 'auto'}, center=(1.0, 2.0), scale=2.0) == ['astap', 'local']
-    assert solve.solver_order({'solver': 'auto'}, center=(1.0, 2.0)) == ['local', 'astap']   # no scale
-    assert solve.solver_order({'solver': 'auto'}) == ['local', 'astap']         # blind: astrometry.net
+    assert solve.solver_order({'solver': 'auto'}, center=(1.0, 2.0)) == ['astap', 'local']   # no scale
+    assert solve.solver_order({'solver': 'auto'}, scale=2.0) == ['local', 'astap']           # no position
+    assert solve.solver_order({'solver': 'auto'}) == ['local']                  # blind: astrometry.net
     assert solve.solver_order({'solver': 'astap'}) == ['astap']
     assert solve.solver_order({'solver': 'astrometry'}) == ['local']
     assert solve.solver_order({'solver': 'nova'}) == ['nova']
@@ -340,12 +342,21 @@ def test_astap_failure_falls_back_to_astrometry_net(tmp_path, monkeypatch):
     assert Path(path).exists()
     assert any('ASTAP did not solve it' in m and 'No solution' in m for m in logs)
     with pytest.raises(RuntimeError, match='ASTAP could not solve.*field heights'):
-        solve.solve_astap(np.ones((48, 64), np.float32), workdir=str(tmp_path / 'w2'))
+        solve.solve_astap(np.ones((48, 64), np.float32), workdir=str(tmp_path / 'w2'), center=(273.0, 22.0))
+
+
+def test_astap_refuses_a_blind_search_without_a_scale(tmp_path, monkeypatch):
+    """No position and no scale: ASTAP's scan found false solutions on real recordings."""
+    from pystarlight.wcs import solve
+    args_file = fake_astap(tmp_path, monkeypatch, make_wcs())
+    with pytest.raises(RuntimeError, match='needs the position or the plate scale'):
+        solve.solve_astap(np.ones((48, 64), np.float32), workdir=str(tmp_path / 'w'))
+    assert not args_file.exists()                                           # not even started
 
 
 def test_astap_scans_field_heights_without_a_scale(tmp_path, monkeypatch):
     from pystarlight.wcs import solve
-    fake_astap(tmp_path, monkeypatch, make_wcs())
+    fake_astap(tmp_path, monkeypatch, make_wcs(scale_arcsec=0.9 * 3600 / 48 * 1.1))   # 0.99 deg high
     script = tmp_path / 'astap' / 'astap_cli'          # solves only at a field height of 0.9 deg
     text = script.read_text().replace("ok = True", "ok = a[a.index('-fov') + 1] == '0.9000'")
     script.write_text(text)
@@ -354,3 +365,14 @@ def test_astap_scans_field_heights_without_a_scale(tmp_path, monkeypatch):
                              log=logs.append)
     assert Path(path).exists()
     assert any('field height of 0.9 deg' in m for m in logs)
+
+
+def test_astap_scan_rejects_a_solution_at_another_scale(tmp_path, monkeypatch):
+    """A scan 'solution' whose own field height is far from the height tried is a false match."""
+    from pystarlight.wcs import solve
+    fake_astap(tmp_path, monkeypatch, make_wcs(scale_arcsec=0.1 * 3600 / 48 * 1.29))   # as seen on Fringilla
+    script = tmp_path / 'astap' / 'astap_cli'          # 'solves' only when 0.1 deg is tried
+    script.write_text(script.read_text().replace("ok = True", "ok = a[a.index('-fov') + 1] == '0.1000'"))
+    with pytest.raises(RuntimeError, match='rejected'):
+        solve.solve_astap(np.ones((48, 64), np.float32), workdir=str(tmp_path / 'w'), center=(273.0, 22.0),
+                          log=lambda m: None)
