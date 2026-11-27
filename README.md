@@ -125,7 +125,7 @@ click **Run**.
   versions it was tested with (extra `desktop`). It goes into `%LOCALAPPDATA%\PyStarLight` and
   changes neither PATH nor other Python installations.
 - **Start menu folder PyStarLight:** Analyze, Player, Camera, Settings, Check installation, Logs,
-  Update PyStarLight, Uninstall PyStarLight.
+  Update PyStarLight, Install ASTAP (plate solver), Uninstall PyStarLight.
 - **Desktop icons:** Analyze, Player, Camera.
 - **Open with:** `.ravf` `.ser` `.adv` `.aav` open in the player when double-clicked, if no other
   program owns them. The player and the analyzer are also offered under *Open with* (`.avi` too).
@@ -136,7 +136,10 @@ click **Run**.
 - **Update:** run the file again, or *Update PyStarLight*. **Uninstall:** *Uninstall PyStarLight*.
   It keeps your settings (`-Purge` removes them too). Close the PyStarLight programs first: Windows
   does not let a running program's files be replaced; the setup says so and offers to end them.
-- **Plate solving** offline: install **ASTAP** and its **D80** star database from www.hnsky.org
+- **Plate solving** offline: **ASTAP** and its **D80** star database (www.hnsky.org, free, not part of
+  PyStarLight). The setup checks for them and, if missing, offers to download and install both
+  (1.2 GB; their installers ask for administrator permission). Later: Start menu → PyStarLight →
+  *Install ASTAP (plate solver)*
   ([details](#optional-offline-plate-solving-astap-or-a-local-astrometrynet)); PyStarLight finds
   them. Otherwise solving goes online, to nova.astrometry.net: put your free API key into
   *Settings* (`[astrometry] api_key`).

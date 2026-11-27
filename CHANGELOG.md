@@ -6,6 +6,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Windows setup offers ASTAP:** when no ASTAP with a star database is found, it asks to download
+  and install ASTAP + D80 (official downloads linked from hnsky.org; their installers ask for
+  administrator rights); Start menu item *Install ASTAP (plate solver)* (`setup.ps1 -Astap`); the
+  closing message says whether offline solving is ready (`-NoAstap` for tests, used by the release
+  workflow).
+
 ## [1.1.0] - 2026-11-27
 
 ### Added

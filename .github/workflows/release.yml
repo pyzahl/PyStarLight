@@ -47,7 +47,7 @@ jobs:
         shell: powershell
         run: |
           $whl = (Get-ChildItem dist\*.whl | Select-Object -First 1).FullName
-          powershell -NoProfile -ExecutionPolicy Bypass -File windows\setup.ps1 -Wheel $whl -Constraints dist\constraints.txt -NoDesktop
+          powershell -NoProfile -ExecutionPolicy Bypass -File windows\setup.ps1 -Wheel $whl -Constraints dist\constraints.txt -NoDesktop -NoAstap
           if ($LASTEXITCODE -ne 0) { exit 1 }
           $bin = Join-Path $env:LOCALAPPDATA 'PyStarLight\bin'
           & (Join-Path $bin 'pystarlight.exe') --version

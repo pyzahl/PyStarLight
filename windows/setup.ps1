@@ -13,7 +13,10 @@ What it does:
      Update, Uninstall; desktop icons Analyze, Player, Camera.
   4. "Open with": the player and the analyzer for .ravf .ser .adv .aav (double-click opens the player
      unless another program owns the type) and .avi (Open with only).
-  5. `pystarlight doctor`: one line per part.
+  5. ASTAP (offline plate solver, www.hnsky.org) with its D80 star database: when missing, offered
+     (official downloads from hnsky.org's SourceForge page; their installers ask for administrator
+     rights). Not part of PyStarLight; the Start menu's "Install ASTAP" offers it again.
+  6. `pystarlight doctor`: one line per part.
 
   PyStarLight-Setup.cmd                    install or update to the latest release
   PyStarLight-Setup.cmd -Version v1.1.0    a given release
@@ -21,6 +24,8 @@ What it does:
   PyStarLight-Setup.cmd -Uninstall -Purge  remove the settings and logs as well
   -Wheel X.whl -Constraints c.txt          install a local build (tests); -NoDesktop no desktop icons
   -Force                                   end running PyStarLight programs without asking
+  -Astap                                   only install ASTAP + D80 (Start menu "Install ASTAP")
+  -NoAstap                                 do not offer ASTAP (tests)
 #>
 param(
     [switch]$Uninstall,
@@ -30,6 +35,8 @@ param(
     [string]$Constraints = '',
     [switch]$NoDesktop,
     [switch]$Force,
+    [switch]$Astap,
+    [switch]$NoAstap,
     [switch]$Pause
 )
 
@@ -51,6 +58,10 @@ $Recordings = @('.ravf', '.ser', '.adv', '.aav')
 $OpenWithOnly = @('.avi')
 $ProgIds = @{ 'PyStarLight.Player' = @('pystarlight-player-gui.exe', 'PyStarLight Player');
               'PyStarLight.Analyze' = @('pystarlight-analyze-gui.exe', 'PyStarLight Analyze') }
+
+$AstapSetup = 'https://sourceforge.net/projects/astap-program/files/windows_installer/astap_setup.exe/download'
+$AstapD80 = 'https://sourceforge.net/projects/astap-program/files/star_databases/d80_star_database.exe/download'
+$AstapPage = 'https://www.hnsky.org/astap.htm'
 
 $env:UV_TOOL_DIR = $Tools
 $env:UV_TOOL_BIN_DIR = $Bin
@@ -199,6 +210,63 @@ function New-Shortcut([string]$path, [string]$target, [string]$arguments, [strin
     $lnk.Save()
 }
 
+function Find-Astap {
+    # ASTAP's program folder and whether a star database (d80_0101.1476, ...) is in it
+    $dirs = @((Join-Path $env:ProgramFiles 'astap'), (Join-Path ${env:ProgramFiles(x86)} 'astap'),
+              (Join-Path $env:LOCALAPPDATA 'astap'))
+    $cmd = Get-Command astap_cli.exe, astap.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) { $dirs = @((Split-Path $cmd.Source)) + $dirs }
+    foreach ($d in $dirs) {
+        if ($d -and ((Test-Path (Join-Path $d 'astap_cli.exe')) -or (Test-Path (Join-Path $d 'astap.exe')))) {
+            $db = @(Get-ChildItem $d -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -match '^[a-z]\d\d_\d{4}\.\d+$' }).Count -gt 0
+            return @{ dir = $d; db = $db }
+        }
+    }
+    return $null
+}
+
+function Run-Installer([string]$url, [string]$file, [string]$what) {
+    $dl = Join-Path $App 'downloads'
+    New-Item -ItemType Directory -Force -Path $dl | Out-Null
+    $exe = Join-Path $dl $file
+    Download $url $exe
+    Say "   installing $what (Windows asks for administrator permission) ..."
+    $p = Start-Process $exe -ArgumentList '/SILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Verb RunAs -Wait -PassThru
+    Remove-Item $exe -Force -ErrorAction SilentlyContinue
+    if ($p.ExitCode -ne 0) { throw "$what installer ended with code $($p.ExitCode)" }
+}
+
+function Offer-Astap([bool]$ask) {
+    Step 'Plate solver ASTAP (offline)'
+    $a = Find-Astap
+    if ($a -and $a.db) { Say "   found: $($a.dir)"; return $true }
+    $need = if ($a) { 'its D80 star database (1.2 GB download)' }
+            else { 'ASTAP (6 MB) and its D80 star database (1.2 GB download)' }
+    Say '   PyStarLight solves the star field offline with ASTAP (www.hnsky.org, free; not part of'
+    Say '   PyStarLight). Without it, plate solving needs the internet and an astrometry.net key.'
+    if ($NoAstap -or $env:CI) { Say "   not installed: $AstapPage"; return $false }
+    if ($ask) {
+        $r = Read-Host "   Download and install $need now? [Y/n]"
+        if ($r -match '^\s*n') {
+            Say '   skipped. Later: Start menu -> PyStarLight -> Install ASTAP (plate solver)'
+            return $false
+        }
+    }
+    try {
+        if (-not $a) { Run-Installer $AstapSetup 'astap_setup.exe' 'ASTAP' }
+        Run-Installer $AstapD80 'd80_star_database.exe' 'the D80 star database (a few minutes)'
+    } catch {
+        Say "   ASTAP was not installed: $($_.Exception.Message)"
+        Say "   Install it by hand from $AstapPage (the program and the D80 database)."
+        return $false
+    }
+    $a = Find-Astap
+    if ($a -and $a.db) { Say "   ASTAP installed: $($a.dir)"; return $true }
+    Say "   ASTAP not found after its installer; see $AstapPage"
+    return $false
+}
+
 function Install-Shortcuts {
     Step 'Start menu and desktop'
     $py = Join-Path $Tools "$Pkg\Scripts\python.exe"
@@ -216,6 +284,7 @@ function Install-Shortcuts {
         @('Check installation', (Join-Path $env:SystemRoot 'System32\cmd.exe'), "/k `"`"$(Join-Path $Bin 'pystarlight.exe')`" doctor --extras desktop`"", 'pystarlight doctor'),
         @('Logs', (Join-Path $env:SystemRoot 'explorer.exe'), "`"$(Join-Path $App 'logs')`"", 'The programs'' log files'),
         @('Update PyStarLight', $ps, "$setup -Pause", 'Install the latest release'),
+        @('Install ASTAP (plate solver)', $ps, "$setup -Astap -Pause", 'Offline plate solving: ASTAP + D80 from hnsky.org'),
         @('Uninstall PyStarLight', $ps, "$setup -Uninstall -Pause", 'Remove PyStarLight (keeps the settings)')
     )
     New-Item -ItemType Directory -Force -Path (Join-Path $App 'logs') | Out-Null
@@ -328,6 +397,10 @@ if ($Uninstall) {
 }
 
 New-Item -ItemType Directory -Force -Path $App | Out-Null
+if ($Astap) {                           # Start menu "Install ASTAP": only that
+    $ok = Offer-Astap $false
+    Finish $(if ($ok) { 0 } else { 1 })
+}
 Get-Uv
 $before = Installed-Version
 $rel = Get-Release
@@ -339,6 +412,7 @@ if ($before -and $rel.tag -ne 'local' -and ('v' + $before) -eq $rel.tag) {
 }
 Install-Shortcuts
 Install-FileTypes
+$astapOk = Offer-Astap $true
 
 Step 'Check (pystarlight doctor)'
 Invoke-Native { & (Join-Path $Bin 'pystarlight.exe') doctor --extras desktop }
@@ -346,9 +420,13 @@ $doctor = $LASTEXITCODE
 
 Write-Host ''
 Write-Host "PyStarLight $(Installed-Version) is installed." -ForegroundColor Green
-Say '  Start menu: PyStarLight -> Analyze, Player, Camera, Settings, Check installation, Update, Uninstall'
-Say '  Plate solving offline: install ASTAP and its D80 star database from www.hnsky.org;'
-Say '  PyStarLight finds it. Else online at nova.astrometry.net with your free API key'
-Say '  (Start menu -> Settings, [astrometry] api_key).'
+Say '  Start menu: PyStarLight -> Analyze, Player, Camera, Settings, Check installation, Update, Install ASTAP, Uninstall'
+if ($astapOk) {
+    Say '  Plate solving: offline with ASTAP.'
+} else {
+    Write-Host '  Plate solving: ASTAP is NOT installed. For offline solving: Start menu -> PyStarLight ->' -ForegroundColor Yellow
+    Write-Host '  "Install ASTAP (plate solver)". Without it: online at nova.astrometry.net with your free' -ForegroundColor Yellow
+    Write-Host '  API key (Start menu -> Settings, [astrometry] api_key).' -ForegroundColor Yellow
+}
 if ($doctor -ne 0) { Say '  The check above found something missing: see its "fix:" lines.' }
 Finish 0
