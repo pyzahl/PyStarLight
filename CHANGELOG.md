@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-27
+
 ### Added
 - **Docs: "What if a Starlink satellite occults a star?"** (`docs/starlink_occultation.md`, figure and
   script `docs/starlink_occultation.py`, linked from the README intro; a slide in the method slides): the
@@ -51,32 +53,6 @@ uses [Semantic Versioning](https://semver.org/).
   - Tested on Windows Server 2025 (ASTAP + D20 / D80): the Fringilla ADV (16' x 12' field, no
     scale in the file) solved offline in 0.9 s; the same solution as astrometry.net's blind solve
     (15 s) to under 0.5".
-
-### Fixed
-- **SIMBAD at CDS down (every request 404, Nov 2026):** look-ups now fall back to SIMBAD's CfA mirror
-  (`simbad.harvard.edu`); the server that answered is asked first from then on (`identify._simbad_ask`).
-- **Star box without a local catalogue** (Windows): UCAC4 / TYC / Gaia DR3 names are resolved at the
-  VO services (GAVO / ESA, as the camera's target) before SIMBAD, which lists few UCAC4 stars.
-- **Analyzer status lines stay one line:** a multi-line message (astroquery's SIMBAD error) grew upwards
-  over the sliders; lines are joined, very long text is shortened, and the full text goes to the
-  console (on Windows the launcher's log).
-- The player and the camera now start on Windows (tested on Windows Server 2025):
-  - the ZWO module called `os.uname()` at import; it looks for `ASICamera2.dll` there now, and its
-    messages name the Windows DLL;
-  - the GPS, v4l2 and VEYE modules imported the Unix-only `fcntl`;
-  - the v4l2 / VEYE modules asserted Linux kernel struct sizes at import (a C `long` is 4 bytes on
-    Windows).
-
-  `config init` writes the template as UTF-8. Ending a local solver's process used Unix-only
-  calls (`SIGKILL`, process groups) and failed on Windows even after a finished solve.
-- Windows setup: running PyStarLight programs are found before an update or uninstall (Windows
-  locks their files). The user is asked to close them (or types STOP); `-Force` ends them. A
-  native program's error output no longer aborts the script (PowerShell 5.1), and leftovers are
-  reported.
-
-## [1.1.0] - 2026-11-26
-
-### Added
 - **Diffraction-aware event fit** (`diffraction.py`, docs/diffraction.md): Fresnel diffraction at the
   shadow edges (1-D bar model, exact in Fresnel integrals; several strips add in the field),
   finite limb-darkened star, **double stars** (each component its own D and R, the primary's
@@ -264,6 +240,31 @@ uses [Semantic Versioning](https://semver.org/).
 ### Changed
 - Camera: the menu **Mount** is now **INDI Telescope Controls** (Mount, Focuser and Star lock panels, INDI
   settings); the settings window is titled "INDI settings".
+
+### Fixed
+- **Windows setup without a release that has the Windows files** (v1.0.0 predates them): it takes the
+  newest release that carries a wheel, else installs the current source from GitHub (with a note)
+  instead of failing; an explicit `-Version` older than the setup says so plainly.
+- **SIMBAD at CDS down (every request 404, Nov 2026):** look-ups now fall back to SIMBAD's CfA mirror
+  (`simbad.harvard.edu`); the server that answered is asked first from then on (`identify._simbad_ask`).
+- **Star box without a local catalogue** (Windows): UCAC4 / TYC / Gaia DR3 names are resolved at the
+  VO services (GAVO / ESA, as the camera's target) before SIMBAD, which lists few UCAC4 stars.
+- **Analyzer status lines stay one line:** a multi-line message (astroquery's SIMBAD error) grew upwards
+  over the sliders; lines are joined, very long text is shortened, and the full text goes to the
+  console (on Windows the launcher's log).
+- The player and the camera now start on Windows (tested on Windows Server 2025):
+  - the ZWO module called `os.uname()` at import; it looks for `ASICamera2.dll` there now, and its
+    messages name the Windows DLL;
+  - the GPS, v4l2 and VEYE modules imported the Unix-only `fcntl`;
+  - the v4l2 / VEYE modules asserted Linux kernel struct sizes at import (a C `long` is 4 bytes on
+    Windows).
+
+  `config init` writes the template as UTF-8. Ending a local solver's process used Unix-only
+  calls (`SIGKILL`, process groups) and failed on Windows even after a finished solve.
+- Windows setup: running PyStarLight programs are found before an update or uninstall (Windows
+  locks their files). The user is asked to close them (or types STOP); `-Force` ends them. A
+  native program's error output no longer aborts the script (PowerShell 5.1), and leftovers are
+  reported.
 
 ## [1.0.0] - 2026-11-15
 
